@@ -116,7 +116,7 @@
   },
   "11": {
     "inputs": {
-      "lora_name": "Illustrious\\TRT_style_v1.4_IL.safetensors",
+      "lora_name": "748cmSDXL.safetensors",
       "strength_model": 0.4,
       "strength_clip": 0.4,
       "model": [
@@ -175,9 +175,9 @@
   },
   "29": {
     "inputs": {
-      "lora_name": "Illustrious\\TRT_style_v1.4_IL.safetensors",
-      "strength_model": 0.6,
-      "strength_clip": 0.6,
+      "lora_name": "niji_and_midj_mix217.safetensors",
+      "strength_model": 0.4,
+      "strength_clip": 0.4,
       "model": [
         "128",
         0
@@ -190,14 +190,14 @@
     "class_type": "LoraLoader",
     "_meta": {
       "title": "Load LoRA (Model and CLIP)",
-      "bypassed": true
+      "bypassed": false
     }
   },
   "126": {
     "inputs": {
-      "lora_name": "PowerPuffMixLora (2).safetensors",
-      "strength_model": 0.4,
-      "strength_clip": 0.4,
+      "lora_name": "ILwatercolor.safetensors",
+      "strength_model": 0.3,
+      "strength_clip": 0.3,
       "model": [
         "11",
         0
@@ -215,9 +215,9 @@
   },
   "128": {
     "inputs": {
-      "lora_name": "Illustrious\\beter_anime_eyes_r1-000015.safetensors",
-      "strength_model": 0.5,
-      "strength_clip": 0.5,
+      "lora_name": "Illustrious\\TRT_style_v1.4_IL.safetensors",
+      "strength_model": 0.3,
+      "strength_clip": 0.3,
       "model": [
         "126",
         0

@@ -8,7 +8,7 @@
       "scheduler": "normal",
       "denoise": 1,
       "model": [
-        "203",
+        "303",
         0
       ],
       "positive": [
@@ -53,7 +53,7 @@
     "inputs": {
       "text": "(intricate details, expressive, high-contrast manhwa style:1.1), {{image}}",
       "clip": [
-        "203",
+        "303",
         1
       ]
     },
@@ -66,7 +66,7 @@
     "inputs": {
       "text": "embedding:lazyneg, shadow, loli, shota, child, toddler, infant, baby, kid, aged down, childlike, chibi, 3d, cgi, render, photo, text, watermark, low-quality, signature, moire pattern, downsampling, aliasing, blurry, blur, jpeg artifacts, compression artifacts, pixelated, censored, mosaic censoring, bar censor, bloom, deformed hands, deformed fingers, deformed toes, head out of frame, worst quality, low quality, bad hands, cross-eyed, cloned heads",
       "clip": [
-        "203",
+        "303",
         1
       ]
     },
@@ -150,11 +150,11 @@
         1
       ],
       "model": [
-        "203",
+        "303",
         0
       ],
       "clip": [
-        "203",
+        "303",
         1
       ]
     },
@@ -243,8 +243,8 @@
     "class_type": "LoraLoader",
     "inputs": {
       "lora_name": "748cmSDXL.safetensors",
-      "strength_model": 0.5,
-      "strength_clip": 0.5,
+      "strength_model": 0.4,
+      "strength_clip": 0.4,
       "model": [
         "134",
         0
@@ -262,7 +262,7 @@
   "203": {
     "class_type": "LoraLoader",
     "inputs": {
-      "lora_name": "PowerPuffMixLora (2).safetensors",
+      "lora_name": "niji_and_midj_mix217.safetensors",
       "strength_model": 0.4,
       "strength_clip": 0.4,
       "model": [
@@ -276,7 +276,7 @@
     },
     "_meta": {
       "title": "LoRA",
-      "bypassed": true
+      "bypassed": false
     }
   },
   "300": {
@@ -284,7 +284,7 @@
     "inputs": {
       "text": "embedding:lazypos, masterpiece, best quality, absurdres, 8k uhd, ultra-detailed, detailed face, detailed eyes, cinematic lighting, soft light diffusion, depth of field, realistic skin texture, photorealistic shading, subsurface scattering, film grain, detailed textures, chiaroscuro, raytracing, high contrast, dynamic composition, realistic hair",
       "clip": [
-        "203",
+        "303",
         1
       ]
     },
@@ -306,6 +306,44 @@
     },
     "_meta": {
       "title": "Quality + Subject (BREAK)"
+    }
+  },
+  "302": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "ILwatercolor.safetensors",
+      "strength_model": 0.3,
+      "strength_clip": 0.3,
+      "model": [
+        "203",
+        0
+      ],
+      "clip": [
+        "203",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "LoRA"
+    }
+  },
+  "303": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "Ouyenm.safetensors",
+      "strength_model": 0.4,
+      "strength_clip": 0.4,
+      "model": [
+        "302",
+        0
+      ],
+      "clip": [
+        "302",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "LoRA"
     }
   }
 }

@@ -76,6 +76,46 @@ _CLOTHING_KEEP = (
 # clothing-substring false positives that are actually BODY tags — never treat as clothing.
 _CLOTH_EXCLUDE = {"collarbone", "navel", "cleavage", "midriff"}
 
+# Makeup substrings — worn but not garments; included in the CLOTHING palette (alongside
+# _CLOTHING_KEEP + piercings) so outfits get makeup, without polluting the appearance filter.
+_MAKEUP_KEEP = ("lipstick", "eyeshadow", "makeup", "eyeliner", "mascara", "nail polish", "lip gloss")
+
+# Facet buckets for the PMI palette. ORDER MATTERS — first substring match wins, so put the
+# more specific buckets first (swimwear before top/dress; piercing/makeup before accessories).
+_FACETS_CLOTHING = [
+    ("swimwear", ("bikini", "swimsuit", "swimwear", "swim trunks", "one-piece swimsuit")),
+    ("piercing", ("piercing",)),
+    ("makeup", _MAKEUP_KEEP),
+    ("dress", ("dress", "gown", "kimono", "yukata", "cheongsam", "leotard", "bodysuit",
+               "overalls", "romper", "jumpsuit", "sundress", "qipao")),
+    ("top", ("shirt", "blouse", "tank top", "camisole", "sweater", "crop top", "t-shirt",
+             "tube top", "halterneck", "turtleneck", "serafuku", "sailor collar", "vest")),
+    ("bottom", ("skirt", "pants", "shorts", "jeans", "trousers", "bloomers", "hakama",
+                "miniskirt", "buruma")),
+    ("outerwear", ("jacket", "coat", "hoodie", "cardigan", "blazer", "cape", "cloak", "robe",
+                   "apron", "poncho", "shrug", "bolero")),
+    ("legwear", ("thighhighs", "kneehighs", "socks", "pantyhose", "legwear", "garter",
+                 "stockings", "leggings")),
+    ("footwear", ("boots", "shoes", "sneakers", "heels", "sandals", "loafers", "mary janes",
+                  "slippers", "geta")),
+    ("headwear", ("hat", "beret", "cap", "helmet", "crown", "tiara", "veil", "headband",
+                  "hairband", "hair bow", "hair ornament", "hairclip", "hair flower",
+                  "headdress", "headphones", "hood")),
+    ("accessories", ("gloves", "scarf", "necktie", "belt", "choker", "bracelet", "necklace",
+                     "earring", "anklet", "wristband", "armband", "jewelry", "bowtie",
+                     "collar", "bag", "glasses", "ribbon", "wings", "detached sleeves")),
+]
+_FACETS_APPEARANCE = [
+    ("hair", ("hair", "bangs", "ahoge", "ponytail", "twintails", "braid", "bun", "sidelocks",
+              "hime cut", "drill")),
+    ("eyes", ("eyes", "eyelashes", "heterochromia", "tsurime", "tareme", "eyebrows", "pupils")),
+    ("skin", ("skin",)),
+    ("body", ("breasts", "chest", "petite", "slim", "toned", "athletic", "curvy", "plump",
+              "muscular", "thighs", "hips", "waist", "navel", "build", "abs", "collarbone")),
+    ("face", ("mole", "freckles", "scar", "glasses", "fang", "makeup", "lipstick", "eyeshadow",
+              "beauty mark", "mustache", "beard", "stubble", "teeth")),
+]
+
 # If the draft fixes a member of one of these facets, don't suggest a conflicting sibling.
 _EXCLUSIVE = [
     {"very short hair", "short hair", "medium hair", "long hair", "very long hair", "absurdly long hair"},
@@ -191,6 +231,84 @@ class CooccurIndex:
     def sample_appearance_lines(self, draft: list[str], n: int = 50) -> list[str]:
         """Soup of real APPEARANCES (each line one character's persistent physical-identity tags)."""
         return self._sample_lines(draft, n, self._ok)
+
+    def _is_wearable(self, t: str) -> bool:
+        """Clothing/accessory/piercing OR makeup — the keep filter for the CLOTHING palette."""
+        return self._is_clothing(t) or any(m in t for m in _MAKEUP_KEEP)
+
+    def _companions(self, draft: list[str], keep, k_chars: int = 400) -> list[tuple[str, float]]:
+        """Companion tags ranked by PMI/lift, not raw frequency. For the top `k_chars` matching
+        character bundles, score each companion by how much MORE it appears among matches than at
+        random across the whole corpus: lift = (co/K) / (df/N). Surfaces tags SPECIFICALLY
+        associated with the draft (e.g. 'garter straps' for 'thighhighs') over ubiquitous filler
+        ('1girl'). Support floor co>=2 cuts one-off noise. Returns [(tag, score)] score-desc."""
+        if not self.rows:
+            return []
+        q = {_norm(t) for t in draft if t and t.strip()}
+        top = self._candidates(q, k_chars)
+        if not top:
+            return []
+        K, N = len(top), len(self.rows)
+        co: Counter[str] = Counter()
+        for i in top:
+            for t in self.rows[i][0]:
+                if t not in q and keep(t):
+                    co[t] += 1
+        scored: list[tuple[str, float]] = []
+        for t, c in co.items():
+            if c < 2:
+                continue
+            df = len(self.inv.get(t, [])) or 1
+            lift = (c / K) / (df / N)
+            scored.append((t, lift))
+        scored.sort(key=lambda x: -x[1])
+        return scored
+
+    def _expand(self, draft: list[str], keep, k_chars: int = 400, rounds: int = 1
+                ) -> list[tuple[str, float]]:
+        """Pseudo-relevance feedback (Rocchio-style): retrieve companions, fold the strongest back
+        into the query, retrieve again, merge by max score. Grows the tag set with coherent
+        second-order tags no single bundle contained. One round by default (cheap, bounded)."""
+        q = [_norm(t) for t in draft if t and t.strip()]
+        comp = self._companions(q, keep, k_chars)
+        for _ in range(max(0, rounds)):
+            if not comp:
+                break
+            q2 = list(dict.fromkeys(q + [t for t, _ in comp[:15]]))
+            merged = dict(comp)
+            for t, s in self._companions(q2, keep, k_chars):
+                if s > merged.get(t, 0.0):
+                    merged[t] = s
+            comp = sorted(merged.items(), key=lambda x: -x[1])
+        return comp
+
+    def faceted_palette(self, draft: list[str], kind: str = "appearance",
+                        per_facet: int = 24, include_misc: bool = False) -> dict[str, list[str]]:
+        """An ORGANIZED palette of real, PMI-ranked booru tags for the draft, bucketed by facet —
+        the breadth signal for image-prompt construction (replaces the flat 50-line soup). `kind`:
+        'appearance' (hair/eyes/skin/body/face) or 'clothing' (top/bottom/dress/outerwear/legwear/
+        footwear/headwear/accessories/swimwear/makeup/piercing). Each facet holds its top
+        `per_facet` tags. Tags matching no facet (mostly copyright/object noise) are dropped unless
+        `include_misc`."""
+        if kind == "clothing":
+            facets, keep = _FACETS_CLOTHING, self._is_wearable
+        else:
+            facets, keep = _FACETS_APPEARANCE, self._ok
+        comp = self._expand(draft, keep)
+        out: dict[str, list[str]] = {f: [] for f, _ in facets}
+        out["misc"] = []
+        for t, _s in comp:
+            for fname, subs in facets:
+                if any(sub in t for sub in subs):
+                    if len(out[fname]) < per_facet:
+                        out[fname].append(t)
+                    break
+            else:
+                if len(out["misc"]) < per_facet:
+                    out["misc"].append(t)
+        if not include_misc:
+            out.pop("misc", None)
+        return {f: v for f, v in out.items() if v}
 
     def related(self, draft: list[str], limit: int = 22, k_chars: int = 60) -> list[str]:
         """Companion tags co-packaged with the draft, ranked by how many of the best-matching

@@ -97,17 +97,15 @@ PROTAGONIST_SCHEMA = {
     "properties": _CARD_PROPS,
 }
 
+# Wardrobe planning emits OUTFITS only — the emotion sprite set is now a FIXED canonical taxonomy
+# (composed per-character separately; see loom/server/services/emotions.py), no longer planned here.
 WARDROBE_SCHEMA = {
-    "type": _OBJ, "additionalProperties": False, "required": ["outfits", "expressions"],
+    "type": _OBJ, "additionalProperties": False, "required": ["outfits"],
     "properties": {
         "outfits": _arr({"type": _OBJ, "additionalProperties": False,
                          "required": ["name", "attire_prompt"],
                          "properties": {"name": {"type": "string"},
                                         "attire_prompt": {"type": "string"}}}),
-        "expressions": _arr({"type": _OBJ, "additionalProperties": False,
-                             "required": ["emotion", "prompt"],
-                             "properties": {"emotion": {"type": "string"},
-                                            "prompt": {"type": "string"}}}),
     },
 }
 
@@ -288,9 +286,9 @@ DEFAULT_SYSTEMS = {
         + _APPEARANCE_RULE
     ),
     "wardrobe": (
-        "You are a character art director planning a SPRITE set for a visual-novel character. "
-        "Given the story and one character, produce two things.\n\n"
-        "(1) OUTFITS — the FIRST outfit is always a SWIMSUIT look: name it 'Base (swimwear)' with a "
+        "You are a character art director planning the OUTFITS for a visual-novel character. "
+        "Given the story and one character, produce the outfit list.\n\n"
+        "OUTFITS — the FIRST outfit is always a SWIMSUIT look: name it 'Base (swimwear)' with a "
         "swimsuit concept (e.g. a coloured bikini for female characters, swim trunks for male). THEN "
         "add the distinct outfits this character genuinely needs ACROSS THIS STORY: usually just one "
         "main outfit; add more only when the plot clearly changes their attire (a transformation, a "
@@ -300,16 +298,9 @@ DEFAULT_SYSTEMS = {
         "fully detail every garment, accessory and colour here — a DEDICATED SECOND PASS expands each "
         "outfit on its own into the complete, detailed look (full colours, legwear, footwear, "
         "accessories, makeup, piercings). Keep this pass light so you don't get overwhelmed.\n\n"
-        "(2) EXPRESSIONS — list ONLY the emotional states this character actually moves through in "
-        "this story (derive them from the beats; a stoic guardian and a chaotic villain have very "
-        "different ranges). For each, write a detailed facial-expression prompt (eyes, "
-        "eyebrows, mouth, and emotion tags like blush, tears, sweatdrop, gritted teeth) capturing "
-        "how THIS character expresses that emotion. Describe expression only — no clothing, no "
-        "background. Keep the character's core identity consistent.\n\n"
+        "(The emotional EXPRESSION range is a fixed set handled separately — do not plan it here.)\n\n"
         "Each `attire_prompt` is CLOTHING booru tags (NO facial expression, NO pose, NO background), "
-        "following these OUTFIT rules:\n" + _OUTFIT_RULE +
-        "\n\nEach expression `prompt` is FACE-ONLY (eyes, eyebrows, mouth, emotion) and follows the "
-        "general tag format:\n" + _TAG_RULE
+        "following these OUTFIT rules:\n" + _OUTFIT_RULE
     ),
     # Base-image generator: fills the fixed physical-feature schema (assembled into tags
     # in code). Invention does NOT apply here — a base image is a deterministic identity
@@ -661,13 +652,13 @@ def extract_characters(provider, *, name: str, persona: str, board: dict,
     return {"npcs": npcs}
 
 
-# Stage 4 — wardrobe planning for one character (outfits + per-emotion sprites) #
+# Stage 4 — wardrobe planning for one character (OUTFITS only; emotions are a fixed taxonomy) #
 def plan_wardrobe(provider, *, char_name: str, persona: str, appearance: str, story: dict,
                   invention: str = "balanced", systems: dict | None = None, on_event=None) -> dict:
-    """Guess the outfits this character needs across the story and write detailed
-    attire + per-emotion facial-expression prompts (story-derived emotions).
-    `on_event` (optional): stream {type:phase|delta} so a UI can watch it.
-    Returns { outfits:[{name, attire_prompt}], expressions:{emotion: prompt} }."""
+    """Guess the outfits this character needs across the story (short attire concepts; a dedicated
+    second pass details each). The emotion sprite set is a FIXED canonical taxonomy composed
+    separately, so it is NOT planned here. `on_event` (optional): stream {type:phase|delta} so a UI
+    can watch it. Returns { outfits:[{name, attire_prompt}] }."""
     beats = story.get("storyboard", {}).get("beats") or story.get("beats") or []
     # Only the beats this character appears in (by name) — their arc.
     nl = (char_name or "").lower()
@@ -677,16 +668,11 @@ def plan_wardrobe(provider, *, char_name: str, persona: str, appearance: str, st
            f"CHARACTER: {char_name}\nPERSONA:\n{persona or '(none)'}\n"
            f"APPEARANCE: {appearance or '(infer)'}\n\n"
            f"THIS CHARACTER'S BEATS:\n{beat_lines or '(use the story overall)'}\n\n"
-           f"Plan {char_name}'s outfits and expression range.")
+           f"Plan {char_name}'s outfits across the story.")
     if on_event:
         on_event({"type": "phase", "label": f"Planning {char_name}'s wardrobe"})
     dl = (lambda t: on_event({"type": "delta", "text": t})) if on_event else None
     out = _call(provider, _sys(systems or {}, "wardrobe", invention), ctx, WARDROBE_SCHEMA, "wardrobe", on_delta=dl)
     outfits = [{"name": o.get("name", ""), "attire_prompt": o.get("attire_prompt", "")}
                for o in out.get("outfits", []) if o.get("attire_prompt")]
-    expressions = {}
-    for e in out.get("expressions", []):
-        emo = _slug(e.get("emotion", ""))
-        if emo and e.get("prompt"):
-            expressions[emo] = e["prompt"]
-    return {"outfits": outfits, "expressions": expressions}
+    return {"outfits": outfits}

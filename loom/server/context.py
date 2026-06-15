@@ -43,6 +43,19 @@ _ROLE_LABELS = {
 _IMG_URL_RE = re.compile(r"https?://[^\s\"'<>)]+?\.(?:png|jpe?g|webp|gif)", re.IGNORECASE)
 
 
+def _palette_block(palette: dict, sample_lines: list) -> str:
+    """Render a faceted PMI palette (+ a few coherent real examples) as the grounding block for a
+    composer's 2nd pass — an organized menu of real booru tags the model constructs from."""
+    facet_lines = "\n".join(f"  {f.upper()}: {', '.join(tags)}"
+                            for f, tags in palette.items() if tags)
+    block = ("PALETTE — real Danbooru tags that co-occur with your draft, grouped by facet (these "
+             "are VALID tags; draw RICHLY from them where they fit this character):\n" + facet_lines)
+    if sample_lines:
+        block += ("\n\nA FEW REAL EXAMPLES (whole real characters, for coherent combinations):\n"
+                  + "\n".join(f"- {ln}" for ln in sample_lines))
+    return block
+
+
 class AppContext:
     """Holds app state and the state-bound helpers the web layer needs."""
 
@@ -273,35 +286,34 @@ class AppContext:
         return out
 
     def portrait_payload(self, key: str) -> dict:
-        """The manifest enriched with served image URLs for the frontend."""
+        """The manifest enriched with served image URLs for the frontend. Every outfit exposes the
+        FULL fixed emotion taxonomy as `expression_set` (canonical order) — each entry has the
+        character-level canonical face prompt and the rendered sprite url where one exists."""
+        from .services.emotions import EMOTION_KEYS, EMOTION_LABELS
         m = self.portrait_manifest(key)
         base = f"/api/characters/{key}/portraits/img"
-        glob = m.get("expression_prompts") or {}   # legacy global set (studio fallback only)
+        canon = m.get("expression_prompts") or {}   # character-level canonical {key: face_tags}
         outfits = []
         for o in m.get("outfits", []):
             oid = o["id"]
             files = o.get("expressions") or {}
             exprs = {emo: f"{base}/{oid}/{fn}" for emo, fn in files.items()}   # legacy {emo:url}
-            # PER-OUTFIT expression set — each outfit owns its own range (NO DEFAULT_EMOTIONS
-            # fallback: with no plan there are no expression cards). emotion -> {prompt, url}.
-            prompts = o.get("expression_prompts") or {}
-            emos = list(prompts.keys()) + [e for e in files if e not in prompts]
-            expression_set = [{"emotion": e, "prompt": prompts.get(e, ""),
-                               "url": f"{base}/{oid}/{files[e]}" if files.get(e) else None}
-                              for e in emos]
+            out_prompts = o.get("expression_prompts") or {}   # legacy per-outfit overrides, if any
+            expression_set = [{"emotion": k, "label": EMOTION_LABELS[k],
+                               "prompt": out_prompts.get(k) or canon.get(k, ""),
+                               "url": f"{base}/{oid}/{files[k]}" if files.get(k) else None}
+                              for k in EMOTION_KEYS]
             outfits.append({
                 "id": oid, "name": o.get("name") or oid,
                 "instruction": o.get("instruction", ""), "prompt": o.get("prompt", ""),
                 "attire_prompt": o.get("attire_prompt", o.get("prompt", "")),
                 "base": f"{base}/{oid}/base.png" if (o.get("base")) else None,
                 "expressions": exprs,                    # legacy map (standalone studio)
-                "expression_set": expression_set,        # per-outfit (cast wardrobe Sprites)
+                "expression_set": expression_set,        # full fixed taxonomy (cast wardrobe Sprites)
             })
-        # `emotions` retained for the standalone studio (keeps DEFAULT_EMOTIONS); the cast wardrobe
-        # uses per-outfit `expression_set` instead.
         return {"appearance": m.get("appearance", ""),
-                "emotions": list(glob.keys()) or _prompts.DEFAULT_EMOTIONS,
-                "expression_prompts": glob, "outfits": outfits}
+                "emotions": EMOTION_KEYS,
+                "expression_prompts": canon, "outfits": outfits}
 
     def scenario_cast(self, scn) -> list[dict]:
         """Cast enriched with each member's display name + avatar URL."""
@@ -460,27 +472,28 @@ class AppContext:
         if not feats:
             return {"error": "model returned no structured features "
                              "(author model may not support structured output)"}
-        # 2nd pass — the STANDARD image-prompt method (same as outfits): fetch ~50 RAW REFERENCE
-        # LINES (each one real character's appearance tag set) — an unorganized 'soup' of real
-        # characters — and CONSTRUCT the final appearance by drawing real tags from it. Grounds the
-        # result in intact real bundles rather than a flat ranked list.
+        # 2nd pass — the STANDARD image-prompt method (same as outfits): retrieve a FACETED PALETTE
+        # of real, PMI-ranked booru tags (hair/eyes/skin/body/face), plus a few intact real
+        # character bundles for coherence, and CONSTRUCT the final appearance by drawing richly from
+        # it. The organized, ranked palette surfaces far more usable tags than a flat soup of lines.
         draft = [str(t) for t in (feats.get("appearance") or [])]
+        palette: dict = {}
         lines: list[str] = []
         try:
             from ..tags import get_cooccur
             ix = get_cooccur()
-            lines = ix.sample_appearance_lines(draft, n=50) if (draft and ix.ready) else []
+            if draft and ix.ready:
+                palette = ix.faceted_palette(draft, "appearance", per_facet=24)
+                lines = ix.sample_appearance_lines(draft, n=8)
         except Exception:  # noqa: BLE001
-            lines = []
-        if lines:
+            palette, lines = {}, []
+        if palette:
             refine = (context + "\n\nYOUR DRAFT appearance tags:\n" + ", ".join(draft)
-                      + "\n\nREFERENCE SOUP — ~50 REAL Danbooru characters' appearance tags (each line "
-                        "is ONE real character; unorganized raw reference):\n"
-                      + "\n".join(f"- {ln}" for ln in lines)
-                      + "\n\nCONSTRUCT the FINAL appearance by DRAWING real tags from this soup that fit "
-                        "THIS character — make it richer and more specific. Keep ~22-30 persistent "
-                        "PHYSICAL tags (hair, eyes, skin, body, marks); do NOT add clothing, expression, "
-                        "pose or background.")
+                      + "\n\n" + _palette_block(palette, lines)
+                      + "\n\nCONSTRUCT the FINAL appearance by DRAWING RICHLY from the palette above — "
+                        "make it specific and complete. Keep ~24-32 persistent PHYSICAL tags (hair, "
+                        "eyes, skin, body, face/marks); do NOT add clothing, expression, pose or "
+                        "background.")
             try:
                 d2 = provider.generate_text(system=system, prompt=refine, emits=_prompts.FEATURES_SCHEMA).data
                 if d2 and d2.get("appearance"):
@@ -489,33 +502,49 @@ class AppContext:
                 pass
         return {"prompt": _prompts._assemble_base_prompt(feats), "features": feats, "companions": lines}
 
+    def compose_expressions(self, persona: str, model: str | None = None) -> dict:
+        """Face-only booru expression tags for the FIXED canonical emotion taxonomy, personalized to
+        the persona — ONE structured call. A persona's expression of an emotion is outfit-independent,
+        so this is composed ONCE per character and reused across every outfit. Returns {key: face_tags}
+        for every EMOTION_KEY (best-effort; any the model omits fall back to the emotion's hint cues)."""
+        from .services.emotions import EMOTIONS, EMOTION_KEYS, EMOTION_HINTS
+        fallback = {k: EMOTION_HINTS[k] for k in EMOTION_KEYS}
+        cfg = self.load_story_builder()
+        provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
+        if provider is None:
+            return fallback
+        schema = {"type": "object", "additionalProperties": False, "required": EMOTION_KEYS,
+                  "properties": {k: {"type": "string"} for k in EMOTION_KEYS}}
+        listing = "\n".join(f"- {e['key']} ({e['label']}): cues — {e['hint']}" for e in EMOTIONS)
+        system = _prompts._EXPRESSION_SYSTEM + (
+            "\n\nYou are given a FIXED list of emotions. For EVERY emotion key, output how THIS "
+            "character's face shows it as 3-7 booru expression tags (face/eyes/eyebrows/mouth + "
+            "emotion tags), personalized to the persona. Return exactly one field per emotion key.")
+        prompt = f"CHARACTER PERSONA:\n{persona}\n\nEMOTIONS (give a face prompt for each):\n{listing}"
+        try:
+            data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
+        except Exception:  # noqa: BLE001 — fall back to the hint cues
+            data = {}
+        return {k: (str(data.get(k) or "").strip() or fallback[k]) for k in EMOTION_KEYS}
+
     def compose_outfit_prompt(self, persona: str, base_appearance: str, outfit_name: str,
                               attire_draft: str, model: str | None = None) -> dict:
         """The OUTFIT counterpart of `_compose_base_prompt` — a UNIQUE 2-step call PER outfit (so the
         model is never overwhelmed generating a whole wardrobe at once). Pass 1 fills OUTFIT_SCHEMA
-        (detailed best-guess garments+colours+accessories+makeup+piercings, PLUS a range of emotions
-        that fit this outfit); ~50 RAW reference outfit lines are retrieved from danbooru_character.csv;
-        pass 2 CONSTRUCTS the final outfit from that soup. Returns {attire: snapped tag string,
-        emotions: [{emotion, prompt}]} — the emotions drive THIS outfit's expression sprites. Empty
+        (detailed best-guess garments+colours+accessories+makeup+piercings); pass 2 retrieves a faceted
+        PMI palette and CONSTRUCTS the final outfit from it. Returns {attire: snapped tag string}.
+        (Emotions are NO longer per-outfit — the sprite set is a fixed canonical taxonomy.) Empty
         attire on failure (caller keeps the draft)."""
         from ..scenario.builder import DEFAULT_SYSTEMS
         cfg = self.load_story_builder()
         provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
         if provider is None:
-            return {"attire": "", "emotions": []}
-
-        def _emos(d):
-            out = []
-            for e in (d.get("emotions") or []):
-                emo = re.sub(r"[^\w\-]+", "-", str(e.get("emotion", "")).lower()).strip("-")
-                if emo:
-                    out.append({"emotion": emo, "prompt": str(e.get("prompt", "")).strip()})
-            return out
+            return {"attire": ""}
 
         system = ((cfg.get("systems") or {}).get("wardrobe") or DEFAULT_SYSTEMS["wardrobe"]) + (
-            "\n\nNOW compose the SINGLE outfit below: a COMPLETE, DETAILED `outfit` (every garment "
-            "coloured, plus accessories, piercings and makeup that fit) AND a range of `emotions` that "
-            "this outfit/scene would call for. Be generous and specific, never minimal.")
+            "\n\nNOW compose the SINGLE outfit below: a COMPLETE, DETAILED `outfit` — every garment "
+            "coloured, plus accessories, piercings and makeup that fit. Be generous and specific, "
+            "never minimal.")
         context = "\n\n".join(p for p in [
             f"CHARACTER PERSONA:\n{persona}" if persona else "",
             (f"CHARACTER BASE APPEARANCE (body + persistent worn jewelry/piercings — pick a palette "
@@ -525,50 +554,48 @@ class AppContext:
         ] if p)
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.OUTFIT_SCHEMA).data) or {}
         draft = [str(t) for t in (feats.get("outfit") or [])]
-        emotions = _emos(feats)
         if not draft:
-            return {"attire": "", "emotions": emotions}
-        # 2nd pass — fetch ~50 RAW REFERENCE LINES from danbooru_character.csv, each line a whole real
-        # outfit (one matching character's clothing tags). This is an unorganized 'soup' of real
-        # outfits; this pass CONSTRUCTS the final outfit by drawing real tags from it. Colours come
-        # from the real tags, so they stay Illustrious-valid; _snap_prompt + _dedupe clean the result.
+            return {"attire": ""}
+        # 2nd pass — retrieve a FACETED PALETTE of real, PMI-ranked clothing tags (top/bottom/dress/
+        # outerwear/legwear/footwear/headwear/accessories/swimwear/makeup/piercing), plus a few intact
+        # real outfits for coherence, and CONSTRUCT the final outfit by drawing richly from it. The
+        # palette is far richer + more colour-complete than a flat soup; _snap + _dedupe clean it.
+        palette: dict = {}
         lines: list[str] = []
         try:
             from ..tags import get_cooccur
             ix = get_cooccur()
-            lines = ix.sample_clothing_lines(draft, n=50) if ix.ready else []
+            if ix.ready:
+                palette = ix.faceted_palette(draft, "clothing", per_facet=24)
+                lines = ix.sample_clothing_lines(draft, n=8)
         except Exception:  # noqa: BLE001
-            lines = []
-        if lines:
+            palette, lines = {}, []
+        if palette:
             refine = (context + "\n\nYOUR DRAFT outfit tags:\n" + ", ".join(draft)
-                      + "\n\nREFERENCE SOUP — ~50 REAL outfits worn by similar Danbooru characters "
-                        "(each line is ONE real character's clothing/accessory tags; unorganized, just "
-                        "raw reference, many tags already carry COLOURS):\n"
-                      + "\n".join(f"- {ln}" for ln in lines)
-                      + "\n\nCONSTRUCT the final outfit for THIS character by DRAWING real tags from "
-                        "this soup (mix and match the pieces that fit the concept). Requirements: a "
-                        "RICH, complete look — top, bottom or dress, layers, LEGWEAR, FOOTWEAR — plus "
-                        "fitting ACCESSORIES, PIERCINGS and MAKEUP. EVERY garment carries a COLOUR "
-                        "(prefer the real coloured tags from the soup; a colour must form a real booru "
-                        "tag — 'navy blue skirt', 'white blouse'). NEVER include both a bare garment "
-                        "and its coloured version. ONE coherent palette.")
+                      + "\n\n" + _palette_block(palette, lines)
+                      + "\n\nCONSTRUCT the final outfit for THIS character by DRAWING RICHLY from the "
+                        "palette above (mix the pieces that fit the concept). Requirements: a RICH, "
+                        "complete look — top, bottom or dress, layers, LEGWEAR, FOOTWEAR — plus fitting "
+                        "ACCESSORIES, PIERCINGS and MAKEUP. EVERY garment carries a COLOUR (prefer the "
+                        "real coloured tags in the palette; a colour must form a real booru tag — "
+                        "'navy blue skirt', 'white blouse'). NEVER include both a bare garment and its "
+                        "coloured version. ONE coherent palette.")
             try:
                 d2 = provider.generate_text(system=system, prompt=refine, emits=_prompts.OUTFIT_SCHEMA).data
                 if d2 and d2.get("outfit"):
                     draft = [str(t) for t in d2["outfit"]]
-                if d2 and not emotions:
-                    emotions = _emos(d2)
             except Exception:  # noqa: BLE001 — keep the 1st-pass result
                 pass
         snapped = _prompts._snap_prompt(_prompts._safe_image_tags(", ".join(draft)))
         attire = ", ".join(_prompts._dedupe_outfit_tags([t.strip() for t in snapped.split(",") if t.strip()]))
-        return {"attire": attire, "emotions": emotions}
+        return {"attire": attire}
 
     def refine_outfits(self, outfits: list, persona: str, base_appearance: str,
                        model: str | None = None, emit=None) -> list:
         """Run `_compose_outfit_prompt` over a wardrobe plan's outfits IN PARALLEL (the per-outfit
-        refine pass): each gets careful 2-step booru `attire_prompt` AND its own range of
-        `expression_prompts` (emotions correlated to the outfit). A failed outfit keeps its draft."""
+        refine pass): each gets a careful 2-step booru `attire_prompt`. Emotions are NOT set here —
+        they come from the fixed canonical taxonomy at the character level. A failed outfit keeps
+        its draft."""
         from concurrent.futures import ThreadPoolExecutor
         outfits = [dict(o) for o in (outfits or [])]
         if not outfits:
@@ -580,8 +607,6 @@ class AppContext:
                                                o.get("attire_prompt") or o.get("prompt") or "", model)
                 if r.get("attire"):
                     o["attire_prompt"] = r["attire"]
-                if r.get("emotions"):
-                    o["expression_prompts"] = {e["emotion"]: e["prompt"] for e in r["emotions"]}
             except Exception:  # noqa: BLE001
                 pass
             if emit:

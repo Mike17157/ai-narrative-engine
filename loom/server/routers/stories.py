@@ -721,13 +721,12 @@ def register(app, ctx):
                                          appearance=appr, story=story, invention=invention,
                                          systems=systems, on_event=emit)
                     outfits = ctx.refine_outfits(plan.get("outfits"), ch.system, appr, emit=emit)
-                    portraits_apply_wardrobe(ckey, {"outfits": outfits,
-                                                    "expressions": plan.get("expressions", {}),
-                                                    "replace": True})
+                    # Emotions are the fixed canonical taxonomy — apply composes them from the
+                    # persona; we do NOT pass the (legacy) plan expressions.
+                    portraits_apply_wardrobe(ckey, {"outfits": outfits, "replace": True})
                     planned += 1
                     emit({"type": "item", "name": ch.name,
-                          "text": f"{len(plan.get('outfits', []))} outfits · "
-                                  f"{len(plan.get('expressions', {}))} emotions"})
+                          "text": f"{len(plan.get('outfits', []))} outfits"})
                 except Exception as exc:  # noqa: BLE001 — one character failing must not sink the rest
                     emit({"type": "phase", "label": f"{ch.name} skipped ({exc})"})
             return {"ok": True, "planned": planned}
@@ -738,14 +737,16 @@ def register(app, ctx):
 
     @app.post("/api/characters/{key}/portraits/wardrobe")
     def portraits_apply_wardrobe(key: str, body: dict):
-        """Merge a planned wardrobe into the character's portrait studio (additive):
-        add outfits (with attire_prompt) and the per-emotion expression prompts. The
-        sprites themselves are rendered later by the portrait studio.
+        """Merge a planned wardrobe into the character's portrait studio (additive): add outfits
+        (with attire_prompt). Emotions are the FIXED canonical taxonomy stored ONCE at the character
+        level (composed here from the persona if absent), shared by every outfit; sprites are
+        rendered later.
 
-        With `replace: true` it's DESTRUCTIVE — the existing outfits and their rendered
-        sprites are deleted first (e.g. after the base image changed, so the old sprites
-        are stale), then the new plan is written fresh."""
-        if key not in ctx.base_settings.characters:
+        With `replace: true` it's DESTRUCTIVE — the existing outfits and their rendered sprites are
+        deleted first (e.g. after the base image changed, so the old sprites are stale), then the new
+        plan is written fresh. The canonical expression set is preserved across a replace."""
+        c = ctx.base_settings.characters.get(key)
+        if c is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
         body = body or {}
         m = ctx.portrait_manifest(key)
@@ -757,8 +758,20 @@ def register(app, ctx):
                 if o.get("id") and od.is_dir():
                     shutil.rmtree(od, ignore_errors=True)
             m["outfits"] = []
-            m["expression_prompts"] = {}
-        plan_exprs = body.get("expressions") or {}   # emotion -> face prompt (seeds each outfit)
+        # Character-level canonical emotion prompts (the FIXED taxonomy) — compose ONCE, reuse for
+        # every outfit. An explicit `expressions` in the body overrides/merges; else compose from the
+        # persona if the manifest doesn't have them yet.
+        canon = dict(m.get("expression_prompts") or {})
+        body_exprs = body.get("expressions") if isinstance(body.get("expressions"), dict) else None
+        if body_exprs:
+            canon.update(body_exprs)
+        if not canon:
+            from ..services.prompts import _persona_text
+            try:
+                canon = ctx.compose_expressions(_persona_text(c))
+            except Exception:  # noqa: BLE001
+                canon = {}
+        m["expression_prompts"] = canon
         existing = {o.get("name", "").lower() for o in m.get("outfits", [])}
         for o in body.get("outfits", []) or []:
             nm = (o.get("name") or "").strip()
@@ -771,18 +784,12 @@ def register(app, ctx):
                 oid, n = f"{base_oid}-{n}", n + 1
             # Snap the attire to real Danbooru tags — same care the base image gets.
             attire = _snap_prompt(_safe_image_tags((o.get("attire_prompt") or "").strip()))
-            # Each outfit carries its OWN emotion range (from the 2-step outfit generator); fall back
-            # to the story-wide plan set only if this outfit didn't bring its own.
-            out_exprs = o.get("expression_prompts") if isinstance(o.get("expression_prompts"), dict) else None
             m["outfits"].append({"id": oid, "name": nm, "instruction": "",
-                                 "prompt": attire, "attire_prompt": attire,
-                                 "expression_prompts": dict(out_exprs or plan_exprs), "expressions": {}})
+                                 "prompt": attire, "attire_prompt": attire, "expressions": {}})
             existing.add(nm.lower())
-        if plan_exprs:   # keep the legacy global set in sync (standalone studio)
-            m["expression_prompts"] = {**(m.get("expression_prompts") or {}), **plan_exprs}
         ctx.save_portrait_manifest(key, m)
         return {"ok": True, "outfits": [o["name"] for o in m["outfits"]],
-                "emotions": list((m.get("expression_prompts") or {}).keys())}
+                "emotions": list(canon.keys())}
 
     @app.post("/api/stories/{key}/regenerate-character")
     async def regenerate_character(key: str, body: dict):
@@ -860,9 +867,11 @@ def register(app, ctx):
                                      systems=systems, on_event=emit)
                 outfits = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
                                           revised["appearance"], emit=emit)
+                # Persona changed → recompose the fixed canonical emotion set from the new persona.
+                emit({"type": "phase", "label": "Composing expression range"})
+                fresh_exprs = ctx.compose_expressions(revised["persona"])
                 portraits_apply_wardrobe(char_key, {"outfits": outfits,
-                                                    "expressions": plan.get("expressions", {}),
-                                                    "replace": True})
+                                                    "expressions": fresh_exprs, "replace": True})
             except Exception as exc:  # noqa: BLE001
                 emit({"type": "phase", "label": f"Wardrobe rebuild skipped ({exc})"})
             emit({"type": "phase", "label": f"Done — {revised['name']} regenerated"})

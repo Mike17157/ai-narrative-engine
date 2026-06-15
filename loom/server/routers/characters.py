@@ -10,7 +10,9 @@ from pydantic import BaseModel
 
 from ...cards import extract_card_json, to_character
 from ...card_sources import fetch_card
+from ..services.emotions import EMOTION_KEYS
 from ..services.images import _clean_reference_png, _randomize_seeds, _render
+from ..services.jobs_util import _start_stream_job
 from ..services.prompts import (
     _DESCRIBE_SYSTEM,
     _EXPRESSION_SYSTEM,
@@ -444,6 +446,79 @@ def register(app, ctx):
         outfit.setdefault("expressions", {})[emo] = f"{emo}.png"
         ctx.save_portrait_manifest(key, m)
         return {"ok": True, "url": f"/api/characters/{key}/portraits/img/{oid}/{emo}.png"}
+
+    @app.post("/api/characters/{key}/portraits/render-emotions")
+    def render_emotions(key: str, body: dict):
+        """Render the FULL fixed emotion taxonomy as sprites UPFRONT — for one outfit
+        (body.outfit_id) or ALL outfits. ONE full-body image per (outfit × emotion), saved straight
+        into the manifest; streamed as a job (phase per outfit, item per emotion). The per-cell
+        3-candidate redo stays available via sprite-candidate/sprite-select. Returns {job}."""
+        ch = ctx.base_settings.characters.get(key)
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        body = body or {}
+        only = body.get("outfit_id")
+        m = ctx.portrait_manifest(key)
+        outfits = [o for o in m.get("outfits", []) if (not only or o.get("id") == only)]
+        if not outfits:
+            return JSONResponse({"error": "no outfits to render"}, status_code=400)
+        model = ctx.role_model("sprite", body.get("image_model"))
+        provider, model_id = ctx.image_provider(model)
+        if provider is None:
+            return JSONResponse({"error": model_id}, status_code=400)
+        appearance = (ch.fields or {}).get("appearance") or ""
+        canon = m.get("expression_prompts") or {}
+
+        def work(emit, cancelled):
+            from concurrent.futures import ThreadPoolExecutor
+
+            from ...comfy.server import get_server
+            try:
+                get_server(provider.base_url).ensure_up()
+            except Exception:  # noqa: BLE001
+                pass
+            done = 0
+            for o in outfits:
+                if cancelled():
+                    break
+                oid = o.get("id")
+                attire = o.get("attire_prompt") or o.get("prompt") or ""
+                odir = ctx.portrait_dir(key, create=True) / oid
+                odir.mkdir(parents=True, exist_ok=True)
+                emit({"type": "phase",
+                      "label": f"Rendering {o.get('name') or oid} — {len(EMOTION_KEYS)} emotions"})
+
+                def _one(emo, _attire=attire, _odir=odir, _o=o):
+                    if cancelled():
+                        return None
+                    expr = canon.get(emo) or (_o.get("expression_prompts") or {}).get(emo) or emo
+                    prompt = _snap_prompt(_safe_image_tags(
+                        ", ".join(p for p in (appearance, _attire, expr, _FULLBODY_FRAMING) if p)))
+                    try:
+                        prov2, _mid = ctx.image_provider(model)   # own workflow+seed per thread
+                        _randomize_seeds(prov2.workflow)
+                        res = prov2.generate_image(prompt=prompt)
+                        png = res.images[0] if res.images else None
+                    except Exception:  # noqa: BLE001 — one sprite failing must not sink the batch
+                        png = None
+                    if png:
+                        (_odir / f"{emo}.png").write_bytes(png)
+                        return emo
+                    return None
+
+                # ≤3 concurrent submissions — ComfyUI queues them; don't flood the server.
+                with ThreadPoolExecutor(max_workers=3) as ex:
+                    for emo in ex.map(_one, EMOTION_KEYS):
+                        if emo:
+                            o.setdefault("expressions", {})[emo] = f"{emo}.png"
+                            done += 1
+                            emit({"type": "item", "name": emo, "text": o.get("name") or oid})
+                ctx.save_portrait_manifest(key, m)   # persist this outfit's sprites
+            return {"ok": True, "rendered": done, "outfits": len(outfits)}
+
+        job = _start_stream_job("sprites", "Render emotions", ch.name,
+                                body.get("screen") or f"characters/{key}", work)
+        return {"job": job.id}
 
     @app.post("/api/characters/{key}/portraits/outfit/{oid}/recompose")
     def portrait_outfit_recompose(key: str, oid: str, body: dict):

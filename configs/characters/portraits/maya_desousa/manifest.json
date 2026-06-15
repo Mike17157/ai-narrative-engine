@@ -5,8 +5,8 @@
       "id": "base-swimwear",
       "name": "Base (swimwear)",
       "instruction": "",
-      "prompt": "1girl, red bikini top, red bikini bottom, bare shoulders, bare legs, barefoot, standing",
-      "attire_prompt": "1girl, red bikini top, red bikini bottom, bare shoulders, bare legs, barefoot, standing",
+      "prompt": "1girl, red bikini top, red bikini bottom, bare shoulders, bare legs, barefoot, standing, star necklace, seashell bracelet, anklet, toe ring",
+      "attire_prompt": "1girl, red bikini top, red bikini bottom, bare shoulders, bare legs, barefoot, standing, star necklace, seashell bracelet, anklet, toe ring",
       "expression_prompts": {
         "excited-mischievous": "1girl, wide eyes, raised eyebrows, wide grin, open mouth, smile, teeth, sparkles, excitement, mischief",
         "dramatic-pouting": "1girl, half-closed eyes, furrowed brows, pout, puffy cheeks, blush, annoyed",
@@ -14,7 +14,12 @@
         "surprised-gleeful": "1girl, eyes wide open, eyebrows raised high, open mouth, gasp, glee, sparkles, joy",
         "sincere-reassuring": "1girl, focused eyes, straight eyebrows, small smile, determined, reassuring, serious",
         "playfully-scheming": "1girl, narrowed eyes, one eyebrow raised, smirk, sly smile, mischievous, cunning",
-        "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring"
+        "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring",
+        "confident": "1girl, sparkling eyes, raised eyebrows, wide smile, toothy grin, flushed cheeks",
+        "mischievous": "1girl, squinting eyes, mischievous smile, smug, wink",
+        "excited": "1girl, wide eyes, joyful expression, open mouth smile, excited",
+        "embarrassed": "1girl, avoiding gaze, flushed cheeks, embarrassed expression, pout",
+        "playful": "1girl, playful smile, tongue out, wink, blush"
       },
       "expressions": {}
     },

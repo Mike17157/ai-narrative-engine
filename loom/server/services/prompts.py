@@ -10,11 +10,9 @@ from __future__ import annotations
 
 import re
 
-
-DEFAULT_EMOTIONS = [
-    "neutral", "happy", "sad", "angry", "surprised", "embarrassed",
-    "scared", "smug", "crying", "laughing", "shy", "confused",
-]
+# The emotion sprite set is now a FIXED canonical taxonomy (Plutchik-grounded ~32). Re-export the
+# keys as DEFAULT_EMOTIONS so any legacy reference keeps working. See services/emotions.py.
+from .emotions import EMOTION_KEYS as DEFAULT_EMOTIONS  # noqa: F401
 
 _DESCRIBE_SYSTEM = (
     "You are an expert anime character tagger. Given a reference image and the character's "
@@ -68,26 +66,11 @@ def _gen_text(provider, system: str, prompt: str, images: list[str] | None = Non
     return (res.text or "").strip().replace("\n", " ").strip(" ,.")
 
 
-# The OUTFIT counterpart of FEATURES_SCHEMA — one complete outfit + the emotions it calls for.
+# The OUTFIT counterpart of FEATURES_SCHEMA — one complete, detailed outfit. (Emotions are NO
+# longer generated here — the sprite set is a fixed canonical taxonomy; see services/emotions.py.)
 OUTFIT_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["outfit", "emotions"],
+    "type": "object", "additionalProperties": False, "required": ["outfit"],
     "properties": {
-        "emotions": {"type": "array",
-                     "items": {"type": "object", "additionalProperties": False,
-                               "required": ["emotion", "prompt"],
-                               "properties": {
-                                   "emotion": {"type": "string", "description":
-                                               "one lowercase emotion word (happy, excited, shy, "
-                                               "determined, somber, flirty …)"},
-                                   "prompt": {"type": "string", "description":
-                                              "FACE-ONLY booru expression tags for it (eyes, "
-                                              "eyebrows, mouth, + emotion tags like blush, "
-                                              "tears, sweatdrop) — NO clothing/pose/background"}}},
-                     "description":
-                         "4-8 emotions whose RANGE FITS THIS OUTFIT'S mood + scene (a beach look → "
-                         "happy / excited / relaxed / playful; a battle outfit → determined / "
-                         "fierce / focused; a gala gown → elegant / shy / flirty). These drive the "
-                         "outfit's expression sprites, so pick what this look would actually show."},
         "outfit": {"type": "array", "items": {"type": "string"},
                    "description":
                        "18-30 CANONICAL Danbooru tags fully specifying ONE complete, DETAILED "
