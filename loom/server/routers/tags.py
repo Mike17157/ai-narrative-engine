@@ -35,10 +35,14 @@ def register(app, ctx):
         g = await run_in_threadpool(get_graph)
         if not g.ready:
             return {"palette": {}, "note": "graph not available"}
-        kind = "appearance" if kind == "appearance" else "clothing"
-        per = max(4, min(int(per or 24), 80))
+        kind = kind if kind in ("appearance", "clothing", "all") else "clothing"
+        try:
+            per_i = int(per)
+        except (TypeError, ValueError):
+            per_i = 24
+        per_v = None if per_i <= 0 else min(per_i, 200)   # 0/negative → uncapped (full list)
         sim = max(0, min(int(sim), 100))
-        return {"palette": await run_in_threadpool(g.palette, seeds, kind, per, sim)}
+        return {"palette": await run_in_threadpool(g.palette, seeds, kind, per_v, sim)}
 
     @app.get("/api/tags/graph")
     async def tags_graph(tags: str = "", kind: str = "clothing", sim: int = 60):

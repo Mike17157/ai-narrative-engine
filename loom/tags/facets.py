@@ -51,16 +51,25 @@ FACETS_APPEARANCE = [
               "beauty mark", "mustache", "beard", "stubble", "teeth", "glasses")),
 ]
 
-_FACETSETS = {"appearance": FACETS_APPEARANCE, "clothing": FACETS_CLOTHING}
+# Unified, distinct categories across BOTH kinds — appearance first, then clothing. First substring
+# match wins, so every tag lands in exactly ONE category. Used by the editor's "all" view.
+FACETS_ALL = FACETS_APPEARANCE + FACETS_CLOTHING
+
+_FACETSETS = {"appearance": FACETS_APPEARANCE, "clothing": FACETS_CLOTHING, "all": FACETS_ALL}
 
 
 def facet_of(tag: str, kind: str = "clothing") -> str | None:
-    """The facet a tag belongs to for `kind` ('appearance' or 'clothing'), or None if it matches no
-    facet (mostly pose/expression/scene/meta/copyright — deliberately excluded)."""
+    """The facet a tag belongs to for `kind` ('appearance' | 'clothing' | 'all'), or None if it
+    matches no facet (mostly pose/expression/scene/meta/copyright — deliberately excluded)."""
     for fname, subs in _FACETSETS.get(kind, FACETS_CLOTHING):
         if any(s in tag for s in subs):
             return fname
     return None
+
+
+def facet_of_any(tag: str) -> str | None:
+    """The unified category for a tag across both kinds (appearance-first)."""
+    return facet_of(tag, "all")
 
 
 def head_noun(tag: str) -> str:

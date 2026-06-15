@@ -43,7 +43,9 @@
     const seed = tags.join(',');
     if (!seed) { suggestions = {}; return; }
     busy = true;
-    try { const d = await get('/tags/related?per=80&sim=' + similarity + '&kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
+    // unified view: ALL 18 categories across clothing + appearance, uncapped (per=0); the length
+    // slider caps per-category display client-side, similarity zooms relevance.
+    try { const d = await get('/tags/related?kind=all&per=0&sim=' + similarity + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
     catch { suggestions = {}; }
     busy = false;
   }
@@ -93,7 +95,7 @@
       <div class="toolbar">
         <div class="ctrls">
           <label class="slbl">length <b>{length}</b></label>
-          <input class="slider" type="range" min="6" max="60" value={length}
+          <input class="slider" type="range" min="6" max="100" value={length}
             oninput={(e) => (length = +e.target.value)}
             title="suggestions shown per category, and the target size for AI regenerate" />
           <label class="slbl">similarity <b>{similarity}</b></label>

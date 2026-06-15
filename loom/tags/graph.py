@@ -144,24 +144,32 @@ class TagGraph:
         return ranked[:keep]
 
     def palette(self, draft: list[str], kind: str = "appearance",
-                per_facet: int = 24, sim: int = 60) -> dict[str, list[str]]:
-        """Faceted palette of compatible tags for the draft — the composer's pass-2 menu. `sim`
-        (0-100) trades breadth (low) for tight similarity (high). Same shape as
-        CooccurIndex.faceted_palette. Empty if no draft tag is in the graph (caller falls back)."""
+                per_facet: int | None = 24, sim: int = 60) -> dict[str, list[str]]:
+        """Faceted palette of compatible tags for the draft. `kind`: 'appearance' | 'clothing' |
+        'all' (all 18 categories across both). `per_facet=None` → uncapped (the full list, trimmed
+        only by `sim`). `sim` (0-100) trades breadth (low) for tight similarity (high). Empty if no
+        draft tag is in the graph (caller falls back)."""
         scored = self.navigate(draft)
         if not scored:
             return {}
-        attr = "app_facet" if kind == "appearance" else "clo_facet"
-        order = [f for f, _ in (F.FACETS_APPEARANCE if kind == "appearance" else F.FACETS_CLOTHING)]
+        if kind == "all":
+            order = [f for f, _ in F.FACETS_ALL]
+            def facet(t): return self.G.nodes[t].get("app_facet") or self.G.nodes[t].get("clo_facet")
+        else:
+            attr = "app_facet" if kind == "appearance" else "clo_facet"
+            order = [f for f, _ in (F.FACETS_APPEARANCE if kind == "appearance" else F.FACETS_CLOTHING)]
+            def facet(t): return self.G.nodes[t].get(attr)
+        cap = per_facet if per_facet else 10 ** 9       # None/0 → effectively uncapped
+        vcap = 12 if per_facet else 10 ** 9             # relax variant cap when uncapped (full range)
         buckets: dict[str, list[str]] = {f: [] for f in order}
         heads: dict[str, set] = {f: set() for f in order}
         for t, _s in self._pool(scored, sim):
-            f = self.G.nodes[t].get(attr)
-            if not f or len(buckets[f]) >= per_facet:
+            f = facet(t)
+            if not f or f not in buckets or len(buckets[f]) >= cap:
                 continue
             h = F.head_noun(t)
-            if h in heads[f] and sum(1 for x in buckets[f] if F.head_noun(x) == h) >= 12:
-                continue  # cap variants of one item per facet (diversity, but allow a wide range)
+            if h in heads[f] and sum(1 for x in buckets[f] if F.head_noun(x) == h) >= vcap:
+                continue  # cap variants of one item per facet (only when per_facet is bounded)
             buckets[f].append(t)
             heads[f].add(h)
         return {f: v for f, v in buckets.items() if v}
