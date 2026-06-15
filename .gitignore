@@ -27,3 +27,6 @@ logs/
 # Large data files (runtime-only, not source)
 danbooru_character.csv
 loom/data/
+
+# Third-party trainer clone
+trainer/
