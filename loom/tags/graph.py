@@ -163,6 +163,30 @@ class TagGraph:
         """Inspection helper for the debug endpoint."""
         return self.palette(seeds, kind, per_facet)
 
+    def subgraph(self, seeds: list[str], kind: str = "clothing", max_nodes: int = 70,
+                 max_edges: int = 280) -> dict:
+        """A relevance-focused neighbourhood around `seeds` for VISUALIZATION: the seeds plus the
+        top hub-corrected nodes navigated from them, and the real edges induced among that set.
+        Returns {nodes:[{id,facet,post_count,score,seed}], edges:[{source,target,weight}], seeds}."""
+        present = [_norm(s) for s in seeds if _norm(s) in self.G]
+        if not present:
+            return {"nodes": [], "edges": [], "seeds": []}
+        attr = "app_facet" if kind == "appearance" else "clo_facet"
+        scored = self.navigate(present)
+        top = [t for t, _ in sorted(scored.items(), key=lambda kv: -kv[1])][:max_nodes]
+        keep = list(dict.fromkeys(present + top))
+        keepset = set(keep)
+        nodes = [{"id": t,
+                  "facet": (self.G.nodes[t].get(attr) or self.G.nodes[t].get("app_facet")
+                            or self.G.nodes[t].get("clo_facet") or "other"),
+                  "post_count": int(self.G.nodes[t].get("post_count", 0)),
+                  "score": round(float(scored.get(t, 0.0)), 2),
+                  "seed": t in present} for t in keep]
+        edges = [{"source": a, "target": b, "weight": round(float(d.get("weight", 0)), 3)}
+                 for a, b, d in self.G.edges(keep, data=True) if a in keepset and b in keepset]
+        edges.sort(key=lambda e: -e["weight"])
+        return {"nodes": nodes, "edges": edges[:max_edges], "seeds": present}
+
 
 _graph: TagGraph | None = None
 _lock = Lock()

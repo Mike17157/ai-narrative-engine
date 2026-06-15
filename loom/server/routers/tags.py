@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
+
+from ._graph_view import GRAPH_VIEW_HTML
 
 
 def register(app, ctx):
@@ -31,6 +33,28 @@ def register(app, ctx):
             return {"palette": {}, "note": "graph not available"}
         kind = "appearance" if kind == "appearance" else "clothing"
         return {"palette": await run_in_threadpool(g.palette, seeds, kind)}
+
+    @app.get("/api/tags/graph")
+    async def tags_graph(tags: str = "", kind: str = "clothing"):
+        """Neighbourhood around `tags` (comma-separated) from the similarity graph, as
+        {nodes, edges, seeds} — the data behind the visualization at /api/tags/graph/view."""
+        from fastapi.concurrency import run_in_threadpool
+
+        from ...tags import get_graph
+        seeds = [t.strip() for t in (tags or "").split(",") if t.strip()]
+        if not seeds:
+            return {"nodes": [], "edges": [], "seeds": []}
+        g = await run_in_threadpool(get_graph)
+        if not g.ready:
+            return {"nodes": [], "edges": [], "seeds": [], "note": "graph not available"}
+        kind = "appearance" if kind == "appearance" else "clothing"
+        return await run_in_threadpool(g.subgraph, seeds, kind)
+
+    @app.get("/api/tags/graph/view", response_class=HTMLResponse)
+    def tags_graph_view() -> str:
+        """A self-contained interactive force-directed view of the tag similarity graph.
+        Type seed tags; click a node to re-center. Data from GET /api/tags/graph."""
+        return GRAPH_VIEW_HTML
 
     @app.post("/api/tags/snap")
     async def tags_snap(body: dict):
