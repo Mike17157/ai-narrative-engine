@@ -36,6 +36,9 @@
   let galpha = 1, graf = null, gctx = null, gW = 0, gH = 0, gDPR = 1;
   let gloading = $state(false);
   let gempty = $state(false);
+  let glegend = $state([]);        // facets present in the current graph (for the legend)
+  let hoverInfo = $state(null);    // { id, facet, post_count } of the hovered node
+  const fmtCount = (n) => (n >= 1000 ? Math.round(n / 1000) + 'k' : '' + (n || 0));
 
   // seed local state on the rising edge of `open`
   $effect(() => {
@@ -99,6 +102,7 @@
     gedges = (d.edges || []).map(e => ({ a: byId.get(e.source), b: byId.get(e.target), w: e.weight })).filter(e => e.a && e.b);
     gadj = new Map(gnodes.map(n => [n.id, new Set()]));
     gedges.forEach(e => { gadj.get(e.a.id).add(e.b.id); gadj.get(e.b.id).add(e.a.id); });
+    glegend = [...new Set(gnodes.map(n => n.facet))];
     galpha = 1;
     if (!graf) graf = requestAnimationFrame(loop);
   }
@@ -134,17 +138,21 @@
       gctx.globalAlpha = dim ? 0.3 : 1;
       gctx.beginPath(); gctx.arc(n.x, n.y, n.r, 0, 7); gctx.fillStyle = n.col; gctx.fill();
       if (n.seed) { gctx.lineWidth = 2.5; gctx.strokeStyle = '#fff'; gctx.stroke(); }
-      const big = n.seed || n.r > 8 || n === ghover || (hi && hi.has(n.id));
-      if (big) { gctx.globalAlpha = dim ? 0.4 : 1; gctx.fillStyle = '#eef0f4';
-        gctx.font = (n.seed ? '600 12px' : '11px') + ' system-ui,sans-serif';
-        gctx.fillText(n.id, n.x + n.r + 3, n.y + 3); }
+      // label EVERY node; emphasise seed / hovered / neighbours, fade the rest a touch
+      const emph = n.seed || n === ghover || (hi && hi.has(n.id));
+      gctx.globalAlpha = dim ? 0.4 : (emph ? 1 : 0.82);
+      gctx.fillStyle = emph ? '#ffffff' : '#cfd4dc';
+      gctx.font = (n.seed ? '600 12px' : (emph ? '11px' : '10px')) + ' system-ui,sans-serif';
+      gctx.fillText(n.id, n.x + n.r + 3, n.y + 3);
       gctx.globalAlpha = 1; });
   }
   function loop() { if (gnodes.length) { if (galpha > 0.03 || gdrag) step(); draw(); } graf = requestAnimationFrame(loop); }
   function gat(mx, my) { let best = null, bd = 1e9; gnodes.forEach(n => { let d = (n.x - mx) ** 2 + (n.y - my) ** 2; if (d < bd && d < (n.r + 4) ** 2) { bd = d; best = n; } }); return best; }
   function gmove(e) { const r = canvasEl.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
     if (gdrag) { gdrag.x = mx; gdrag.y = my; gdrag.vx = gdrag.vy = 0; gdragged = true; galpha = Math.max(galpha, 0.4); }
-    else { ghover = gat(mx, my); canvasEl.style.cursor = ghover ? 'pointer' : 'default'; } }
+    else { ghover = gat(mx, my); canvasEl.style.cursor = ghover ? 'pointer' : 'default';
+      hoverInfo = ghover ? { id: ghover.id, facet: ghover.facet, post_count: ghover.post_count } : null; } }
+  function gleave() { ghover = null; hoverInfo = null; }
   function gdown(e) { const r = canvasEl.getBoundingClientRect(); gdrag = gat(e.clientX - r.left, e.clientY - r.top); gdragged = false; }
   function gup() { gdrag = null; }
   function gclick(e) { if (gdragged) { gdragged = false; return; }
@@ -219,7 +227,18 @@
         {#if target}
           <!-- live similarity graph for the targeted tag -->
           <div class="graphwrap">
-            <canvas bind:this={canvasEl} onmousemove={gmove} onmousedown={gdown} onmouseup={gup} onclick={gclick}></canvas>
+            <canvas bind:this={canvasEl} onmousemove={gmove} onmouseleave={gleave}
+              onmousedown={gdown} onmouseup={gup} onclick={gclick}></canvas>
+            {#if glegend.length}
+              <div class="glegend">
+                {#each glegend as f (f)}
+                  <span class="lrow"><span class="lsw" style="background:{COLORS[f] || COLORS.other}"></span>{f}</span>
+                {/each}
+              </div>
+            {/if}
+            {#if hoverInfo}
+              <div class="ghover">{hoverInfo.id}{#if hoverInfo.facet} · {hoverInfo.facet}{/if} · {fmtCount(hoverInfo.post_count)} posts</div>
+            {/if}
             {#if gloading}<div class="gmsg">loading graph…</div>
             {:else if gempty}<div class="gmsg">“{target}” isn’t in the graph — use search to swap it.</div>{/if}
           </div>
@@ -256,7 +275,7 @@
 <style>
   .overlay { position: fixed; inset: 0; z-index: 90; background: rgba(6,8,12,.62);
     display: grid; place-items: center; padding: 24px; backdrop-filter: blur(2px); animation: fade .12s ease; }
-  .dlg { width: min(94vw, 760px); height: min(88vh, 720px); display: flex; flex-direction: column;
+  .dlg { width: min(95vw, 880px); height: min(92vh, 880px); display: flex; flex-direction: column;
     background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg, 14px);
     box-shadow: var(--shadow, 0 18px 50px rgba(0,0,0,.55)); padding: 16px 18px; animation: pop .13s ease; }
   .head { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
@@ -292,6 +311,12 @@
   .pill:hover { border-color: var(--accent); color: var(--accent); filter: none; }
   .graphwrap { position: relative; flex: 1; min-height: 0; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg); }
   .graphwrap canvas { display: block; width: 100%; height: 100%; }
+  .glegend { position: absolute; top: 8px; right: 8px; background: rgba(20,23,30,.82); border: 1px solid var(--border);
+    border-radius: 8px; padding: 6px 8px; font-size: 11px; max-width: 150px; max-height: 60%; overflow: auto; pointer-events: none; }
+  .glegend .lrow { display: flex; align-items: center; gap: 6px; margin: 2px 0; color: var(--muted); }
+  .glegend .lsw { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .ghover { position: absolute; left: 8px; bottom: 8px; background: rgba(20,23,30,.88); border: 1px solid var(--border);
+    border-radius: 8px; padding: 4px 9px; font-size: 12px; color: var(--text); pointer-events: none; }
   .gmsg { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 12.5px; pointer-events: none; text-align: center; padding: 0 20px; }
   .lo { color: var(--faint); font-size: 12px; }
   .acts { display: flex; align-items: center; gap: 10px; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--border-soft); }
