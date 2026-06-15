@@ -120,8 +120,11 @@ def register(app, ctx):
                      "NO body/hair/eye/skin tags, NO expression, pose or background.")
         system = ("You refine a Danbooru-tag image prompt for an Illustrious/SDXL model. Given the "
                   "CURRENT tags and a PALETTE of compatible real tags, output a single coherent set "
-                  "of lowercase booru tags. Draw from the palette where it improves the look; keep the "
-                  "subject's identity. " + rules + " Output ONLY tags (no prose).")
+                  "of lowercase tags. Draw from the palette where it improves the look; keep the "
+                  "subject's identity. PREFER real booru tags, but a short natural descriptor is fine "
+                  "when no exact tag exists — never cram several attributes into one invented 'tag'; "
+                  "split modifiers into their own tag (write 'rainbow bikini, crochet', not 'crochet "
+                  "rainbow bikini'). " + rules + " Output ONLY tags (no prose).")
         prompt = (f"CURRENT TAGS:\n{', '.join(tags)}\n\n"
                   + (f"PALETTE — real compatible tags by facet:\n{facet_lines}\n\n" if facet_lines else "")
                   + f"Produce approximately {length} tags (aim for {max(6, length - 3)}–{length + 3}). "
@@ -145,6 +148,22 @@ def register(app, ctx):
         if not final:
             return JSONResponse({"error": "the model returned no tags"}, status_code=500)
         return {"tags": final}
+
+    @app.post("/api/tags/extract")
+    async def tags_extract(body: dict):
+        """Ground free natural-language text into real booru tags (greedy longest-match against the
+        vocabulary, lemma + stopword aware), keeping leftover content words as free-text. Returns
+        {tags:[real…], free:[words…], coverage}. Lets the editor / model write naturally."""
+        from fastapi.concurrency import run_in_threadpool
+
+        from ...tags import get_index
+        text = (body or {}).get("text", "")
+        if not text.strip():
+            return {"tags": [], "free": [], "coverage": 0}
+        ix = await run_in_threadpool(get_index)
+        if not ix.ready:
+            return {"tags": [t.strip() for t in text.split(",") if t.strip()], "free": [], "coverage": 0}
+        return await run_in_threadpool(ix.extract, text)
 
     @app.post("/api/tags/regionize")
     async def tags_regionize(body: dict):

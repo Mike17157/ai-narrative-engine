@@ -55,6 +55,25 @@ def _display(name: str) -> str:
     return name.replace("_", " ")
 
 
+# Function words that aren't tags and only interrupt multi-word tag matches when the model writes
+# prose ("scar across his eye" → drop "his" so "scar across eye" matches). NOT exhaustive on
+# purpose — words that ARE part of tags (across/over/under/no) are deliberately kept.
+_STOP = frozenset((
+    "a", "an", "the", "her", "his", "their", "its", "with", "and", "to", "of", "as", "at", "is",
+    "are", "be", "on", "in", "this", "that", "some", "very", "featuring", "wearing", "wears",
+    "has", "have", "while", "they", "she", "he", "it", "for",
+))
+
+
+def _lemma(w: str) -> str:
+    """Crude stem so 'crocheted'/'crocheting' can match the tag 'crochet' (only for longer words)."""
+    if len(w) > 4:
+        for suf in ("ing", "ed", "es", "s"):
+            if w.endswith(suf) and len(w) - len(suf) >= 3:
+                return w[: -len(suf)]
+    return w
+
+
 @dataclass(slots=True)
 class Tag:
     name: str          # canonical, underscored (the CSV key)
@@ -203,30 +222,92 @@ class TagIndex:
         return {"input": raw, "status": "unknown", "tag": None, "display": _display(k),
                 "suggestions": [self._fmt(n) for n in self._suggest(k)]}
 
+    def extract(self, text: str, max_n: int = 4) -> dict:
+        """Ground free natural language into real booru tags: drop function words, then greedy
+        LONGEST-MATCH n-grams (with a crude lemma + token-reorder fallback) against the canonical
+        vocabulary. Leftover content words are kept as free-text. Returns
+        {tags:[real…], free:[words…], coverage: matched/total}. ('crocheted rainbow bikini' →
+        tags=['crochet','rainbow bikini']; 'scar across his eye' → ['scar across eye'].)"""
+        raw = re.findall(r"[a-z0-9']+", (text or "").lower())
+        words = [w for w in raw if w not in _STOP]
+        total = len(words)
+        tags: list[str] = []
+        free: list[str] = []
+        matched = 0
+        i = 0
+        while i < len(words):
+            hit = None
+            for n in range(min(max_n, len(words) - i), 0, -1):
+                window = words[i:i + n]
+                for variant in (window, [_lemma(x) for x in window]):
+                    k = "_".join(variant)
+                    if k in self.canon:
+                        hit = (_display(k), n); break
+                    if k in self.alias:
+                        hit = (_display(self.alias[k]), n); break
+                if hit:
+                    break
+                fs = frozenset(window)               # token-reorder ('blue navy' → 'navy blue')
+                if fs in self._by_tokens:
+                    hit = (_display(self._by_tokens[fs]), n); break
+            if hit:
+                tags.append(hit[0]); matched += hit[1]; i += hit[1]
+            else:
+                if len(words[i]) > 2:
+                    free.append(words[i])
+                i += 1
+        out, seen = [], set()
+        for t in tags:                               # dedup, keep order
+            if t not in seen:
+                seen.add(t); out.append(t)
+        return {"tags": out, "free": free, "coverage": round(matched / total, 2) if total else 0.0}
+
+    def _decompose(self, part: str):
+        """If an unknown phrase is really several real tags crammed together ('crochet rainbow
+        bikini'), split it into ([real tags], [leftover words]). Returns None unless extraction
+        covers most of the phrase (so a genuine single descriptor like 'salt spray hair' is kept
+        whole rather than shredded into 'hair' + junk)."""
+        ex = self.extract(part)
+        if ex["tags"] and (ex["coverage"] >= 0.6 or any(" " in t for t in ex["tags"])):
+            return ex["tags"], ex["free"]
+        return None
+
     def snap(self, prompt: str) -> dict:
-        """Snap a whole comma-separated prompt. Resolves what it safely can, KEEPS unknowns
-        (never silently drops), dedups, and reports every change + every unmatched tag."""
+        """Snap a whole comma-separated prompt. Resolves what it safely can; an unknown phrase that
+        is really several real tags is SPLIT into them (+ leftover words kept); truly-unknown text
+        is KEPT verbatim (never silently dropped). Dedups; reports changes + unmatched."""
         seen: set[str] = set()
         tags: list[str] = []
         items: list[dict] = []
         changed: list[dict] = []
         unknown: list[dict] = []
+
+        def _emit(disp: str):
+            dk = _key(disp)
+            if dk not in seen:
+                seen.add(dk); tags.append(disp)
+
         for part in (prompt or "").split(","):
             if not part.strip():
                 continue
             r = self.resolve(part)
             if r["status"] == "empty":
                 continue
-            disp = r["display"]
             if r["status"] == "unknown":
+                dec = self._decompose(part)
+                if dec:                              # split a crammed compound into real sub-tags
+                    rtags, residue = dec
+                    for t in rtags + residue:
+                        _emit(t)
+                    changed.append({"from": part.strip(), "to": ", ".join(rtags + residue), "how": "split"})
+                    items.append({"input": part, "status": "split", "tag": None,
+                                  "display": ", ".join(rtags + residue), "suggestions": []})
+                    continue
                 unknown.append(r)
-            elif disp != _norm(r["input"]):
-                changed.append({"from": r["input"].strip(), "to": disp, "how": r["status"]})
+            elif r["display"] != _norm(r["input"]):
+                changed.append({"from": r["input"].strip(), "to": r["display"], "how": r["status"]})
             items.append(r)
-            dk = _key(disp)
-            if dk not in seen:                       # dedup post-resolution, keep order
-                seen.add(dk)
-                tags.append(disp)
+            _emit(r["display"])
         return {"prompt": ", ".join(tags), "tags": tags, "items": items,
                 "changed": changed, "unknown": unknown}
 

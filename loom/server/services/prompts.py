@@ -81,15 +81,18 @@ OUTFIT_SCHEMA = {
                        "necklace', 'single earring'); PIERCINGS ('navel piercing', 'ear piercing') "
                        "and MAKEUP ('red lipstick', 'eyeshadow', 'eyeliner', 'blush') where they "
                        "suit the character + occasion.\n"
-                       "EVERY GARMENT TAG MUST INCLUDE A COLOUR WORD — never a bare 'skirt' / "
-                       "'shirt' / 'thighhighs', ALWAYS 'red pleated skirt' / 'white blouse' / "
-                       "'black thighhighs' / 'brown loafers'. NEVER output BOTH a bare garment AND "
-                       "its coloured version ('jeans' AND 'black jeans') — output ONLY the coloured "
-                       "one. (Accessories / piercings / makeup may omit colour.) Keep ONE coherent "
-                       "palette; pin exact colours so it renders the same every time.\n"
-                       "LITERAL canonical tags only — no metaphor, brand or material poetry. "
-                       "CLOTHING, ACCESSORIES, PIERCINGS and MAKEUP only — NO body / hair / eye / "
-                       "skin tags, NO facial EXPRESSION, NO pose, NO background."},
+                       "Give each garment a COLOUR — but as a simple colour+garment tag ('red "
+                       "pleated skirt', 'white blouse', 'black thighhighs', 'brown loafers'). NEVER "
+                       "output BOTH a bare garment AND its coloured version ('jeans' AND 'black "
+                       "jeans') — output ONLY the coloured one. (Accessories / piercings / makeup may "
+                       "omit colour.) Keep ONE coherent palette.\n"
+                       "PREFER real Danbooru tags, but each entry may be a short, natural descriptor "
+                       "when no exact tag exists — DON'T cram several attributes into one invented "
+                       "'tag'. Split extra material/pattern modifiers into their OWN tag: write "
+                       "'rainbow bikini, crochet' (two real tags), NOT 'crochet rainbow bikini'; "
+                       "'plaid skirt, pleated', not 'pleated plaid wool skirt'. No metaphor or brand "
+                       "poetry. CLOTHING, ACCESSORIES, PIERCINGS and MAKEUP only — NO body / hair / "
+                       "eye / skin tags, NO facial EXPRESSION, NO pose, NO background."},
     },
 }
 

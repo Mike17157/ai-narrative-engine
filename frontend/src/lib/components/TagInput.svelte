@@ -33,8 +33,6 @@
   }
   function add(tag) { const t = (tag || '').trim(); if (t) commit([...chips, t]); query = ''; results = []; open = false; active = -1; }
   function removeAt(i) { const a = [...chips]; a.splice(i, 1); commit(a); }
-  function replaceTag(input, tag) { commit(chips.map((c) => (norm(c) === norm(input) ? tag : c))); }
-  function removeTag(input) { commit(chips.filter((c) => norm(c) !== norm(input))); }
 
   // ---- live validation (debounced) → per-tag status keyed by normalized text ----
   let statusMap = $state({});      // norm(input) -> { status, display, suggestions }
@@ -127,24 +125,14 @@
 
   <div class="bar">
     {#if unknowns.length}
-      <span class="warn">⚠ {unknowns.length} unrecognized</span>
+      <span class="free">{unknowns.length} free-text tag{unknowns.length === 1 ? '' : 's'} <span class="lo">(used as written)</span></span>
     {:else}
-      <span class="ok">✓ all tags recognized</span>
+      <span class="ok">✓ all booru tags</span>
     {/if}
     <button class="graph" onclick={() => openPicker()} title="browse the tag graph — add or swap tags by what they pair with">✦ graph</button>
     <button class="snap" onclick={snapAll} title="snap every tag onto its real Danbooru form (aliases, typos, word order)">⇥ snap to real tags</button>
   </div>
-
-  {#each unknowns as u (u.input)}
-    <div class="issue">
-      <span class="bad">{u.display}</span>
-      <span class="sep">→</span>
-      {#each (u.suggestions || []).slice(0, 5) as s (s.name)}
-        <button class="sug" onmousedown={(e) => { e.preventDefault(); replaceTag(u.input, s.tag); }} title="{fmtCount(s.count)} posts">{s.tag}</button>
-      {/each}
-      <button class="drop" onmousedown={(e) => { e.preventDefault(); removeTag(u.input); }}>remove</button>
-    </div>
-  {/each}
+  <!-- free-text tags are kept as written; correct them via ⇥ snap or ✦ graph if you want. -->
 </div>
 
 <style>
@@ -162,7 +150,8 @@
   /* known = quiet; snapped (alias/typo/reorder) = amber; unknown = red */
   .chip.ok, .chip.control { border-color: rgba(120,200,140,.35); background: rgba(120,200,140,.10); }
   .chip.alias, .chip.reorder, .chip.typo { border-color: rgba(230,180,90,.45); background: rgba(230,180,90,.12); color: #f0d49a; }
-  .chip.unknown { border-color: rgba(230,110,110,.5); background: rgba(230,110,110,.12); color: #f3b0b0; }
+  /* not a canonical booru tag — fine, used as written. Neutral dashed, not an error. */
+  .chip.unknown { border-style: dashed; border-color: var(--border); background: var(--elev); color: var(--muted); }
   .chip .arrow { font-style: normal; opacity: .7; font-size: 11px; margin-left: 2px; }
   .chip .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 14px; box-shadow: none; }
   .chip .x:hover { opacity: 1; }
@@ -186,15 +175,9 @@
   .cat { font-size: 9.5px; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); opacity: .7; }
   .cat.character { color: #9fb3d8; } .cat.copyright { color: #c8a8e0; } .cat.artist { color: #e0b48a; }
   .bar { display: flex; align-items: center; gap: 10px; margin: 5px 1px 0; font-size: 11.5px; }
-  .bar .warn { color: #f0c074; } .bar .ok { color: #8fc7a0; }
+  .bar .free { color: var(--muted); } .bar .free .lo { color: var(--faint); }
+  .bar .ok { color: #8fc7a0; }
   .snap, .graph { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); box-shadow: none; }
   .graph { margin-left: auto; }
   .snap:hover, .graph:hover { color: var(--accent); border-color: var(--accent); filter: none; }
-  .issue { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 5px 1px 0; font-size: 12px; }
-  .issue .bad { color: #f3b0b0; }
-  .issue .sep { color: var(--faint); }
-  .sug { font-size: 11.5px; padding: 2px 7px; border-radius: 6px; background: rgba(109,140,255,.14); border: 1px solid rgba(109,140,255,.3); color: #cdd8ff; box-shadow: none; }
-  .sug:hover { background: rgba(109,140,255,.26); filter: none; }
-  .drop { font-size: 11px; padding: 2px 7px; border-radius: 6px; background: none; border: 1px solid var(--border); color: var(--muted); box-shadow: none; }
-  .drop:hover { color: #f3b0b0; border-color: rgba(230,110,110,.5); filter: none; }
 </style>

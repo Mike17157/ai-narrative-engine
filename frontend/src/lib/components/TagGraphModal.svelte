@@ -61,6 +61,17 @@
     scheduleSuggestions();
   }
   function removeChip(t) { tags = tags.filter((x) => norm(x) !== norm(t)); if (target && norm(target) === norm(t)) target = null; scheduleSuggestions(); }
+
+  // describe in words → grounded real tags (+ kept descriptors)
+  let describe = $state('');
+  let extracting = $state(false);
+  async function fromDescription() {
+    const text = describe.trim(); if (!text || extracting) return;
+    extracting = true;
+    const r = await post('/tags/extract', { text });
+    if (r.ok && r.data) { for (const t of [...(r.data.tags || []), ...(r.data.free || [])]) applyTag(t); describe = ''; }
+    extracting = false;
+  }
   function setTarget(t) { target = (t && target && norm(target) === norm(t)) ? null : t; }
   function setKind(k) { if (k !== kind) { kind = k; refreshSuggestions(); } }
   async function regen() {
@@ -130,6 +141,12 @@
       </div>
 
       <div class="content">
+        <div class="describe">
+          <input placeholder="describe in words → grounds to real tags (e.g. 'crocheted rainbow bikini, twin braids')"
+            bind:value={describe} onkeydown={(e) => { if (e.key === 'Enter') fromDescription(); }} />
+          <button class="ghost" onclick={fromDescription} disabled={extracting || !describe.trim()}>
+            {extracting ? '…' : '⌁ extract'}</button>
+        </div>
         <TagSearch onpick={applyTag} />
         <div class="cbody">
           {#if view === 'graph'}
@@ -197,6 +214,10 @@
   .repl b { color: var(--text); }
   .link { background: none; border: 0; color: var(--accent); box-shadow: none; cursor: pointer; font-size: 12px; padding: 0 2px; }
   .content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
+  .describe { display: flex; gap: 8px; }
+  .describe input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 13px; }
+  .describe input:focus { border-color: var(--accent); outline: none; }
+  .describe button { font-size: 12.5px; padding: 0 12px; border-radius: 9px; white-space: nowrap; }
   .cbody { flex: 1; min-height: 0; display: flex; }
   .hintbox { flex: 1; display: grid; place-items: center; color: var(--muted); font-size: 12.5px;
     border: 1px dashed var(--border); border-radius: 10px; }
