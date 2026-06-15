@@ -40,6 +40,13 @@
   let hoverInfo = $state(null);    // { id, facet, post_count } of the hovered node
   const fmtCount = (n) => (n >= 1000 ? Math.round(n / 1000) + 'k' : '' + (n || 0));
 
+  // camera: the graph lays out to canvas-fit in world coords, then renders at ZOOM (2x linear =
+  // 4x the fit area); drag the background to pan around it.
+  const ZOOM = 2;
+  let panX = 0, panY = 0, panning = false, panSX = 0, panSY = 0, panPX = 0, panPY = 0;
+  function centerPan() { panX = (gW / 2) * (1 - ZOOM); panY = (gH / 2) * (1 - ZOOM); }
+  function clampPan() { panX = Math.min(0, Math.max(gW - gW * ZOOM, panX)); panY = Math.min(0, Math.max(gH - gH * ZOOM, panY)); }
+
   // seed local state on the rising edge of `open`
   $effect(() => {
     if (pickerState.open && !seeded) {
@@ -103,6 +110,7 @@
     gadj = new Map(gnodes.map(n => [n.id, new Set()]));
     gedges.forEach(e => { gadj.get(e.a.id).add(e.b.id); gadj.get(e.b.id).add(e.a.id); });
     glegend = [...new Set(gnodes.map(n => n.facet))];
+    centerPan();
     galpha = 1;
     if (!graf) graf = requestAnimationFrame(loop);
   }
@@ -129,6 +137,9 @@
   function draw() {
     if (!gctx) return;
     gctx.clearRect(0, 0, gW, gH);
+    gctx.save();
+    gctx.translate(panX, panY);
+    gctx.scale(ZOOM, ZOOM);
     const hi = ghover ? gadj.get(ghover.id) : null;
     gedges.forEach(e => { const on = ghover && (e.a === ghover || e.b === ghover);
       gctx.strokeStyle = on ? 'rgba(150,180,255,.55)' : 'rgba(120,130,150,' + (0.05 + e.w * 0.5) + ')';
@@ -145,17 +156,24 @@
       gctx.font = (n.seed ? '600 12px' : (emph ? '11px' : '10px')) + ' system-ui,sans-serif';
       gctx.fillText(n.id, n.x + n.r + 3, n.y + 3);
       gctx.globalAlpha = 1; });
+    gctx.restore();
   }
   function loop() { if (gnodes.length) { if (galpha > 0.03 || gdrag) step(); draw(); } graf = requestAnimationFrame(loop); }
-  function gat(mx, my) { let best = null, bd = 1e9; gnodes.forEach(n => { let d = (n.x - mx) ** 2 + (n.y - my) ** 2; if (d < bd && d < (n.r + 4) ** 2) { bd = d; best = n; } }); return best; }
+  // screen (canvas px) → node, accounting for pan + zoom
+  function gat(mx, my) { const wx = (mx - panX) / ZOOM, wy = (my - panY) / ZOOM;
+    let best = null, bd = 1e9; gnodes.forEach(n => { let d = (n.x - wx) ** 2 + (n.y - wy) ** 2; if (d < bd && d < (n.r + 5) ** 2) { bd = d; best = n; } }); return best; }
   function gmove(e) { const r = canvasEl.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
-    if (gdrag) { gdrag.x = mx; gdrag.y = my; gdrag.vx = gdrag.vy = 0; gdragged = true; galpha = Math.max(galpha, 0.4); }
-    else { ghover = gat(mx, my); canvasEl.style.cursor = ghover ? 'pointer' : 'default';
+    if (gdrag) { gdrag.x = (mx - panX) / ZOOM; gdrag.y = (my - panY) / ZOOM; gdrag.vx = gdrag.vy = 0; gdragged = true; galpha = Math.max(galpha, 0.4); }
+    else if (panning) { panX = panPX + (mx - panSX); panY = panPY + (my - panSY); clampPan(); gdragged = true; }
+    else { ghover = gat(mx, my); canvasEl.style.cursor = ghover ? 'pointer' : 'grab';
       hoverInfo = ghover ? { id: ghover.id, facet: ghover.facet, post_count: ghover.post_count } : null; } }
   function gleave() { ghover = null; hoverInfo = null; }
-  function gdown(e) { const r = canvasEl.getBoundingClientRect(); gdrag = gat(e.clientX - r.left, e.clientY - r.top); gdragged = false; }
-  function gup() { gdrag = null; }
-  function gclick(e) { if (gdragged) { gdragged = false; return; }
+  function gdown(e) { const r = canvasEl.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
+    const n = gat(mx, my); gdragged = false;
+    if (n) { gdrag = n; }                                  // drag a node
+    else { panning = true; panSX = mx; panSY = my; panPX = panX; panPY = panY; canvasEl.style.cursor = 'grabbing'; } }  // pan the view
+  function gup() { gdrag = null; panning = false; if (canvasEl) canvasEl.style.cursor = 'grab'; }
+  function gclick(e) { if (gdragged) { gdragged = false; return; }   // ignore the click that ends a drag/pan
     const r = canvasEl.getBoundingClientRect(); const n = gat(e.clientX - r.left, e.clientY - r.top);
     if (n && !n.seed) applyTag(n.id);   // swap the targeted chip for the clicked node
   }
@@ -206,7 +224,7 @@
       </div>
 
       <div class="status">
-        {#if target}Replacing <b>{target}</b> — click a node in the graph (or search) to swap it. <button class="link" onclick={() => setTarget(null)}>back to list</button>
+        {#if target}Replacing <b>{target}</b> — click a node to swap it · drag the background to pan. <button class="link" onclick={() => setTarget(null)}>back to list</button>
         {:else}Click a chip to replace it (opens its graph), or add tags below.{/if}
       </div>
 
@@ -270,7 +288,7 @@
   </div>
 {/if}
 
-<svelte:window onkeydown={(e) => { if (pickerState.open && e.key === 'Escape' && !open) cancel(); }} />
+<svelte:window onmouseup={gup} onkeydown={(e) => { if (pickerState.open && e.key === 'Escape' && !open) cancel(); }} />
 
 <style>
   .overlay { position: fixed; inset: 0; z-index: 90; background: rgba(6,8,12,.62);
