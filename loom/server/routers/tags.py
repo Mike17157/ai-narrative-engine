@@ -15,6 +15,23 @@ def register(app, ctx):
         n = min(max(int(limit or 20), 1), 50)
         return {"tags": ix.search(q or "", limit=n, include_noisy=bool(noisy))}
 
+    @app.get("/api/tags/related")
+    async def tags_related(tags: str = "", kind: str = "clothing"):
+        """Navigate the tag similarity graph from comma-separated `tags` and return a faceted palette
+        of correlated/compatible tags (kind='appearance'|'clothing'). Inspection/debug for the
+        graph that powers image-prompt construction."""
+        from fastapi.concurrency import run_in_threadpool
+
+        from ...tags import get_graph
+        seeds = [t.strip() for t in (tags or "").split(",") if t.strip()]
+        if not seeds:
+            return {"palette": {}}
+        g = await run_in_threadpool(get_graph)
+        if not g.ready:
+            return {"palette": {}, "note": "graph not available"}
+        kind = "appearance" if kind == "appearance" else "clothing"
+        return {"palette": await run_in_threadpool(g.palette, seeds, kind)}
+
     @app.post("/api/tags/snap")
     async def tags_snap(body: dict):
         """Snap a free-text prompt onto real booru tags. Returns the full snap report

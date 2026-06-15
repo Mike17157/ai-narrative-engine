@@ -76,45 +76,12 @@ _CLOTHING_KEEP = (
 # clothing-substring false positives that are actually BODY tags — never treat as clothing.
 _CLOTH_EXCLUDE = {"collarbone", "navel", "cleavage", "midriff"}
 
-# Makeup substrings — worn but not garments; included in the CLOTHING palette (alongside
-# _CLOTHING_KEEP + piercings) so outfits get makeup, without polluting the appearance filter.
-_MAKEUP_KEEP = ("lipstick", "eyeshadow", "makeup", "eyeliner", "mascara", "nail polish", "lip gloss")
-
-# Facet buckets for the PMI palette. ORDER MATTERS — first substring match wins, so put the
-# more specific buckets first (swimwear before top/dress; piercing/makeup before accessories).
-_FACETS_CLOTHING = [
-    ("swimwear", ("bikini", "swimsuit", "swimwear", "swim trunks", "one-piece swimsuit")),
-    ("piercing", ("piercing",)),
-    ("makeup", _MAKEUP_KEEP),
-    ("dress", ("dress", "gown", "kimono", "yukata", "cheongsam", "leotard", "bodysuit",
-               "overalls", "romper", "jumpsuit", "sundress", "qipao")),
-    ("top", ("shirt", "blouse", "tank top", "camisole", "sweater", "crop top", "t-shirt",
-             "tube top", "halterneck", "turtleneck", "serafuku", "sailor collar", "vest")),
-    ("bottom", ("skirt", "pants", "shorts", "jeans", "trousers", "bloomers", "hakama",
-                "miniskirt", "buruma")),
-    ("outerwear", ("jacket", "coat", "hoodie", "cardigan", "blazer", "cape", "cloak", "robe",
-                   "apron", "poncho", "shrug", "bolero")),
-    ("legwear", ("thighhighs", "kneehighs", "socks", "pantyhose", "legwear", "garter",
-                 "stockings", "leggings")),
-    ("footwear", ("boots", "shoes", "sneakers", "heels", "sandals", "loafers", "mary janes",
-                  "slippers", "geta")),
-    ("headwear", ("hat", "beret", "cap", "helmet", "crown", "tiara", "veil", "headband",
-                  "hairband", "hair bow", "hair ornament", "hairclip", "hair flower",
-                  "headdress", "headphones", "hood")),
-    ("accessories", ("gloves", "scarf", "necktie", "belt", "choker", "bracelet", "necklace",
-                     "earring", "anklet", "wristband", "armband", "jewelry", "bowtie",
-                     "collar", "bag", "glasses", "ribbon", "wings", "detached sleeves")),
-]
-_FACETS_APPEARANCE = [
-    ("hair", ("hair", "bangs", "ahoge", "ponytail", "twintails", "braid", "bun", "sidelocks",
-              "hime cut", "drill")),
-    ("eyes", ("eyes", "eyelashes", "heterochromia", "tsurime", "tareme", "eyebrows", "pupils")),
-    ("skin", ("skin",)),
-    ("body", ("breasts", "chest", "petite", "slim", "toned", "athletic", "curvy", "plump",
-              "muscular", "thighs", "hips", "waist", "navel", "build", "abs", "collarbone")),
-    ("face", ("mole", "freckles", "scar", "glasses", "fang", "makeup", "lipstick", "eyeshadow",
-              "beauty mark", "mustache", "beard", "stubble", "teeth")),
-]
+# Facet buckets (shared with graph.py) — the curation lever lives in facets.py.
+from .facets import (  # noqa: E402
+    FACETS_APPEARANCE as _FACETS_APPEARANCE,
+    FACETS_CLOTHING as _FACETS_CLOTHING,
+    MAKEUP_KEEP as _MAKEUP_KEEP,
+)
 
 # If the draft fixes a member of one of these facets, don't suggest a conflicting sibling.
 _EXCLUSIVE = [

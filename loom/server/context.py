@@ -43,6 +43,35 @@ _ROLE_LABELS = {
 _IMG_URL_RE = re.compile(r"https?://[^\s\"'<>)]+?\.(?:png|jpe?g|webp|gif)", re.IGNORECASE)
 
 
+def _retrieve_palette(draft: list, kind: str) -> tuple[dict, list]:
+    """The composer's pass-2 retrieval: a faceted palette of real, compatible tags + a few intact
+    real bundles for coherence. Primary source is the tag similarity GRAPH (navigated from the
+    draft); falls back to the one-hop PMI palette, then just the soup sample. `kind` in
+    {"appearance","clothing"}."""
+    palette: dict = {}
+    lines: list = []
+    if not draft:
+        return palette, lines
+    try:
+        from ..tags import get_graph
+        g = get_graph()
+        if g.ready:
+            palette = g.palette(draft, kind, per_facet=24)
+    except Exception:  # noqa: BLE001 — graph unavailable: fall back below
+        palette = {}
+    try:
+        from ..tags import get_cooccur
+        ix = get_cooccur()
+        if ix.ready:
+            if not palette:
+                palette = ix.faceted_palette(draft, kind, per_facet=24)
+            sampler = ix.sample_appearance_lines if kind == "appearance" else ix.sample_clothing_lines
+            lines = sampler(draft, n=8)
+    except Exception:  # noqa: BLE001
+        pass
+    return palette, lines
+
+
 def _palette_block(palette: dict, sample_lines: list) -> str:
     """Render a faceted PMI palette (+ a few coherent real examples) as the grounding block for a
     composer's 2nd pass — an organized menu of real booru tags the model constructs from."""
@@ -477,16 +506,7 @@ class AppContext:
         # character bundles for coherence, and CONSTRUCT the final appearance by drawing richly from
         # it. The organized, ranked palette surfaces far more usable tags than a flat soup of lines.
         draft = [str(t) for t in (feats.get("appearance") or [])]
-        palette: dict = {}
-        lines: list[str] = []
-        try:
-            from ..tags import get_cooccur
-            ix = get_cooccur()
-            if draft and ix.ready:
-                palette = ix.faceted_palette(draft, "appearance", per_facet=24)
-                lines = ix.sample_appearance_lines(draft, n=8)
-        except Exception:  # noqa: BLE001
-            palette, lines = {}, []
+        palette, lines = _retrieve_palette(draft, "appearance")
         if palette:
             refine = (context + "\n\nYOUR DRAFT appearance tags:\n" + ", ".join(draft)
                       + "\n\n" + _palette_block(palette, lines)
@@ -560,16 +580,7 @@ class AppContext:
         # outerwear/legwear/footwear/headwear/accessories/swimwear/makeup/piercing), plus a few intact
         # real outfits for coherence, and CONSTRUCT the final outfit by drawing richly from it. The
         # palette is far richer + more colour-complete than a flat soup; _snap + _dedupe clean it.
-        palette: dict = {}
-        lines: list[str] = []
-        try:
-            from ..tags import get_cooccur
-            ix = get_cooccur()
-            if ix.ready:
-                palette = ix.faceted_palette(draft, "clothing", per_facet=24)
-                lines = ix.sample_clothing_lines(draft, n=8)
-        except Exception:  # noqa: BLE001
-            palette, lines = {}, []
+        palette, lines = _retrieve_palette(draft, "clothing")
         if palette:
             refine = (context + "\n\nYOUR DRAFT outfit tags:\n" + ", ".join(draft)
                       + "\n\n" + _palette_block(palette, lines)

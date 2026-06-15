@@ -19,6 +19,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.29",
     "psutil>=5.9",   # CPU/RAM stats for the Activity panel
+    "networkx>=3",   # tag similarity graph (co-occurrence navigation for image prompts)
 ]
 
 [project.scripts]
