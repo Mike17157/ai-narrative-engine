@@ -8,16 +8,9 @@ from fastapi.responses import JSONResponse
 from ..services import config_files
 from ..services.jobs_util import _cancel_job
 
-TRAINER_DEFAULT = {"sd_scripts_dir": "", "python": "", "checkpoints_dir": "", "loras_dir": ""}
-
-
 def register(app, ctx):
     def load_trainer() -> dict:
-        path = ctx.root / "configs" / "trainer.json"
-        cfg = dict(TRAINER_DEFAULT)
-        if path.is_file():
-            cfg.update(json.loads(path.read_text(encoding="utf-8")))
-        return cfg
+        return config_files.load_trainer(ctx.root)
 
     @app.get("/api/trainer")
     def get_trainer() -> dict:

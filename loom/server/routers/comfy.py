@@ -13,15 +13,8 @@ from ..services import config_files
 
 
 def register(app, ctx):
-    # -- trainer config loader (create_app-local in app.py; copied verbatim) ---
-    TRAINER_DEFAULT = {"sd_scripts_dir": "", "python": "", "checkpoints_dir": "", "loras_dir": ""}
-
     def load_trainer() -> dict:
-        path = ctx.root / "configs" / "trainer.json"
-        cfg = dict(TRAINER_DEFAULT)
-        if path.is_file():
-            cfg.update(json.loads(path.read_text(encoding="utf-8")))
-        return cfg
+        return config_files.load_trainer(ctx.root)
 
     @app.get("/api/comfy/models")
     def comfy_models():

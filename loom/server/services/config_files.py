@@ -117,6 +117,56 @@ def _loras_out_dir(cfg: dict, comfy_base_dir: Path | None, root: Path) -> Path:
     return (bd / "models" / "loras") if bd else (root / "loras")
 
 
+# -- trainer + captioner config (shared by the comfy / lora / trainer routers) --
+TRAINER_DEFAULT = {"sd_scripts_dir": "", "python": "", "checkpoints_dir": "", "loras_dir": ""}
+
+
+def load_trainer(root: Path) -> dict:
+    path = root / "configs" / "trainer.json"
+    cfg = dict(TRAINER_DEFAULT)
+    if path.is_file():
+        cfg.update(json.loads(path.read_text(encoding="utf-8")))
+    return cfg
+
+
+CAPTIONER_DEFAULT = {
+    "enabled": True,
+    "model": "",  # an OpenRouter vision-capable model id
+    "system": (
+        "You are an expert anime image tagger writing captions to train a LoRA for an "
+        "Illustrious-based SDXL model, which understands Danbooru tags. Caption the image "
+        "as ONE line of lowercase, comma-separated booru tags. Use spaces inside multi-word "
+        "tags (e.g. \"long hair\", \"looking at viewer\").\n\n"
+        "Tag only what is clearly visible, roughly in this order:\n"
+        "1. count/subject: 1girl, 1boy, 2girls, solo, multiple girls…\n"
+        "2. character name as a booru tag ONLY if you clearly recognize them "
+        "(e.g. \"hatsune miku\"); otherwise omit the name.\n"
+        "3. appearance: hair colour, length and style (e.g. \"aqua hair\", \"long hair\", "
+        "\"twintails\"), eye colour, notable body features.\n"
+        "4. clothing and accessories (e.g. \"school uniform\", \"detached sleeves\", \"thighhighs\").\n"
+        "5. expression, then pose/action (e.g. \"smile\", \"looking at viewer\", \"arms up\", \"sitting\").\n"
+        "6. setting/background (e.g. \"classroom\", \"night\", \"cherry blossoms\", \"simple background\").\n"
+        "7. framing/camera: portrait, upper body, cowboy shot, full body, and angle tags like "
+        "\"from above\", \"from side\", \"dutch angle\" when clear.\n\n"
+        "Critical for a STYLE LoRA: tag only the CONTENT. Do NOT tag the art style, shading, "
+        "line art, colour palette, level of detail, medium, \"anime\", \"illustration\", or any "
+        "quality words (masterpiece, best quality, highres…). Whatever you tag is treated as "
+        "already-known and is NOT absorbed into the LoRA — leaving the style untagged is exactly "
+        "how the LoRA learns it.\n\n"
+        "Be specific and accurate to THIS image; never invent details you can't see. No artist "
+        "names, no full sentences, no trailing period. Output only the tags on one line."
+    ),
+}
+
+
+def load_captioner(root: Path) -> dict:
+    path = root / "configs" / "captioner.json"
+    cfg = dict(CAPTIONER_DEFAULT)
+    if path.is_file():
+        cfg.update(json.loads(path.read_text(encoding="utf-8")))
+    return cfg
+
+
 # -- comfy model folder layout ----------------------------------------------
 def _model_kind_folders(kind: str) -> list[str]:
     if kind == "clip":

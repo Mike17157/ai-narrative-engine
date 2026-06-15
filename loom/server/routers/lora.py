@@ -35,42 +35,6 @@ class PromptSetRequest(BaseModel):
     prompts: list[str]
 
 
-# Vision captioner config defaults — copied verbatim from create_app (shared
-# with the trainer domain; not yet hoisted into a service).
-CAPTIONER_DEFAULT = {
-    "enabled": True,
-    "model": "",  # an OpenRouter vision-capable model id
-    "system": (
-        "You are an expert anime image tagger writing captions to train a LoRA for an "
-        "Illustrious-based SDXL model, which understands Danbooru tags. Caption the image "
-        "as ONE line of lowercase, comma-separated booru tags. Use spaces inside multi-word "
-        "tags (e.g. \"long hair\", \"looking at viewer\").\n\n"
-        "Tag only what is clearly visible, roughly in this order:\n"
-        "1. count/subject: 1girl, 1boy, 2girls, solo, multiple girls…\n"
-        "2. character name as a booru tag ONLY if you clearly recognize them "
-        "(e.g. \"hatsune miku\"); otherwise omit the name.\n"
-        "3. appearance: hair colour, length and style (e.g. \"aqua hair\", \"long hair\", "
-        "\"twintails\"), eye colour, notable body features.\n"
-        "4. clothing and accessories (e.g. \"school uniform\", \"detached sleeves\", \"thighhighs\").\n"
-        "5. expression, then pose/action (e.g. \"smile\", \"looking at viewer\", \"arms up\", \"sitting\").\n"
-        "6. setting/background (e.g. \"classroom\", \"night\", \"cherry blossoms\", \"simple background\").\n"
-        "7. framing/camera: portrait, upper body, cowboy shot, full body, and angle tags like "
-        "\"from above\", \"from side\", \"dutch angle\" when clear.\n\n"
-        "Critical for a STYLE LoRA: tag only the CONTENT. Do NOT tag the art style, shading, "
-        "line art, colour palette, level of detail, medium, \"anime\", \"illustration\", or any "
-        "quality words (masterpiece, best quality, highres…). Whatever you tag is treated as "
-        "already-known and is NOT absorbed into the LoRA — leaving the style untagged is exactly "
-        "how the LoRA learns it.\n\n"
-        "Be specific and accurate to THIS image; never invent details you can't see. No artist "
-        "names, no full sentences, no trailing period. Output only the tags on one line."
-    ),
-}
-
-# Trainer config defaults — copied verbatim from create_app (the wd14 routes
-# read load_trainer().get("python"); shared with the trainer domain).
-TRAINER_DEFAULT = {"sd_scripts_dir": "", "python": "", "checkpoints_dir": "", "loras_dir": ""}
-
-
 def register(app, ctx):
     @app.get("/api/lora/sets")
     def lora_sets() -> dict:
@@ -264,11 +228,7 @@ def register(app, ctx):
 
     # -- dataset viewer + vision captioning ------------------------------
     def load_captioner() -> dict:
-        path = ctx.root / "configs" / "captioner.json"
-        cfg = dict(CAPTIONER_DEFAULT)
-        if path.is_file():
-            cfg.update(json.loads(path.read_text(encoding="utf-8")))
-        return cfg
+        return config_files.load_captioner(ctx.root)
 
     @app.get("/api/captioner")
     def get_captioner() -> dict:
@@ -276,7 +236,7 @@ def register(app, ctx):
 
     @app.post("/api/captioner")
     def set_captioner(body: dict):
-        cfg = {**CAPTIONER_DEFAULT, **(body or {})}
+        cfg = {**config_files.CAPTIONER_DEFAULT, **(body or {})}
         path = ctx.root / "configs" / "captioner.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
@@ -374,11 +334,7 @@ def register(app, ctx):
 
     # -- WD14 local tagger (booru tags, runs in the trainer venv) --------
     def load_trainer() -> dict:
-        path = ctx.root / "configs" / "trainer.json"
-        cfg = dict(TRAINER_DEFAULT)
-        if path.is_file():
-            cfg.update(json.loads(path.read_text(encoding="utf-8")))
-        return cfg
+        return config_files.load_trainer(ctx.root)
 
     @app.get("/api/lora/wd14/status")
     def wd14_status() -> dict:
