@@ -1,23 +1,38 @@
 <script>
-  import { get, post, del } from '$lib/api.js';
+  import { get, post } from '$lib/api.js';
   import { startJob } from '$lib/app.svelte.js';
   import { rget, rensure } from '$lib/renders.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
+  import GenStream from '$lib/components/GenStream.svelte';
 
-  // Per-outfit images: a FULL-BODY outfit image + this outfit's OWN expression range. Each outfit
-  // owns its expressions (the runtime picks the closest by emotion vector similarity). txt2img —
+  // Per-outfit images: a FULL-BODY outfit image + the FIXED canonical emotion taxonomy (~32,
+  // Plutchik-grounded). Every outfit shows the whole range; sprites can be rendered all-upfront
+  // (one full-body image per emotion) or re-rolled one cell at a time (3 candidates). txt2img —
   // identity comes from the appearance tags. charKey · charName.
   let { charKey, charName, hasRef = true, refresh = 0, screen = 'characters/selected' } = $props();
-  const CANDIDATES = 3;   // always generate three
+  const CANDIDATES = 3;   // per-cell redo always generates three
 
-  let data = $state(null);     // { outfits:[{id,name,base,expression_set:[{emotion,prompt,url}]}] }
+  let data = $state(null);     // { outfits:[{id,name,base,expression_set:[{emotion,label,prompt,url}]}] }
   let bust = $state(0);
   let err = $state(null);
 
   async function load() { try { data = await get(`/characters/${charKey}/portraits`); } catch { data = null; } }
   $effect(() => { charKey; refresh; load(); });
 
-  // Per-cell sprite candidates live in the shared store so they survive navigation.
+  // -- upfront batch render (the FULL emotion set, full body) --------------------
+  let renderJob = $state(null);
+  let renderTitle = $state('');
+  async function renderEmotions(body, title) {
+    err = null; renderTitle = title;
+    const r = await post(`/characters/${charKey}/portraits/render-emotions`, { screen, ...body });
+    if (r.ok && r.data?.job) renderJob = r.data.job;
+    else err = r.data?.error || 'could not start render';
+  }
+  const renderAll = () => renderEmotions({}, 'Rendering every outfit — all emotions');
+  const renderOutfit = (oid, name) => renderEmotions({ outfit_id: oid }, `Rendering ${name} — all emotions`);
+  function onRenderDone() { renderJob = null; load(); bust++; }
+
+  // -- per-cell sprite candidates (the 3-candidate redo) ------------------------
   const cellKey = (oid, emo) => `sprite:${charKey}:${oid}:${emo}`;
   function cell(oid, emo) { return rget(cellKey(oid, emo)); }
 
@@ -38,18 +53,7 @@
     if (r.data?.url) { rensure(cellKey(oid, emo)).cands = []; await load(); bust++; }
   }
 
-  // Add / remove an expression for THIS outfit only (unique per outfit).
-  let addingFor = $state('');
-  let newEmo = $state('');
-  function startAdd(oid) { addingFor = oid; newEmo = ''; }
-  async function addExpr(oid) {
-    const emo = newEmo.trim(); if (!emo) return;
-    const r = await post(`/characters/${charKey}/portraits/outfit/${oid}/expression-prompt`, { emotion: emo });
-    if (r.ok) { addingFor = ''; newEmo = ''; await load(); }
-  }
-  async function delExpr(oid, emo) { await del(`/characters/${charKey}/portraits/outfit/${oid}/expression/${emo}`); await load(); }
-
-  // Per-outfit FULL-BODY image — the whole-look reference (3 candidates → pick).
+  // -- per-outfit FULL-BODY image — the whole-look reference (3 candidates → pick) --
   const outfitKey = (oid) => `outfitimg:${charKey}:${oid}`;
   function ocell(oid) { return rget(outfitKey(oid)); }
   async function genOutfit(oid, n = CANDIDATES) {
@@ -72,12 +76,19 @@
     const r = await post(`/characters/${charKey}/portraits/outfit/${oid}/base`, { data: dataUri });
     if (r.data?.url) { const o = data.outfits.find((x) => x.id === oid); if (o) o.base = r.data.url; rensure(outfitKey(oid)).cands = []; bust++; }
   }
-
 </script>
 
 {#if data && data.outfits.length}
   <div class="sprites">
     {#if err}<div class="warn">⚠ {err}</div>{/if}
+
+    <div class="head">
+      <button class="ghost xs" onclick={renderAll} disabled={!!renderJob}>🎭 Render every emotion · all outfits</button>
+      <span class="lo">{data.emotions?.length || 0} emotions × {data.outfits.length} outfits — full body, rendered upfront</span>
+    </div>
+    {#if renderJob}
+      <GenStream jobId={renderJob} title={renderTitle} onDone={onRenderDone} onError={(m) => (err = m)} />
+    {/if}
 
     {#each data.outfits as o (o.id)}
       {@const oc = ocell(o.id)}
@@ -95,9 +106,14 @@
               <div class="noimg">no full-body image</div>
             {/if}
           </div>
-          <button class="ghost xs ofullbtn" onclick={() => genOutfit(o.id)} disabled={oc?.busy}>
-            {oc?.busy ? 'Rendering…' : (o.base ? '↻ Regenerate outfit image' : '🎨 Generate outfit image')}
-          </button>
+          <div class="obtns">
+            <button class="ghost xs" onclick={() => genOutfit(o.id)} disabled={oc?.busy}>
+              {oc?.busy ? 'Rendering…' : (o.base ? '↻ Regenerate outfit image' : '🎨 Generate outfit image')}
+            </button>
+            <button class="ghost xs" onclick={() => renderOutfit(o.id, o.name)} disabled={!!renderJob}>
+              🎭 Render all emotions
+            </button>
+          </div>
           {#if oc?.cands?.length}
             <div class="ocands">
               {#each oc.cands as img, i (i)}
@@ -110,56 +126,43 @@
           {/if}
         </div>
 
-        <div class="emlabel">Expressions <span class="lo">— this outfit's range (add unique ones)</span></div>
+        <div class="emlabel">Expressions <span class="lo">— the full emotion range</span></div>
         <div class="grid">
           {#each o.expression_set as e (e.emotion)}
             {@const c = cell(o.id, e.emotion)}
             <div class="cell">
               <div class="thumb">
                 {#if e.url}
-                  <ZoomImage src={`${e.url}?b=${bust}`} caption={`${charName} — ${o.name} — ${e.emotion}`} inline />
+                  <ZoomImage src={`${e.url}?b=${bust}`} caption={`${charName} — ${o.name} — ${e.label}`} inline />
                 {:else if c?.busy}
                   <div class="ph">…</div>
                 {:else}
-                  <button class="genc" onclick={() => genCell(o.id, e.emotion)} title="Generate {e.emotion}">＋</button>
+                  <button class="genc" onclick={() => genCell(o.id, e.emotion)} title="Generate {e.label}">＋</button>
                 {/if}
               </div>
-              <span class="emo">{e.emotion}</span>
+              <span class="emo">{e.label}</span>
               {#if c?.cands?.length}
                 <div class="cands">
                   {#each c.cands as img, i (i)}
                     <div class="cand">
-                      <ZoomImage src={img} caption={`${charName} — ${o.name} — ${e.emotion} candidate ${i + 1}`} inline />
+                      <ZoomImage src={img} caption={`${charName} — ${o.name} — ${e.label} candidate ${i + 1}`} inline />
                       <button class="usec" onclick={() => pick(o.id, e.emotion, img)}>Use</button>
                     </div>
                   {/each}
                 </div>
-              {:else if !c?.busy}
+              {:else if e.url && !c?.busy}
                 <div class="cellacts">
-                  {#if e.url}<button class="redo" onclick={() => genCell(o.id, e.emotion)} title="Regenerate">↻</button>{/if}
-                  <button class="del" onclick={() => delExpr(o.id, e.emotion)} title="Remove expression">✕</button>
+                  <button class="redo" onclick={() => genCell(o.id, e.emotion)} title="Regenerate (3 candidates)">↻</button>
                 </div>
               {/if}
             </div>
           {/each}
-          <div class="cell">
-            <button class="addexpr" onclick={() => startAdd(o.id)} title="Add an expression">＋<br />expr</button>
-          </div>
         </div>
-        {#if addingFor === o.id}
-          <div class="addrow">
-            <input class="fld" placeholder="emotion (e.g. determined)" bind:value={newEmo}
-              onkeydown={(ev) => ev.key === 'Enter' && addExpr(o.id)} />
-            <button class="ghost xs" onclick={() => addExpr(o.id)}>Add</button>
-            <button class="ghost xs" onclick={() => (addingFor = '')}>Cancel</button>
-          </div>
-        {/if}
-        {#if !o.expression_set.length}<p class="hint lo">No expressions yet — add one (＋ expr).</p>{/if}
       </div>
     {/each}
   </div>
 {:else}
-  <p class="hint lo">No wardrobe yet — use <b>✨ Plan wardrobe</b> above to generate outfits + expressions.</p>
+  <p class="hint lo">No wardrobe yet — use <b>✨ Plan wardrobe</b> above to generate outfits.</p>
 {/if}
 
 <style>
@@ -167,15 +170,16 @@
   .lo { color: var(--faint); font-size: 11.5px; }
   .warn { font-size: 12px; color: #ffd479; margin: 4px 0; }
   .hint { margin: 6px 0 0; font-size: 11.5px; }
+  .head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 2px 0 6px; }
   .outfit { margin-top: 14px; }
   .oname { font-size: 12px; font-weight: 650; color: var(--text); margin-bottom: 4px; }
-  /* outfit image stacks: image, then the Regenerate button UNDER it, then candidates */
+  /* outfit image stacks: image, then the buttons UNDER it, then candidates */
   .ofull { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0 8px; }
   .obase { width: 132px; flex: none; aspect-ratio: 3 / 4; border-radius: 9px; overflow: hidden;
            border: 1px solid var(--border); background: var(--bg); display: grid; place-items: center; }
   .obase :global(img), .obase :global(.zoom-inline) { border-radius: 9px; }
   .noimg { font-size: 11px; color: var(--faint); text-align: center; padding: 0 6px; }
-  .ofullbtn { align-self: flex-start; }
+  .obtns { display: flex; gap: 6px; flex-wrap: wrap; }
   .ocands { display: flex; gap: 8px; flex-wrap: wrap; }
   .ocand { display: flex; flex-direction: column; gap: 3px; width: 72px; }
   .ocand :global(.zoom-inline), .ocand :global(img) { border-radius: 6px; }
@@ -186,21 +190,14 @@
   .ph { color: var(--faint); font-size: 18px; }
   .genc { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; border: none; color: var(--muted); font-size: 20px; }
   .genc:hover:not(:disabled) { color: var(--accent); filter: none; background: var(--elev-2); }
-  .addexpr { width: 100%; aspect-ratio: 3 / 4; border-radius: 8px; box-shadow: none; background: var(--elev); border: 1px dashed var(--border);
-             color: var(--muted); font-size: 11px; line-height: 1.2; }
-  .addexpr:hover { color: var(--accent); border-color: var(--accent); filter: none; }
-  .emo { font-size: 10.5px; color: var(--muted); text-transform: capitalize; }
+  .emo { font-size: 10.5px; color: var(--muted); }
   .cellacts { display: flex; gap: 4px; }
   .cands { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .cand { display: flex; flex-direction: column; gap: 2px; width: 46px; }
   .cand :global(.zoom-inline), .cand :global(img) { border-radius: 5px; }
   .usec { font-size: 9.5px; padding: 1px 0; border-radius: 5px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); width: 100%; }
   .usec:hover { color: var(--accent); border-color: var(--accent); filter: none; }
-  .redo, .del { font-size: 11px; padding: 1px 7px; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); }
+  .redo { font-size: 11px; padding: 1px 7px; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); }
   .redo:hover { color: var(--accent); border-color: var(--accent); filter: none; }
-  .del:hover { color: var(--bad); border-color: var(--bad); filter: none; }
-  .addrow { display: flex; gap: 6px; margin-top: 8px; align-items: center; }
-  .addrow .fld { flex: 1; padding: 6px 9px; font-size: 12.5px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); color: var(--text); }
-  .addrow .fld:focus { border-color: var(--accent); outline: none; }
   .xs { font-size: 11.5px; padding: 3px 9px; border-radius: 7px; }
 </style>

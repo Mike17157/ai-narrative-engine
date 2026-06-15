@@ -114,13 +114,12 @@
   async function saveDesc(charKey) { await post(`/characters/${charKey}/card`, { system: cs(charKey).desc || '' }); }
   async function doSaveWardrobe(charKey, reloadSprites = false) {
     const s = state[charKey]; if (!s?.plan) return;
-    const expressions = {};
-    for (const e of s.plan.expressions) if (e.emotion && e.prompt) expressions[e.emotion] = e.prompt;
+    // Emotions are the fixed canonical taxonomy (composed server-side) — we save outfits only.
     s.saving = true;
-    const r = await post(`/characters/${charKey}/portraits/wardrobe`, { outfits: s.plan.outfits, expressions });
+    const r = await post(`/characters/${charKey}/portraits/wardrobe`, { outfits: s.plan.outfits });
     s.saving = false;
     s.msg = r.data?.ok
-      ? { ok: true, text: `✓ saved — ${r.data.outfits.length} outfit(s), ${r.data.emotions.length} emotion(s)` }
+      ? { ok: true, text: `✓ saved — ${r.data.outfits.length} outfit(s)` }
       : { text: r.data?.error || 'save failed' };
     if (r.data?.ok && reloadSprites) s.spriteRefresh = (s.spriteRefresh || 0) + 1;
   }
@@ -146,7 +145,7 @@
       }
       if (s.plan) {                                    // wardrobe: save on first appearance AND on edit
         const k = `${c.character}:plan`;
-        const snap = JSON.stringify({ o: s.plan.outfits, e: s.plan.expressions });
+        const snap = JSON.stringify({ o: s.plan.outfits });
         if (snaps[k] !== snap) { snaps[k] = snap; debounce(k, () => doSaveWardrobe(c.character)); }
       }
     }
@@ -191,20 +190,18 @@
   }
   function plan(charKey) { startPlan(charKey, 'review'); }
   // GenStream's final `result` event → apply the plan (and persist it in 'regen' mode).
+  // Emotions are the fixed canonical taxonomy (server composes them); the plan is outfits only.
   async function onPlanResult(charKey, data) {
     const s = ensure(charKey);
     const outfits = data?.outfits || [];
-    const exprList = Object.entries(data?.expressions || {}).map(([emotion, prompt]) => ({ emotion, prompt }));
     if (s.planMode === 'regen') {
-      const expressions = {};
-      for (const e of exprList) expressions[e.emotion] = e.prompt;
-      await post(`/characters/${charKey}/portraits/wardrobe`, { outfits, expressions, replace: true });
+      await post(`/characters/${charKey}/portraits/wardrobe`, { outfits, replace: true });
       s.spriteRefresh = (s.spriteRefresh || 0) + 1;
       s.msg = { ok: true, text: '✓ wardrobe regenerated' };
       s.regenMsg = '✓ Wardrobe re-planned — old sprites cleared. Render the new sprites below.';
     }
-    s.plan = { outfits, expressions: exprList };
-    snaps[`${charKey}:plan`] = JSON.stringify({ o: s.plan.outfits, e: s.plan.expressions });  // skip redundant auto-save
+    s.plan = { outfits };
+    snaps[`${charKey}:plan`] = JSON.stringify({ o: s.plan.outfits });  // skip redundant auto-save
   }
   function onPlanDone(charKey) { const s = ensure(charKey); s.planJob = null; s.busy = false; }
 
@@ -238,8 +235,6 @@
 
   function addOutfit(s) { s.plan.outfits.push({ name: '', attire_prompt: '' }); }
   function rmOutfit(s, i) { s.plan.outfits.splice(i, 1); }
-  function addExpr(s) { s.plan.expressions.push({ emotion: '', prompt: '' }); }
-  function rmExpr(s, i) { s.plan.expressions.splice(i, 1); }
 </script>
 
 <div class="wardrobe">
@@ -348,7 +343,7 @@
           {/each}
           <div class="saverow"><span class="pm" class:ok={s.msg?.ok}>{s.saving ? 'Saving…' : (s.msg?.text || 'Auto-saves as you edit')}</span></div>
         {:else}
-          <p class="hint lo">No wardrobe yet — use <b>✨ Plan wardrobe</b> to generate outfits + emotions.</p>
+          <p class="hint lo">No wardrobe yet — use <b>✨ Plan wardrobe</b> to generate outfits.</p>
         {/if}
 
         <!-- the rendered outfit × emotion sprites -->
@@ -356,20 +351,12 @@
           screen={storyKey ? `stories/${storyKey}/cast` : 'characters/selected'} />
 
       {:else if tab === 'emotions'}
-        {#if s.plan}
-          <div class="sub">Emotions <span class="lo">— story-derived expressions (varying only the face)</span> <button class="ghost xs" onclick={() => addExpr(s)}>＋</button></div>
-          {#each s.plan.expressions as ex, i (i)}
-            <div class="item">
-              <div class="itop"><input class="fld emo" placeholder="emotion" bind:value={ex.emotion} />
-                <button class="tag" onclick={() => tagify(`${c.character}:e${i}`, () => ex.prompt, (t) => ex.prompt = t)} disabled={tagging[`${c.character}:e${i}`]} title="convert prose → tags">{tagging[`${c.character}:e${i}`] ? '…' : '⇥'}</button>
-                <button class="x" onclick={() => rmExpr(s, i)}>✕</button></div>
-              <textarea class="fld ta" use:autosize={ex.prompt} placeholder="facial-expression prompt" bind:value={ex.prompt}></textarea>
-            </div>
-          {/each}
-          <div class="saverow"><span class="pm" class:ok={s.msg?.ok}>{s.saving ? 'Saving…' : (s.msg?.text || 'Auto-saves as you edit')}</span></div>
-        {:else}
-          <p class="hint lo">No wardrobe yet — use <b>✨ Plan wardrobe</b> above to generate outfits + emotions.</p>
-        {/if}
+        <div class="sub">Emotions <span class="lo">— fixed expression range</span></div>
+        <p class="hint lo">Emotions are a <b>fixed canonical set</b> (Plutchik-based, ~32: the full
+          range from serenity/joy/ecstasy through fear, anger, desire, greed…). They're composed
+          once per character from the persona and shared by every outfit, so the sprite set is
+          consistent and the runtime can switch by emotion key. Render and re-roll them per outfit in
+          the <b>Outfit images</b> tab.</p>
       {/if}
       {#if s.error}<div class="err">⚠ {s.error}</div>{/if}
     </div>
@@ -426,7 +413,7 @@
   .fld { width: 100%; padding: 7px 9px; font-size: 13px; border-radius: 7px; background: var(--panel); border: 1px solid var(--border); color: var(--text); }
   .item .fld { background: var(--bg); }
   .fld:focus { border-color: var(--accent); outline: none; }
-  .nm2 { flex: 1; } .emo { flex: 1; }
+  .nm2 { flex: 1; }
   .ta { line-height: 1.5; font-family: inherit; min-height: 34px; overflow: hidden; resize: none; }
   .x { width: 24px; height: 24px; flex: none; padding: 0; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); font-size: 10px; }
   .x:hover { color: var(--bad); filter: none; }
