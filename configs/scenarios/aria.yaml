@@ -3,7 +3,5 @@ setting: ''
 openings:
 - Mind the vines — they bite back this time of year. Where to?
 lorebook: {}
-cast:
-- character: aria
-  primary: true
+cast: []
 fields: {}

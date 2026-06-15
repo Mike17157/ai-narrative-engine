@@ -134,6 +134,10 @@
               <div class="thumb">
                 {#if e.url}
                   <ZoomImage src={`${e.url}?b=${bust}`} caption={`${charName} — ${o.name} — ${e.label}`} inline />
+                  {#if !c?.busy && !c?.cands?.length}
+                    <button class="redo" title="Regenerate (3 candidates)"
+                      onclick={(ev) => { ev.stopPropagation(); genCell(o.id, e.emotion); }}>↻</button>
+                  {/if}
                 {:else if c?.busy}
                   <div class="ph">…</div>
                 {:else}
@@ -149,10 +153,6 @@
                       <button class="usec" onclick={() => pick(o.id, e.emotion, img)}>Use</button>
                     </div>
                   {/each}
-                </div>
-              {:else if e.url && !c?.busy}
-                <div class="cellacts">
-                  <button class="redo" onclick={() => genCell(o.id, e.emotion)} title="Regenerate (3 candidates)">↻</button>
                 </div>
               {/if}
             </div>
@@ -186,12 +186,18 @@
   .emlabel { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; margin: 6px 0 4px; }
   .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .cell { display: flex; flex-direction: column; align-items: center; gap: 3px; }
-  .thumb { width: 100%; aspect-ratio: 3 / 4; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: var(--bg); display: grid; place-items: center; }
+  .thumb { position: relative; width: 100%; aspect-ratio: 3 / 4; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); background: var(--bg); display: grid; place-items: center; }
   .ph { color: var(--faint); font-size: 18px; }
   .genc { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; border: none; color: var(--muted); font-size: 20px; }
   .genc:hover:not(:disabled) { color: var(--accent); filter: none; background: var(--elev-2); }
   .emo { font-size: 10.5px; color: var(--muted); }
-  .cellacts { display: flex; gap: 4px; }
+  /* reset/regen overlays the sprite, top-right, revealed on hover */
+  .redo { position: absolute; top: 3px; right: 3px; z-index: 2; font-size: 11px; line-height: 1;
+          padding: 3px 6px; border-radius: 6px; box-shadow: none; color: #fff;
+          background: rgba(0, 0, 0, .55); border: 1px solid rgba(255, 255, 255, .25);
+          opacity: 0; transition: opacity .12s; }
+  .cell:hover .redo { opacity: 1; }
+  .redo:hover { color: var(--accent); border-color: var(--accent); background: rgba(0, 0, 0, .78); filter: none; }
   .cands { display: flex; gap: 6px; flex-wrap: wrap; justify-content: center; }
   .cand { display: flex; flex-direction: column; gap: 2px; width: 46px; }
   .cand :global(.zoom-inline), .cand :global(img) { border-radius: 5px; }

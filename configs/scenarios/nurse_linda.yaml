@@ -21,9 +21,7 @@ openings:
   \ there is hardly a way... to do it on your own, mister?...\"\r\n\r\n\r\n[time:\
   \ 10:00 | location: reception | procedure progress: 0% | Linda aroused: 0% ]"
 lorebook: {}
-cast:
-- character: nurse_linda
-  primary: true
+cast: []
 fields:
   creator: PegwinPavlova
   creator_notes: Claude tends to hurry the things up and skip the most of the ~~fun~~
