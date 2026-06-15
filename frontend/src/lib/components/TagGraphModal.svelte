@@ -55,7 +55,7 @@
     const seed = tags.join(',');
     if (!seed) { suggestions = {}; return; }
     busy = true;
-    try { const d = await get('/api/tags/related?kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
+    try { const d = await get('/tags/related?kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
     catch { suggestions = {}; }
     busy = false;
   }
@@ -78,7 +78,7 @@
   async function loadGraph(seed) {
     stopGraph(); gloading = true; gempty = false;
     try {
-      const d = await get('/api/tags/graph?kind=' + kind + '&tags=' + encodeURIComponent(seed));
+      const d = await get('/tags/graph?kind=' + kind + '&tags=' + encodeURIComponent(seed));
       buildGraph(d);
     } catch { gnodes = []; gempty = true; }
     gloading = false;
@@ -158,7 +158,7 @@
     const q = query;
     if (!q.trim()) { results = []; open = false; return; }
     const id = setTimeout(async () => {
-      const d = await get('/api/tags/search?limit=12&q=' + encodeURIComponent(q));
+      const d = await get('/tags/search?limit=12&q=' + encodeURIComponent(q));
       results = d?.tags || []; active = results.length ? 0 : -1; open = results.length > 0;
     }, 140);
     return () => clearTimeout(id);

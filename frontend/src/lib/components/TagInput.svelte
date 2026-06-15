@@ -36,7 +36,7 @@
   $effect(() => {
     const v = value;               // track
     const id = setTimeout(async () => {
-      const r = await post('/api/tags/snap', { prompt: v });
+      const r = await post('/tags/snap', { prompt: v });
       if (r.ok && r.data) {
         const m = {};
         for (const it of r.data.items || []) m[norm(it.input)] = it;
@@ -59,7 +59,7 @@
     const q = query;
     if (!q.trim()) { results = []; open = false; return; }
     const id = setTimeout(async () => {
-      const d = await get('/api/tags/search?q=' + encodeURIComponent(q) + '&limit=12');
+      const d = await get('/tags/search?q=' + encodeURIComponent(q) + '&limit=12');
       results = d?.tags || []; active = results.length ? 0 : -1; open = results.length > 0;
     }, 140);
     return () => clearTimeout(id);
@@ -77,7 +77,7 @@
     else if (e.key === 'Escape') { open = false; }
   }
   async function snapAll() {
-    const r = await post('/api/tags/snap', { prompt: value });
+    const r = await post('/tags/snap', { prompt: value });
     if (r.ok && r.data?.prompt !== undefined) onchange?.(r.data.prompt);
   }
   function fmtCount(n) { return n >= 1000 ? Math.round(n / 1000) + 'k' : '' + n; }
