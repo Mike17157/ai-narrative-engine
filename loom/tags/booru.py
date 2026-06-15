@@ -34,6 +34,7 @@ _NOISY_CATEGORIES = {1, 5}  # artist, meta
 CONTROL_TAGS = (
     "1woman", "1man", "1girl", "1boy", "adult",
     "full body shot", "head to toe", "feet visible", "empty hands",
+    "BREAK",   # region separator (conditioning concat) — a valid control token, never flagged
 )
 
 _DATA = Path(__file__).resolve().parent.parent / "data" / "danbooru_tags.csv"

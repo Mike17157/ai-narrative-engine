@@ -27,7 +27,7 @@
   $effect(() => {
     if (pickerState.open && !seeded) {
       seeded = true;
-      tags = pickerState.tags.slice();
+      tags = pickerState.tags.slice().filter((t) => String(t).toUpperCase() !== 'BREAK');  // edit flat; regions re-derived on Apply
       kind = pickerState.kind;
       target = pickerState.target || null;
       view = 'list';
@@ -66,7 +66,14 @@
     if (r.ok && r.data?.tags?.length) { tags = r.data.tags; target = null; scheduleSuggestions(); }
     regening = false;
   }
-  const apply = () => resolveGraphPicker(dedupe(tags));
+  async function apply() {
+    if (!tags.length) { resolveGraphPicker([]); return; }
+    // assemble into category regions separated by literal BREAK (the going-forward prompt shape)
+    try {
+      const r = await post('/tags/regionize', { tags: dedupe(tags) });
+      resolveGraphPicker(r.ok && r.data?.tags?.length ? r.data.tags : dedupe(tags));
+    } catch { resolveGraphPicker(dedupe(tags)); }
+  }
   const cancel = () => resolveGraphPicker(null);
 </script>
 

@@ -23,7 +23,12 @@
 
   function commit(arr) {
     const seen = new Set(), out = [];
-    for (const t of arr) { const k = norm(t); if (t && !seen.has(k)) { seen.add(k); out.push(t); } }
+    for (const t of arr) {
+      if (!t) continue;
+      if (norm(t) === 'break') { out.push('BREAK'); continue; }   // region separator — keep every one
+      const k = norm(t);
+      if (!seen.has(k)) { seen.add(k); out.push(t); }
+    }
     onchange?.(join(out));
   }
   function add(tag) { const t = (tag || '').trim(); if (t) commit([...chips, t]); query = ''; results = []; open = false; active = -1; }
@@ -92,12 +97,16 @@
 <div class="ti" bind:this={root}>
   <div class="box">
     {#each chips as tag, i (tag + i)}
+      {#if norm(tag) === 'break'}
+        <span class="brk" title="region separator (BREAK)">BREAK<button class="x" onclick={() => removeAt(i)} title="remove">×</button></span>
+      {:else}
       {@const st = stat(tag)}
       <span class="chip {st}" ondblclick={() => openPicker(tag)}
         title={st === 'unknown' ? 'not a known tag' : (st === 'ok' || st === 'control' || st === '') ? 'double-click to swap via graph' : '→ ' + (statusMap[norm(tag)]?.display || '')}>
         {tag}{#if st && st !== 'ok' && st !== 'control' && st !== 'unknown'}<i class="arrow">→{statusMap[norm(tag)]?.display}</i>{/if}
         <button class="x" onclick={() => removeAt(i)} title="remove">×</button>
       </span>
+      {/if}
     {/each}
     <input
       class="entry" {placeholder}
@@ -157,6 +166,11 @@
   .chip .arrow { font-style: normal; opacity: .7; font-size: 11px; margin-left: 2px; }
   .chip .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 14px; box-shadow: none; }
   .chip .x:hover { opacity: 1; }
+  .brk { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; letter-spacing: .5px;
+    color: var(--accent); background: rgba(109,140,255,.10); border: 1px dashed rgba(109,140,255,.5);
+    border-radius: 7px; padding: 2px 5px 2px 8px; }
+  .brk .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 13px; box-shadow: none; }
+  .brk .x:hover { opacity: 1; }
   .entry { flex: 1; min-width: 120px; border: 0; background: none; padding: 2px; font-size: 12.5px; box-shadow: none; }
   .entry:focus { box-shadow: none; outline: none; }
   .pop {

@@ -144,6 +144,34 @@ def register(app, ctx):
             return JSONResponse({"error": "the model returned no tags"}, status_code=500)
         return {"tags": final}
 
+    @app.post("/api/tags/regionize")
+    async def tags_regionize(body: dict):
+        """Order a flat tag list into category regions separated by a literal `BREAK` token. Subject/
+        framing tags (no facet) lead; then each facet region in canonical order. Returns
+        {tags:[...with 'BREAK' separators...], prompt: comma-joined}."""
+        from ...tags.facets import FACETS_ALL, facet_of_any
+        raw = [str(t).strip() for t in (body or {}).get("tags", []) if str(t).strip()]
+        tags = [t for t in raw if t.upper() != "BREAK"]
+        if not tags:
+            return {"tags": [], "prompt": ""}
+        order = [f for f, _ in FACETS_ALL]
+        regions = {f: [] for f in order}
+        lead, seen = [], set()
+        for t in tags:
+            k = t.lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            f = facet_of_any(t)
+            (regions[f] if f else lead).append(t)
+        blocks = ([lead] if lead else []) + [regions[f] for f in order if regions[f]]
+        arr = []
+        for i, blk in enumerate(blocks):
+            if i:
+                arr.append("BREAK")
+            arr.extend(blk)
+        return {"tags": arr, "prompt": ", ".join(arr)}
+
     @app.post("/api/tags/snap")
     async def tags_snap(body: dict):
         """Snap a free-text prompt onto real booru tags. Returns the full snap report

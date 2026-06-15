@@ -178,7 +178,11 @@ _AESTHETIC_BLOCK = (
 
 def _safe_image_tags(text: str) -> str:
     """Rewrite literal-model-hostile phrases (olive skin, dead-tag eye shapes) to plain tags,
-    then drop blank fragments AND aesthetically-bad tags (sleepy/closed eyes …), order-keeping."""
+    then drop blank fragments AND aesthetically-bad tags (sleepy/closed eyes …), order-keeping.
+    `BREAK` region separators are preserved (each region cleaned independently)."""
+    if text and "BREAK" in text:
+        parts = [_safe_image_tags(p) for p in re.split(r"\bBREAK\b", text)]
+        return " BREAK ".join(p for p in parts if p.strip())
     out = text or ""
     for pat, repl in _IMAGE_TAG_FIXES:
         out = re.sub(pat, repl, out, flags=re.I)
@@ -194,6 +198,9 @@ def _snap_prompt(text: str) -> str:
     """Snap a prompt onto the real Danbooru vocabulary (alias/typo/reorder), KEEPING any
     unknown tags verbatim — non-destructive. A missing/unbuilt index is a silent no-op so
     generation never depends on it. The editor surfaces unknowns; this just canonicalizes."""
+    if text and "BREAK" in text:   # snap each region independently, keep the separators
+        parts = [_snap_prompt(p) for p in re.split(r"\bBREAK\b", text)]
+        return " BREAK ".join(p for p in parts if p.strip())
     try:
         from ...tags import get_index
         ix = get_index()

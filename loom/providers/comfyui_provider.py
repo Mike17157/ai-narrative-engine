@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -83,7 +84,57 @@ class ComfyUIProvider:
                 if node_id not in graph:
                     raise ValueError(f"workflow has no node '{node_id}' for input 'positive'")
                 graph[node_id].setdefault("inputs", {})[field] = value
+
+        # Honour `BREAK` region separators by splitting the positive text into separately-encoded
+        # regions chained with core ConditioningConcat (so each region conditions independently,
+        # rather than the word "BREAK" being tokenised into the image). Never fatal: any failure
+        # falls back to collapsing BREAK to commas so the render always proceeds.
+        try:
+            self._apply_breaks(graph)
+        except Exception:  # noqa: BLE001
+            self._strip_breaks(graph)
         return graph
+
+    _BREAK_RE = re.compile(r"\bBREAK\b")
+
+    def _strip_breaks(self, graph: dict) -> None:
+        for n in graph.values():
+            ins = n.get("inputs") if isinstance(n, dict) else None
+            if isinstance(ins, dict):
+                for k, v in ins.items():
+                    if isinstance(v, str) and "BREAK" in v:
+                        ins[k] = self._BREAK_RE.sub(", ", v).strip(" ,")
+
+    def _apply_breaks(self, graph: dict) -> None:
+        """For each CLIPTextEncode whose text uses BREAK: keep region 1 on the node, add a
+        CLIPTextEncode (sharing its clip) per further region, chain them with ConditioningConcat,
+        and rewire the original encode's consumers to the final concat."""
+        targets = [nid for nid, n in graph.items()
+                   if isinstance(n, dict) and n.get("class_type") == "CLIPTextEncode"
+                   and isinstance(n.get("inputs"), dict) and "BREAK" in str(n["inputs"].get("text", ""))]
+        seq = 0
+        for pid in targets:
+            node = graph[pid]
+            segs = [s.strip(" ,") for s in self._BREAK_RE.split(node["inputs"]["text"])]
+            segs = [s for s in segs if s]
+            clip = node["inputs"].get("clip")
+            if len(segs) < 2 or clip is None:
+                node["inputs"]["text"] = ", ".join(segs)   # nothing to chain (or no clip) → collapse
+                continue
+            # original consumers of this encode's conditioning output, captured BEFORE we add nodes
+            consumers = [(nid, k) for nid, n in graph.items() if isinstance(n, dict)
+                         for k, v in (n.get("inputs") or {}).items()
+                         if isinstance(v, list) and len(v) == 2 and str(v[0]) == str(pid) and v[1] == 0]
+            node["inputs"]["text"] = segs[0]
+            prev = pid
+            for seg in segs[1:]:
+                enc, cc = f"loom_break_e{seq}", f"loom_break_c{seq}"; seq += 1
+                graph[enc] = {"class_type": "CLIPTextEncode", "inputs": {"clip": clip, "text": seg}}
+                graph[cc] = {"class_type": "ConditioningConcat",
+                             "inputs": {"conditioning_to": [prev, 0], "conditioning_from": [enc, 0]}}
+                prev = cc
+            for nid, k in consumers:
+                graph[nid]["inputs"][k] = [prev, 0]
 
     def _set_init_image(self, client: httpx.Client, graph: dict, image_bytes: bytes) -> None:
         """Upload a source image to ComfyUI and point the workflow's LoadImage node
