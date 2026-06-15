@@ -1,0 +1,53 @@
+# Chat turn that may trigger an image. Three decoupled stages:
+#   reply    — the chat model answers and decides whether an image fits
+#   describe — a SEPARATE, configurable model writes the image prompt
+#              (its model + system come from the Prompt Gen config)
+#   picture  — the image model renders it
+name: chat_with_optional_image
+description: In-character reply; optionally illustrate it via a dedicated prompt generator.
+
+steps:
+  - id: reply
+    type: chat
+    model: opus              # overridden by the active chat model
+    system: |
+      {{ character.system }}
+      {% if scenario.setting %}
+
+      Setting: {{ scenario.setting }}{% endif %}
+
+      Respond in-character in `reply`. Set `wants_image` to true only if a single
+      illustration would meaningfully enrich this moment.
+    prompt: "{{ user_message }}"
+    emits:
+      type: object
+      properties:
+        reply: { type: string }
+        wants_image: { type: boolean }
+      required: [reply, wants_image]
+      additionalProperties: false
+
+  - id: describe
+    type: chat
+    model: opus              # overridden by the Prompt Gen config (model + system)
+    role: image_prompt
+    when: "{{ reply.data.wants_image }}"
+    system: ""               # supplied by the Prompt Gen config
+    prompt: |
+      Scene —
+      User: {{ user_message }}
+      {{ character.name or 'Assistant' }}: {{ reply.data.reply }}
+      {% if character.fields.get('appearance') %}When the character is shown, depict: {{ character.fields.get('appearance') }}.{% endif %}
+      Write one image prompt depicting this moment.
+    emits:
+      type: object
+      properties:
+        image_prompt: { type: string }
+      required: [image_prompt]
+      additionalProperties: false
+
+  - id: picture
+    type: image
+    model: illustrious       # overridden by the active image model
+    when: "{{ reply.data.wants_image }}"
+    image_prompt: "{{ describe.data.image_prompt }}"

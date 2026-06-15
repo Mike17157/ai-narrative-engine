@@ -1,0 +1,6 @@
+{
+  "sd_scripts_dir": "trainer\\sd-scripts",
+  "python": "trainer\\sd-scripts\\venv\\Scripts\\python.exe",
+  "checkpoints_dir": "",
+  "loras_dir": ""
+}

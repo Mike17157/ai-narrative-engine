@@ -1,0 +1,7 @@
+{
+  "base": "illustrious_monster",
+  "style": "sdxl_img2img",
+  "sprite": "illustrious_monster",
+  "scene": "illustrious_monster",
+  "chat": "illustrious_monster"
+}

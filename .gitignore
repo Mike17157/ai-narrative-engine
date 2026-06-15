@@ -1,0 +1,29 @@
+# Generated output
+out/
+datasets/
+
+# Local model weights — large binaries. The manifest (models/manifest.yaml) is
+# tracked; the actual weights are not. They live in ComfyUI's models folder.
+models/**
+!models/manifest.yaml
+!models/**/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Local secrets / overrides
+.env
+secrets/
+
+# Node / build artifacts
+frontend/node_modules/
+frontend/build/
+.cache/
+logs/
+
+# Large data files (runtime-only, not source)
+danbooru_character.csv
+loom/data/

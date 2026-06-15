@@ -1,0 +1,18 @@
+# Plain chat — one streaming reply, no image, no structured output. The reliable
+# default that works with any chat model (including OpenRouter models that don't
+# support structured outputs). Use chat_with_optional_image for auto-illustration.
+name: chat
+description: A single in-character reply.
+
+steps:
+  - id: reply
+    type: chat
+    model: opus            # overridden at run time by the selected chat model
+    # Persona (who they are) + scenario (the situation) are composed here at run
+    # time, not baked together on the card.
+    system: |
+      {{ character.system }}
+      {% if scenario.setting %}
+
+      Setting: {{ scenario.setting }}{% endif %}
+    prompt: "{{ user_message }}"

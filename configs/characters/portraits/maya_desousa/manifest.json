@@ -1,0 +1,82 @@
+{
+  "appearance": "",
+  "outfits": [
+    {
+      "id": "base-swimwear",
+      "name": "Base (swimwear)",
+      "instruction": "",
+      "prompt": "1girl, red bikini top, red bikini bottom, bare shoulders, bare legs, barefoot, standing",
+      "attire_prompt": "1girl, red bikini top, red bikini bottom, bare shoulders, bare legs, barefoot, standing",
+      "expression_prompts": {
+        "excited-mischievous": "1girl, wide eyes, raised eyebrows, wide grin, open mouth, smile, teeth, sparkles, excitement, mischief",
+        "dramatic-pouting": "1girl, half-closed eyes, furrowed brows, pout, puffy cheeks, blush, annoyed",
+        "affectionate-warm": "1girl, soft eyes, relaxed eyebrows, gentle smile, blush, warm expression, happy",
+        "surprised-gleeful": "1girl, eyes wide open, eyebrows raised high, open mouth, gasp, glee, sparkles, joy",
+        "sincere-reassuring": "1girl, focused eyes, straight eyebrows, small smile, determined, reassuring, serious",
+        "playfully-scheming": "1girl, narrowed eyes, one eyebrow raised, smirk, sly smile, mischievous, cunning",
+        "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring"
+      },
+      "expressions": {}
+    },
+    {
+      "id": "vibrant-casual",
+      "name": "Vibrant Casual",
+      "instruction": "",
+      "prompt": "1girl, black bikini, colorful crop top, ruffled skirt, beaded bracelet, hoop earrings, choker necklace, white socks, sneakers",
+      "attire_prompt": "1girl, black bikini, colorful crop top, ruffled skirt, beaded bracelet, hoop earrings, choker necklace, white socks, sneakers",
+      "expression_prompts": {
+        "excited-mischievous": "1girl, wide eyes, raised eyebrows, wide grin, open mouth, smile, teeth, sparkles, excitement, mischief",
+        "dramatic-pouting": "1girl, half-closed eyes, furrowed brows, pout, puffy cheeks, blush, annoyed",
+        "affectionate-warm": "1girl, soft eyes, relaxed eyebrows, gentle smile, blush, warm expression, happy",
+        "surprised-gleeful": "1girl, eyes wide open, eyebrows raised high, open mouth, gasp, glee, sparkles, joy",
+        "sincere-reassuring": "1girl, focused eyes, straight eyebrows, small smile, determined, reassuring, serious",
+        "playfully-scheming": "1girl, narrowed eyes, one eyebrow raised, smirk, sly smile, mischievous, cunning",
+        "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring"
+      },
+      "expressions": {}
+    },
+    {
+      "id": "beach-house-party",
+      "name": "Beach House Party",
+      "instruction": "",
+      "prompt": "base (swimwear), beach house party",
+      "attire_prompt": "base (swimwear), beach house party",
+      "expression_prompts": {
+        "excited-mischievous": "1girl, wide eyes, raised eyebrows, wide grin, open mouth, smile, teeth, sparkles, excitement, mischief",
+        "dramatic-pouting": "1girl, half-closed eyes, furrowed brows, pout, puffy cheeks, blush, annoyed",
+        "affectionate-warm": "1girl, soft eyes, relaxed eyebrows, gentle smile, blush, warm expression, happy",
+        "surprised-gleeful": "1girl, eyes wide open, eyebrows raised high, open mouth, gasp, glee, sparkles, joy",
+        "sincere-reassuring": "1girl, focused eyes, straight eyebrows, small smile, determined, reassuring, serious",
+        "playfully-scheming": "1girl, narrowed eyes, one eyebrow raised, smirk, sly smile, mischievous, cunning",
+        "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring"
+      },
+      "expressions": {}
+    },
+    {
+      "id": "chill-comfort",
+      "name": "Chill & Comfort",
+      "instruction": "",
+      "prompt": "1girl, bikini, crop top, ruffled skirt, thighhighs, high-top sneakers, hoop earrings, beaded bracelet, wristwear",
+      "attire_prompt": "1girl, bikini, crop top, ruffled skirt, thighhighs, high-top sneakers, hoop earrings, beaded bracelet, wristwear",
+      "expression_prompts": {
+        "excited-mischievous": "1girl, wide eyes, raised eyebrows, wide grin, open mouth, smile, teeth, sparkles, excitement, mischief",
+        "dramatic-pouting": "1girl, half-closed eyes, furrowed brows, pout, puffy cheeks, blush, annoyed",
+        "affectionate-warm": "1girl, soft eyes, relaxed eyebrows, gentle smile, blush, warm expression, happy",
+        "surprised-gleeful": "1girl, eyes wide open, eyebrows raised high, open mouth, gasp, glee, sparkles, joy",
+        "sincere-reassuring": "1girl, focused eyes, straight eyebrows, small smile, determined, reassuring, serious",
+        "playfully-scheming": "1girl, narrowed eyes, one eyebrow raised, smirk, sly smile, mischievous, cunning",
+        "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring"
+      },
+      "expressions": {}
+    }
+  ],
+  "expression_prompts": {
+    "excited-mischievous": "1girl, wide eyes, raised eyebrows, wide grin, open mouth, smile, teeth, sparkles, excitement, mischief",
+    "dramatic-pouting": "1girl, half-closed eyes, furrowed brows, pout, puffy cheeks, blush, annoyed",
+    "affectionate-warm": "1girl, soft eyes, relaxed eyebrows, gentle smile, blush, warm expression, happy",
+    "surprised-gleeful": "1girl, eyes wide open, eyebrows raised high, open mouth, gasp, glee, sparkles, joy",
+    "sincere-reassuring": "1girl, focused eyes, straight eyebrows, small smile, determined, reassuring, serious",
+    "playfully-scheming": "1girl, narrowed eyes, one eyebrow raised, smirk, sly smile, mischievous, cunning",
+    "concerned-empathetic": "1girl, worried eyes, slightly furrowed brows, small frown, concerned, empathetic, caring"
+  }
+}

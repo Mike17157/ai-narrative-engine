@@ -1,0 +1,104 @@
+4k_Upscale_Workflow.json:
+  models:
+  - category: checkpoints
+    name: illustrious/unholyDesireMixSinister_v80.safetensors
+    comfy_relative: checkpoints/illustrious/unholyDesireMixSinister_v80.safetensors
+    class_type: CheckpointLoaderSimple
+    node: '4'
+    source: C:\Users\micha\Documents\ComfyUI\models\checkpoints\illustrious\unholyDesireMixSinister_v80.safetensors
+    exists: true
+    size_bytes: 6938465258
+  - category: loras
+    name: Illustrious/TRT_style_v1.4_IL.safetensors
+    comfy_relative: loras/Illustrious/TRT_style_v1.4_IL.safetensors
+    class_type: LoraLoader
+    node: '29'
+    source: C:\Users\micha\Documents\ComfyUI\models\loras\Illustrious\TRT_style_v1.4_IL.safetensors
+    exists: true
+    size_bytes: 57459252
+  - category: loras
+    name: Illustrious/beter_anime_eyes_r1-000015.safetensors
+    comfy_relative: loras/Illustrious/beter_anime_eyes_r1-000015.safetensors
+    class_type: LoraLoader
+    node: '126'
+    source: C:\Users\micha\Documents\ComfyUI\models\loras\Illustrious\beter_anime_eyes_r1-000015.safetensors
+    exists: true
+    size_bytes: 228453820
+  - category: loras
+    name: illustriousXL/ATRex_style-12V2Rev.safetensors
+    comfy_relative: loras/illustriousXL/ATRex_style-12V2Rev.safetensors
+    class_type: LoraLoader
+    node: '11'
+    source: C:\Users\micha\Documents\ComfyUI\models\loras\illustriousXL\ATRex_style-12V2Rev.safetensors
+    exists: true
+    size_bytes: 114453628
+  - category: loras
+    name: illustriousXL/Nipple.safetensors
+    comfy_relative: loras/illustriousXL/Nipple.safetensors
+    class_type: LoraLoader
+    node: '128'
+    source: C:\Users\micha\Documents\ComfyUI\models\loras\illustriousXL\Nipple.safetensors
+    exists: true
+    size_bytes: 183868300
+  - category: sams
+    name: sam_vit_b_01ec64.pth
+    comfy_relative: sams/sam_vit_b_01ec64.pth
+    class_type: SAMLoader
+    node: '131'
+    source: C:\Users\micha\Documents\ComfyUI\models\sams\sam_vit_b_01ec64.pth
+    exists: true
+    size_bytes: 375042383
+  - category: text_encoders
+    name: qwen_3_4b.safetensors
+    comfy_relative: text_encoders/qwen_3_4b.safetensors
+    class_type: CLIPLoader
+    node: '125'
+    source: C:\Users\micha\Documents\ComfyUI\models\text_encoders\qwen_3_4b.safetensors
+    exists: true
+    size_bytes: 8044982048
+  - category: ultralytics
+    name: bbox/face_yolov8m.pt
+    comfy_relative: ultralytics/bbox/face_yolov8m.pt
+    class_type: UltralyticsDetectorProvider
+    node: '130'
+    source: C:\Users\micha\Documents\ComfyUI\models\ultralytics\bbox\face_yolov8m.pt
+    exists: true
+    size_bytes: 52026019
+  - category: ultralytics
+    name: segm/person_yolov8m-seg.pt
+    comfy_relative: ultralytics/segm/person_yolov8m-seg.pt
+    class_type: UltralyticsDetectorProvider
+    node: '132'
+    source: C:\Users\micha\Documents\ComfyUI\models\ultralytics\segm\person_yolov8m-seg.pt
+    exists: true
+    size_bytes: 54827683
+  - category: upscale_models
+    name: Illustrious/RealESRGAN_x4plus_anime_6B.pth
+    comfy_relative: upscale_models/Illustrious/RealESRGAN_x4plus_anime_6B.pth
+    class_type: UpscaleModelLoader
+    node: '27'
+    source: C:\Users\micha\Documents\ComfyUI\models\upscale_models\Illustrious\RealESRGAN_x4plus_anime_6B.pth
+    exists: true
+    size_bytes: 17938799
+  summary:
+    count: 10
+    present: 10
+    missing: 0
+    total_bytes: 16067517190
+    total_gb: 14.96
+sdxl_basic_api.json:
+  models:
+  - category: checkpoints
+    name: REPLACE_WITH_YOUR_CHECKPOINT.safetensors
+    comfy_relative: checkpoints/REPLACE_WITH_YOUR_CHECKPOINT.safetensors
+    class_type: CheckpointLoaderSimple
+    node: '4'
+    source: null
+    exists: false
+    size_bytes: 0
+  summary:
+    count: 1
+    present: 0
+    missing: 1
+    total_bytes: 0
+    total_gb: 0.0

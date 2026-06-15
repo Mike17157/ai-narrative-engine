@@ -1,0 +1,31 @@
+# Illustrate an existing turn — no chat reply. Used by the chat window's
+# "illustrate this turn" button: it takes the text of a turn already on screen and
+# runs only the two image stages:
+#   describe — the Prompt Gen model turns the scene text into an image prompt
+#   picture  — the image model renders it
+# The turn's text arrives as {{ user_message }}.
+name: illustrate
+description: Turn an existing scene/turn into a single image, with no chat reply.
+
+steps:
+  - id: describe
+    type: chat
+    model: opus              # overridden by the Prompt Gen config (model + system)
+    role: image_prompt
+    system: ""               # supplied by the Prompt Gen config
+    prompt: |
+      Scene —
+      {{ user_message }}
+      {% if character.fields.get('appearance') %}When the character is shown, depict: {{ character.fields.get('appearance') }}.{% endif %}
+      Write one image prompt depicting this moment.
+    emits:
+      type: object
+      properties:
+        image_prompt: { type: string }
+      required: [image_prompt]
+      additionalProperties: false
+
+  - id: picture
+    type: image
+    model: illustrious       # overridden by the active image model
+    image_prompt: "{{ describe.data.image_prompt }}"

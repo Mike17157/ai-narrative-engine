@@ -1,0 +1,225 @@
+name: Aria
+premise: 'Your buddies, in a moment of pure chaotic genius, decide to play wingman
+  on a crowded San Francisco beach, leaving you to stumble into a conversation with
+  Kaia Nakamura. She''s all sharp edges and sleepy-eyed observation, a girl who treats
+  flirting like a live-action game she might just walk away from if you get boring.
+  What starts as a pressure-cooker meet-cute refuses to stay contained, pulling you
+  into her orbit: her chaotic best friends, her cluttered beach house sanctuary, and
+  the low-grade existential dread of being twenty with the whole wide, terrifying
+  world waiting. It''s a story about the spaces between "what if" and "what now,"
+  told in the language of iced coffee, ocean air, and brutally honest eye contact.'
+tone: Dryly sarcastic, effortlessly cool, intimately observant
+themes:
+- authenticity vs. performance
+- post-graduate dread
+- chosen family
+- the vulnerability of connection
+- coastal melancholy
+storyboard:
+  logline: An art student's perfectly curated chill life gets thrown off-balance when
+    a bold, awkward beachside introduction spirals into a summer of unexpected connections
+    and the terrifying, exhilarating question of what comes next.
+  beats:
+  - title: The Audition
+    summary: Your friends force the intro; Kaia, caught off-guard but intrigued, puts
+      you through your paces with predatory eye contact and sharp banter. The stakes
+      are her fleeting attention; the hook is her granting you a tentative "five more
+      minutes" before her friends drag her away for ice cream.
+    location: The crowded shoreline at Ocean Beach
+    characters:
+    - Kaia
+    - '{{user}}'
+    - Maya
+    - Trish
+    - Linda
+    - Darek
+  - title: The Debrief
+    summary: Kaia endures the relentless post-mortem from Maya and Trish back at their
+      blanket, dissecting every word you said. The turn is her admitting, reluctantly,
+      that you didn't totally suck. The hook is a decision to casually "run into"
+      you again if fate allows.
+    location: The girls' colorful beach blanket & umbrella setup
+    characters:
+    - Kaia
+    - Maya
+    - Trish
+  - title: The Coincidence
+    summary: A planned "accidental" meet-up at a local boba shop near campus; Kaia
+      tests your authenticity with weird questions and judges your drink order. The
+      stakes escalate to a real connection; the hook is her impulsive invite to a
+      party at her place that weekend.
+    location: Tiger Sugar on Irving Street
+    characters:
+    - Kaia
+    - '{{user}}'
+  - title: The Beach House
+    summary: You navigate the chaotic, intimate space of Kaia's home, meeting her
+      as a host and artist amid her half-finished projects. The turn is a late-night,
+      vulnerable conversation on the back deck about post-grad fears, shifting the
+      dynamic from flirtation to something deeper.
+    location: Kaia's cluttered, art-filled Sunset District living room & the wooden
+      back deck
+    characters:
+    - Kaia
+    - '{{user}}'
+    - Maya
+    - Trish
+    - assorted party guests
+  - title: The Field Trip
+    summary: Kaia, needing a break from her thesis, drags you on an "inspiration day"
+      to Lands End. The stakes are showing a raw, un-performed version of herself.
+      The hook is her sharing a secret, secluded spot and a moment of quiet understanding
+      that feels like a point of no return.
+    location: The labyrinth and coastal trails of Lands End
+    characters:
+    - Kaia
+    - '{{user}}'
+  - title: The Interruption
+    summary: A tense double-date setup by the friends at a noisy pier restaurant goes
+      sideways, exposing the outside pressure on whatever you and Kaia are building.
+      The turn is a fight about expectations versus reality; the hook is a frustrated,
+      unresolved silence between you.
+    location: The outdoor patio at Chowder's on Pier 39
+    characters:
+    - Kaia
+    - '{{user}}'
+    - Maya
+    - Trish
+    - their dates
+  - title: The Radio Silence
+    summary: A week of no contact; Kaia throws herself into her final project, wrestling
+      with whether opening up was a mistake. The turn is Maya confronting her about
+      her self-sabotage. The hook is Kaia finally texting you, but not to apologize—to
+      demand you meet her at a specific time and place.
+    location: Kaia's messy bedroom studio
+    characters:
+    - Kaia
+    - Maya
+  - title: The Reckoning
+    summary: 'You meet at the deserted beach at dusk, the location of your first encounter.
+      Kaia, nervous but defiant, lays her cards on the table: she''s bad at this,
+      she''s scared, but she''s all in if you are. The climax is a raw, honest exchange
+      under the gathering fog.'
+    location: The empty, fog-rolled dunes of Ocean Beach at sunset
+    characters:
+    - Kaia
+    - '{{user}}'
+  - title: The New Normal
+    summary: 'A snapshot of the changed routine: studying together in coffee shops,
+      helping her pack up her senior show, navigating the weirdness in front of her
+      friends. The turn is a quiet acceptance of the fledgling relationship; the hook
+      is the looming, unspoken reality of graduation.'
+    location: A corner table at a dimly lit cafe near AAU
+    characters:
+    - Kaia
+    - '{{user}}'
+  - title: The Send-Off
+    summary: Kaia's graduation party at the beach house, a bittersweet celebration
+      tinged with future anxieties. The turn is a moment alone where you both acknowledge
+      the uncertainty but choose each other anyway. The resolution is not an ending,
+      but a commitment to figure out the next chapter, together.
+    location: Kaia's backyard, strung with fairy lights
+    characters:
+    - Kaia
+    - '{{user}}'
+    - Maya
+    - Trish
+    - assorted friends
+cast:
+- character: kaia_nakumura
+  primary: true
+- character: maya_desousa
+  primary: false
+- character: trish_chen
+  primary: false
+- character: linda_okafor
+  primary: false
+- character: darek_kowalski
+  primary: false
+- character: riley_costello
+  primary: false
+lorebook: {}
+locations:
+- id: ocean-beach-shoreline
+  name: Ocean Beach Shoreline
+  description: The broad, energetic sweep of Ocean Beach on a busy day. Sun umbrellas
+    dot the sand, the waves roll in, and the air thrums with distant laughter and
+    seagull cries.
+  background_prompt: no humans, scenery, crowded public beach, shoreline, sand, waves,
+    sun umbrellas in distance, towels, ocean horizon, bright sunlight, summer haze,
+    vibrant, detailed, illustration
+  background: null
+- id: beach-blanket-setup
+  name: The Beach Blanket
+  description: A specific, intimate patch of sand defined by a vividly patterned blanket
+    and a large, striped umbrella. Personal items—a book, a pair of sandals, a tote—suggest
+    a temporary, claimed territory.
+  background_prompt: no humans, scenery, colorful beach blanket, striped umbrella,
+    sandals, book, tote bag on sand, close-up, shallow depth of field, warm light,
+    vibrant fabric textures, detailed
+  background: null
+- id: tiger-sugar-interior
+  name: Tiger Sugar (Interior)
+  description: The sleek, warmly lit interior of Tiger Sugar. Neon signage glows against
+    dark walls, and the marble countertop holds straw dispensers and a digital menu
+    board.
+  background_prompt: no humans, scenery, boba tea shop interior, modern decor, neon
+    sign, menu board, marble counter, straw dispenser, soft ambient lighting, clean,
+    illustrative, cozy
+  background: null
+- id: kaia-living-room
+  name: Kaia's Living Room
+  description: Kaia's lived-in Sunset District living room. Every wall is covered
+    in art and sketches, books and canvases are stacked haphazardly, and warm light
+    slants through the windows.
+  background_prompt: no humans, scenery, cluttered living room, art-covered walls,
+    stacked canvases, plants, vintage furniture, wooden floor, golden hour light through
+    window, cozy, atmospheric, painterly
+  background: null
+- id: kaia-back-deck
+  name: The Back Deck
+  description: The wooden deck behind Kaia's apartment, strung with fairy lights.
+    Potted plants line the railing, overlooking a quilt of Sunset District rooftops
+    under a twilight sky.
+  background_prompt: no humans, scenery, wooden back deck, potted plants, string lights,
+    faded floorboards, view of neighboring rooftops, twilight, dusky blue sky, soft
+    glow of lights, dreamy, atmospheric
+  background: null
+- id: lands-end-trail
+  name: Lands End Trail
+  description: A foggy, winding path along the Lands End coastal trail. Gnarled cypress
+    trees loom from the mist, and the gravel path disappears into the gray.
+  background_prompt: no humans, scenery, coastal trail, cypress trees, twisted branches,
+    fog, gravel path, ocean cliffs in distance, muted greens and grays, ethereal,
+    soft focus, moody, detailed illustration
+  background: null
+- id: kaia-bedroom-studio
+  name: Kaia's Bedroom Studio
+  description: Kaia's bedroom doubling as a studio. A drawing desk is buried in supplies,
+    sketchbooks lie open, and posters are tacked to the walls above a casually unmade
+    bed.
+  background_prompt: no humans, scenery, messy bedroom studio, drawing desk, art supplies,
+    pencil cups, sketchbooks, rumpled bedding, posters on wall, afternoon light, intimate,
+    creatively chaotic
+  background: null
+- id: ocean-beach-dunes
+  name: The Foggy Dunes
+  description: The vast, empty dunes of Ocean Beach at day's end. Rolling sands are
+    painted in sunset hues and cloaked in creeping fog, feeling profoundly quiet and
+    isolated.
+  background_prompt: no humans, scenery, empty sand dunes, rolling hills, fog, sunset
+    colors, long shadows, sparse beach grass, desolate, cinematic, dramatic lighting,
+    serene, painterly
+  background: null
+- id: aau-cafe-corner
+  name: Cafe Corner
+  description: A quiet corner in a cafe near AAU. A single wooden table is lit by
+    a soft lamp against a brick wall, a mug of coffee steaming in the solitude.
+  background_prompt: no humans, scenery, dimly lit cafe, corner wooden table, empty
+    chair, steam from mug, brick wall, soft lamp light, shadows, intimate, moody,
+    warm tones, detailed
+  background: null
+start: ocean-beach-shoreline
+background: null
+fields:
+  source_character: heard_you_like_me
