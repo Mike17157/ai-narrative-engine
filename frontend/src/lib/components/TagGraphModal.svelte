@@ -21,6 +21,7 @@
   let busy = $state(false);
   let length = $state(20);         // per-category display count + AI-regenerate target
   let similarity = $state(60);     // 0 = broad graph search · 100 = tight similarity
+  let breakMode = $state('coarse'); // off | coarse | fine — BREAK regions in the rendered prompt
   let regening = $state(false);
   let seeded = false;
 
@@ -73,7 +74,7 @@
     if (!tags.length) { resolveGraphPicker([]); return; }
     // assemble into category regions separated by literal BREAK (the going-forward prompt shape)
     try {
-      const r = await post('/tags/regionize', { tags: dedupe(tags) });
+      const r = await post('/tags/regionize', { tags: dedupe(tags), mode: breakMode });
       resolveGraphPicker(r.ok && r.data?.tags?.length ? r.data.tags : dedupe(tags));
     } catch { resolveGraphPicker(dedupe(tags)); }
   }
@@ -145,6 +146,12 @@
 
       <div class="acts">
         <span class="lo">{tags.length} tag{tags.length === 1 ? '' : 's'}</span>
+        <span class="lo brklbl">regions</span>
+        <div class="seg sm">
+          <button class:on={breakMode === 'off'} onclick={() => (breakMode = 'off')} title="one comma prompt, no BREAK">off</button>
+          <button class:on={breakMode === 'coarse'} onclick={() => (breakMode = 'coarse')} title="a few macro-regions (subject · appearance · outfit · details) — recommended">coarse</button>
+          <button class:on={breakMode === 'fine'} onclick={() => (breakMode = 'fine')} title="a BREAK per category (19)">fine</button>
+        </div>
         <button class="ghost" onclick={cancel}>Cancel</button>
         <button onclick={apply}>Apply</button>
       </div>
@@ -194,8 +201,11 @@
   .hintbox { flex: 1; display: grid; place-items: center; color: var(--muted); font-size: 12.5px;
     border: 1px dashed var(--border); border-radius: 10px; }
   .acts { display: flex; align-items: center; gap: 10px; justify-content: flex-end; padding-top: 10px; border-top: 1px solid var(--border-soft); }
-  .acts .lo { margin-right: auto; }
+  .acts > .lo:first-child { margin-right: auto; }
+  .acts .brklbl { margin-left: 4px; }
+  .seg.sm button { padding: 3px 9px; }
   .acts button { padding: 8px 16px; font-size: 13.5px; border-radius: 9px; }
+  .acts .seg button { padding: 3px 9px; font-size: 12px; }
   @keyframes fade { from { opacity: 0; } }
   @keyframes pop { from { opacity: 0; transform: translateY(-8px) scale(.98); } }
 </style>

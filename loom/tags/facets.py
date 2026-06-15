@@ -83,6 +83,16 @@ FACET_DESC = {
     "piercing": "Piercings",
 }
 
+# Coarse macro-regions for the rendered prompt's BREAK boundaries — a few genuinely-independent
+# groups (SDXL/Illustrious conditions better on these than on 19 tiny chunks). Subject/quality tags
+# (no facet) form an implicit leading region. Order here is the region order in the prompt.
+MACRO_REGIONS = [
+    ("appearance", ("hair", "eyes", "skin", "body", "anthro", "face")),
+    ("outfit", ("swimwear", "underwear", "dress", "top", "bottom", "outerwear",
+                "legwear", "footwear", "sleeves")),
+    ("details", ("headwear", "accessories", "makeup", "piercing")),
+]
+
 _FACETSETS = {"appearance": FACETS_APPEARANCE, "clothing": FACETS_CLOTHING, "all": FACETS_ALL}
 
 
