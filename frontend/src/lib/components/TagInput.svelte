@@ -1,12 +1,20 @@
 <script>
   import { get, post } from '$lib/api.js';
+  import { openGraphPicker } from '$lib/graphpicker.svelte.js';
 
   // Booru-tag editor for a comma-separated prompt. Type to search the REAL Danbooru
   // vocabulary (ranked by post count); each tag is coloured by validity (known / will-be-
   // snapped / unknown) via /api/tags/snap; unknown tags get one-click suggestions. The
   // value is a plain comma string so this drops in for a <textarea> — edits flow out via
   // onchange(newValue). charge nothing to render: validation is debounced + non-blocking.
-  let { value = '', onchange, placeholder = 'type a tag…' } = $props();
+  // `kind` ('clothing'|'appearance') steers the graph picker (✦) opened from this box.
+  let { value = '', onchange, placeholder = 'type a tag…', kind = 'clothing' } = $props();
+
+  async function openPicker(targetTag = null) {
+    const r = await openGraphPicker({ tags: chips, kind, target: targetTag,
+      title: targetTag ? 'Replace tag via graph' : 'Edit prompt via graph' });
+    if (r) commit(r);
+  }
 
   const norm = (s) => (s || '').toString().trim().toLowerCase().replace(/\s+/g, ' ');
   const split = (v) => (v || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -85,7 +93,8 @@
   <div class="box">
     {#each chips as tag, i (tag + i)}
       {@const st = stat(tag)}
-      <span class="chip {st}" title={st === 'unknown' ? 'not a known tag' : st === 'ok' || st === 'control' || st === '' ? '' : '→ ' + (statusMap[norm(tag)]?.display || '')}>
+      <span class="chip {st}" ondblclick={() => openPicker(tag)}
+        title={st === 'unknown' ? 'not a known tag' : (st === 'ok' || st === 'control' || st === '') ? 'double-click to swap via graph' : '→ ' + (statusMap[norm(tag)]?.display || '')}>
         {tag}{#if st && st !== 'ok' && st !== 'control' && st !== 'unknown'}<i class="arrow">→{statusMap[norm(tag)]?.display}</i>{/if}
         <button class="x" onclick={() => removeAt(i)} title="remove">×</button>
       </span>
@@ -113,6 +122,7 @@
     {:else}
       <span class="ok">✓ all tags recognized</span>
     {/if}
+    <button class="graph" onclick={() => openPicker()} title="browse the tag graph — add or swap tags by what they pair with">✦ graph</button>
     <button class="snap" onclick={snapAll} title="snap every tag onto its real Danbooru form (aliases, typos, word order)">⇥ snap to real tags</button>
   </div>
 
@@ -163,8 +173,9 @@
   .cat.character { color: #9fb3d8; } .cat.copyright { color: #c8a8e0; } .cat.artist { color: #e0b48a; }
   .bar { display: flex; align-items: center; gap: 10px; margin: 5px 1px 0; font-size: 11.5px; }
   .bar .warn { color: #f0c074; } .bar .ok { color: #8fc7a0; }
-  .snap { margin-left: auto; font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); box-shadow: none; }
-  .snap:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .snap, .graph { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); box-shadow: none; }
+  .graph { margin-left: auto; }
+  .snap:hover, .graph:hover { color: var(--accent); border-color: var(--accent); filter: none; }
   .issue { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 5px 1px 0; font-size: 12px; }
   .issue .bad { color: #f3b0b0; }
   .issue .sep { color: var(--faint); }

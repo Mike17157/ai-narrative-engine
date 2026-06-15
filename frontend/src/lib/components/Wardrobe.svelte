@@ -277,7 +277,7 @@
           <button class="ghost xs" onclick={() => regenBase(c.character)} disabled={tagging[`${c.character}:gen`]} title="generate the base-image prompt from this character's description (persona + appearance)">{tagging[`${c.character}:gen`] ? '…' : '✨ from description'}</button>
           <button class="ghost xs nomar" onclick={() => tagify(`${c.character}:base`, () => cs(c.character).prompt, (t) => ensure(c.character).prompt = t, 'base')} disabled={tagging[`${c.character}:base`]} title="clean current text → structured full-body swimwear base">{tagging[`${c.character}:base`] ? '…' : '⇥ clean'}</button>
           <button class="ghost xs nomar" onclick={() => resetPrompt(c.character)} title="reset to the character's appearance">↺ reset</button></div>
-        <TagInput value={s.prompt ?? ''} placeholder={s.prompt == null ? 'loading prompt…' : 'type a booru tag…'}
+        <TagInput value={s.prompt ?? ''} kind="appearance" placeholder={s.prompt == null ? 'loading prompt…' : 'type a booru tag…'}
           onchange={(v) => ensure(c.character).prompt = v} />
 
         <div class="base">
@@ -338,7 +338,7 @@
             <div class="item">
               <div class="itop"><input class="fld nm2" placeholder="outfit name" bind:value={o.name} />
                 <button class="x" onclick={() => rmOutfit(s, i)}>✕</button></div>
-              <TagInput value={o.attire_prompt ?? ''} placeholder="attire tags…" onchange={(v) => o.attire_prompt = v} />
+              <TagInput value={o.attire_prompt ?? ''} kind="clothing" placeholder="attire tags…" onchange={(v) => o.attire_prompt = v} />
             </div>
           {/each}
           <div class="saverow"><span class="pm" class:ok={s.msg?.ok}>{s.saving ? 'Saving…' : (s.msg?.text || 'Auto-saves as you edit')}</span></div>

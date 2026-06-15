@@ -8,6 +8,7 @@
   import DetailsMenu from '$lib/components/DetailsMenu.svelte';
   import Lightbox from '$lib/components/Lightbox.svelte';
   import ConfirmModal from '$lib/components/ConfirmModal.svelte';
+  import TagGraphModal from '$lib/components/TagGraphModal.svelte';
 
   let { children } = $props();
 
@@ -142,6 +143,7 @@
 
 <Lightbox />
 <ConfirmModal />
+<TagGraphModal />
 
 <style>
   .app { display: flex; height: 100vh; }
