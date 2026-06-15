@@ -152,8 +152,8 @@ class TagGraph:
             if not f or len(buckets[f]) >= per_facet:
                 continue
             h = F.head_noun(t)
-            if h in heads[f] and sum(1 for x in buckets[f] if F.head_noun(x) == h) >= 6:
-                continue  # cap variants of one item per facet (diversity, but allow a range)
+            if h in heads[f] and sum(1 for x in buckets[f] if F.head_noun(x) == h) >= 12:
+                continue  # cap variants of one item per facet (diversity, but allow a wide range)
             buckets[f].append(t)
             heads[f].add(h)
         return {f: v for f, v in buckets.items() if v}

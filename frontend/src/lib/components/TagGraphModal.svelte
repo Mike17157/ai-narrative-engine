@@ -42,7 +42,7 @@
     const seed = tags.join(',');
     if (!seed) { suggestions = {}; return; }
     busy = true;
-    try { const d = await get('/tags/related?per=44&kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
+    try { const d = await get('/tags/related?per=60&kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
     catch { suggestions = {}; }
     busy = false;
   }
@@ -91,7 +91,7 @@
 
       <div class="toolbar">
         <label class="slbl">length <b>{length}</b></label>
-        <input class="slider" type="range" min="6" max="44" value={length}
+        <input class="slider" type="range" min="6" max="60" value={length}
           oninput={(e) => (length = +e.target.value)}
           title="how many suggestions per category, and the target size for AI regenerate" />
         <button class="aibtn" onclick={regen} disabled={regening || !tags.length}

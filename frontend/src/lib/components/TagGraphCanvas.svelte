@@ -42,10 +42,26 @@
     } catch { gnodes = []; gempty = true; }
     gloading = false;
   }
+  function ensureSized() {
+    // wait until the wrap actually has a non-zero box (it mounts inside a flex layout / dialog
+    // animation, so the first measure can be 0×0 — which would scatter every node to the corner)
+    return new Promise((res) => { let t = 0;
+      const ck = () => { const r = canvasEl?.parentElement?.getBoundingClientRect();
+        if ((r && r.width > 4 && r.height > 4) || t++ > 30) res(); else requestAnimationFrame(ck); };
+      ck(); });
+  }
+  let ro = null;
+  function observe() {
+    if (ro || !canvasEl?.parentElement) return;
+    ro = new ResizeObserver(() => { sizeCanvas(); centerPan(); galpha = Math.max(galpha, 0.3); });
+    ro.observe(canvasEl.parentElement);
+  }
   async function buildGraph(d) {
     await tick();                       // ensure the canvas is in the DOM
     if (!canvasEl) return;
+    await ensureSized();                // …and that it has a real size before we lay out
     sizeCanvas();
+    observe();
     const ns = d?.nodes || [];
     if (!ns.length) { gnodes = []; gedges = []; gempty = true; return; }
     gempty = false;
@@ -135,7 +151,7 @@
   function gclick(e) { if (gdragged) { gdragged = false; return; }
     const r = canvasEl.getBoundingClientRect(); const n = gat(e.clientX - r.left, e.clientY - r.top);
     if (n && !n.seed) onpick?.(n.id); }
-  onDestroy(stopGraph);
+  onDestroy(() => { stopGraph(); ro?.disconnect(); ro = null; });
 </script>
 
 <div class="graphwrap">
