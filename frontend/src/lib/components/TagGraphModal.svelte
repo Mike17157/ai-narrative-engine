@@ -40,12 +40,15 @@
   let hoverInfo = $state(null);    // { id, facet, post_count } of the hovered node
   const fmtCount = (n) => (n >= 1000 ? Math.round(n / 1000) + 'k' : '' + (n || 0));
 
-  // camera: the graph lays out to canvas-fit in world coords, then renders at ZOOM (2x linear =
-  // 4x the fit area); drag the background to pan around it.
-  const ZOOM = 2;
+  // camera: the graph lays out across a WORLD larger than the viewport (WORLD× each way = 4× the
+  // fit area) so there's real space to explore; drag the background to pan, or move the cursor to
+  // an edge to auto-scroll.
+  const WORLD = 2;
+  let WW = 0, WH = 0;
   let panX = 0, panY = 0, panning = false, panSX = 0, panSY = 0, panPX = 0, panPY = 0;
-  function centerPan() { panX = (gW / 2) * (1 - ZOOM); panY = (gH / 2) * (1 - ZOOM); }
-  function clampPan() { panX = Math.min(0, Math.max(gW - gW * ZOOM, panX)); panY = Math.min(0, Math.max(gH - gH * ZOOM, panY)); }
+  let autoVX = 0, autoVY = 0;     // edge auto-pan velocity
+  function centerPan() { panX = (gW - WW) / 2; panY = (gH - WH) / 2; }
+  function clampPan() { panX = Math.min(0, Math.max(gW - WW, panX)); panY = Math.min(0, Math.max(gH - WH, panY)); }
 
   // seed local state on the rising edge of `open`
   $effect(() => {
@@ -101,9 +104,9 @@
     if (!ns.length) { gnodes = []; gedges = []; gempty = true; return; }
     gempty = false;
     const maxpc = Math.max(1, ...ns.map(n => n.post_count || 0));
-    gnodes = ns.map((n, i) => { const ang = i * 2.399, rad = 30 + i * 4;
+    gnodes = ns.map((n, i) => { const ang = i * 2.399, rad = 70 + i * 9;
       return { ...n, r: 4 + 8 * Math.sqrt((n.post_count || 1) / maxpc) + (n.seed ? 5 : 0),
-        x: gW / 2 + Math.cos(ang) * rad, y: gH / 2 + Math.sin(ang) * rad, vx: 0, vy: 0,
+        x: WW / 2 + Math.cos(ang) * rad, y: WH / 2 + Math.sin(ang) * rad, vx: 0, vy: 0,
         col: COLORS[n.facet] || COLORS.other }; });
     const byId = new Map(gnodes.map(n => [n.id, n]));
     gedges = (d.edges || []).map(e => ({ a: byId.get(e.source), b: byId.get(e.target), w: e.weight })).filter(e => e.a && e.b);
@@ -117,9 +120,10 @@
   function stopGraph() { if (graf) cancelAnimationFrame(graf); graf = null; gnodes = []; gedges = []; ghover = null; gdrag = null; }
   function sizeCanvas() { if (!canvasEl) return; gDPR = Math.max(1, window.devicePixelRatio || 1);
     const r = canvasEl.parentElement.getBoundingClientRect(); gW = r.width; gH = r.height;
+    WW = gW * WORLD; WH = gH * WORLD;
     canvasEl.width = gW * gDPR; canvasEl.height = gH * gDPR; gctx = canvasEl.getContext('2d'); gctx.setTransform(gDPR, 0, 0, gDPR, 0, 0); }
   function step() {
-    const REP = 1400, SPRING = 0.02, GRAV = 0.025, DAMP = 0.9, LEN = 64, VMAX = 16;
+    const REP = 2600, SPRING = 0.018, GRAV = 0.012, DAMP = 0.9, LEN = 100, VMAX = 22;
     for (let i = 0; i < gnodes.length; i++) { const a = gnodes[i];
       for (let j = i + 1; j < gnodes.length; j++) { const b = gnodes[j];
         let dx = a.x - b.x, dy = a.y - b.y, d2 = dx * dx + dy * dy + 0.01, d = Math.sqrt(d2);
@@ -128,10 +132,10 @@
       let f = SPRING * (d - LEN) * (0.4 + e.w * 3), fx = f * dx / d, fy = f * dy / d;
       e.a.vx += fx; e.a.vy += fy; e.b.vx -= fx; e.b.vy -= fy; });
     gnodes.forEach(n => { if (n === gdrag) return;
-      n.vx += (gW / 2 - n.x) * GRAV; n.vy += (gH / 2 - n.y) * GRAV; n.vx *= DAMP; n.vy *= DAMP;
+      n.vx += (WW / 2 - n.x) * GRAV; n.vy += (WH / 2 - n.y) * GRAV; n.vx *= DAMP; n.vy *= DAMP;
       const sp = Math.hypot(n.vx, n.vy); if (sp > VMAX) { n.vx *= VMAX / sp; n.vy *= VMAX / sp; }
       n.x += n.vx * galpha; n.y += n.vy * galpha;
-      n.x = Math.max(n.r, Math.min(gW - n.r, n.x)); n.y = Math.max(n.r, Math.min(gH - n.r, n.y)); });
+      n.x = Math.max(n.r, Math.min(WW - n.r, n.x)); n.y = Math.max(n.r, Math.min(WH - n.r, n.y)); });
     galpha *= 0.985;
   }
   function draw() {
@@ -139,7 +143,6 @@
     gctx.clearRect(0, 0, gW, gH);
     gctx.save();
     gctx.translate(panX, panY);
-    gctx.scale(ZOOM, ZOOM);
     const hi = ghover ? gadj.get(ghover.id) : null;
     gedges.forEach(e => { const on = ghover && (e.a === ghover || e.b === ghover);
       gctx.strokeStyle = on ? 'rgba(150,180,255,.55)' : 'rgba(120,130,150,' + (0.05 + e.w * 0.5) + ')';
@@ -158,18 +161,31 @@
       gctx.globalAlpha = 1; });
     gctx.restore();
   }
-  function loop() { if (gnodes.length) { if (galpha > 0.03 || gdrag) step(); draw(); } graf = requestAnimationFrame(loop); }
-  // screen (canvas px) → node, accounting for pan + zoom
-  function gat(mx, my) { const wx = (mx - panX) / ZOOM, wy = (my - panY) / ZOOM;
+  function loop() {
+    if (gnodes.length) {
+      if ((autoVX || autoVY) && !gdrag && !panning) { panX += autoVX; panY += autoVY; clampPan(); }
+      if (galpha > 0.03 || gdrag) step();
+      draw();
+    }
+    graf = requestAnimationFrame(loop);
+  }
+  // screen (canvas px) → node, accounting for pan
+  function gat(mx, my) { const wx = mx - panX, wy = my - panY;
     let best = null, bd = 1e9; gnodes.forEach(n => { let d = (n.x - wx) ** 2 + (n.y - wy) ** 2; if (d < bd && d < (n.r + 5) ** 2) { bd = d; best = n; } }); return best; }
   function gmove(e) { const r = canvasEl.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
-    if (gdrag) { gdrag.x = (mx - panX) / ZOOM; gdrag.y = (my - panY) / ZOOM; gdrag.vx = gdrag.vy = 0; gdragged = true; galpha = Math.max(galpha, 0.4); }
-    else if (panning) { panX = panPX + (mx - panSX); panY = panPY + (my - panSY); clampPan(); gdragged = true; }
-    else { ghover = gat(mx, my); canvasEl.style.cursor = ghover ? 'pointer' : 'grab';
-      hoverInfo = ghover ? { id: ghover.id, facet: ghover.facet, post_count: ghover.post_count } : null; } }
-  function gleave() { ghover = null; hoverInfo = null; }
+    if (gdrag) { gdrag.x = mx - panX; gdrag.y = my - panY; gdrag.vx = gdrag.vy = 0; gdragged = true; galpha = Math.max(galpha, 0.4); autoVX = autoVY = 0; }
+    else if (panning) { panX = panPX + (mx - panSX); panY = panPY + (my - panSY); clampPan(); gdragged = true; autoVX = autoVY = 0; }
+    else {
+      ghover = gat(mx, my); canvasEl.style.cursor = ghover ? 'pointer' : 'grab';
+      hoverInfo = ghover ? { id: ghover.id, facet: ghover.facet, post_count: ghover.post_count } : null;
+      // edge auto-pan: cursor near a side scrolls the view that way
+      const M = 44, SP = 12;
+      autoVX = mx < M ? SP : (mx > gW - M ? -SP : 0);
+      autoVY = my < M ? SP : (my > gH - M ? -SP : 0);
+    } }
+  function gleave() { ghover = null; hoverInfo = null; autoVX = autoVY = 0; }
   function gdown(e) { const r = canvasEl.getBoundingClientRect(), mx = e.clientX - r.left, my = e.clientY - r.top;
-    const n = gat(mx, my); gdragged = false;
+    const n = gat(mx, my); gdragged = false; autoVX = autoVY = 0;
     if (n) { gdrag = n; }                                  // drag a node
     else { panning = true; panSX = mx; panSY = my; panPX = panX; panPY = panY; canvasEl.style.cursor = 'grabbing'; } }  // pan the view
   function gup() { gdrag = null; panning = false; if (canvasEl) canvasEl.style.cursor = 'grab'; }
@@ -186,7 +202,7 @@
     const id = setTimeout(async () => {
       const d = await get('/tags/search?limit=12&q=' + encodeURIComponent(q));
       results = d?.tags || []; active = results.length ? 0 : -1; open = results.length > 0;
-    }, 140);
+    }, 1000);   // 1s debounce — update once typing pauses
     return () => clearTimeout(id);
   });
   function onkey(e) {
