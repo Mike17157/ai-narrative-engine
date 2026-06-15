@@ -32,7 +32,9 @@ from .cooccur import get_cooccur
 
 _CACHE = Path(__file__).resolve().parent.parent / "data" / "tag_graph.pickle"
 
-MIN_POSTS = 200       # node floor: general tags with >= this many posts
+MIN_POSTS = 50        # node floor: general tags with >= this many posts. Set at the point where the
+                      # NAVIGABLE node set plateaus (~4.7k nodes-with-edges) — going lower adds only
+                      # edgeless tags (dropped anyway), since edges come from the character bundles.
 MIN_COCOUNT = 2       # edge floor: a pair must co-occur in >= this many bundles
 MAX_COSINE = 0.65     # similarity filter: drop edges at/above this (near-aliases)
 ALPHA = 0.4           # PageRank damping — low so it stays near the seeds (local, themed)
