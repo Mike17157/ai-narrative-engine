@@ -128,18 +128,26 @@ class TagGraph:
         seen = set(present)
         out: dict[str, float] = {}
         for n, p in ppr.items():
-            if n in seen:
+            if n in seen or p <= 0:
                 continue
             base = self.G.nodes[n].get("base_pr") or 1e-12
-            if p > base:
-                out[n] = p / base
+            out[n] = p / base   # hub-corrected relevance; >1 = above baseline. Caller trims by `sim`.
         return out
 
+    def _pool(self, scored: dict, sim: int) -> list[tuple[str, float]]:
+        """Rank tags by relevance and trim by the `sim` knob (0-100): high `sim` keeps only the
+        tightest top of the ranking (strict similarity), low `sim` goes deep down it (broad graph
+        search). Returns [(tag, score)] best-first."""
+        ranked = sorted(scored.items(), key=lambda kv: -kv[1])
+        sim = min(max(int(sim), 0), 100)
+        keep = max(40, round(len(ranked) * (1 - sim / 100)))
+        return ranked[:keep]
+
     def palette(self, draft: list[str], kind: str = "appearance",
-                per_facet: int = 24) -> dict[str, list[str]]:
-        """Faceted palette of compatible tags for the draft — the composer's pass-2 menu. Same
-        shape as CooccurIndex.faceted_palette. Empty if no draft tag is in the graph (caller
-        falls back)."""
+                per_facet: int = 24, sim: int = 60) -> dict[str, list[str]]:
+        """Faceted palette of compatible tags for the draft — the composer's pass-2 menu. `sim`
+        (0-100) trades breadth (low) for tight similarity (high). Same shape as
+        CooccurIndex.faceted_palette. Empty if no draft tag is in the graph (caller falls back)."""
         scored = self.navigate(draft)
         if not scored:
             return {}
@@ -147,7 +155,7 @@ class TagGraph:
         order = [f for f, _ in (F.FACETS_APPEARANCE if kind == "appearance" else F.FACETS_CLOTHING)]
         buckets: dict[str, list[str]] = {f: [] for f in order}
         heads: dict[str, set] = {f: set() for f in order}
-        for t, _s in sorted(scored.items(), key=lambda kv: -kv[1]):
+        for t, _s in self._pool(scored, sim):
             f = self.G.nodes[t].get(attr)
             if not f or len(buckets[f]) >= per_facet:
                 continue
@@ -163,16 +171,16 @@ class TagGraph:
         return self.palette(seeds, kind, per_facet)
 
     def subgraph(self, seeds: list[str], kind: str = "clothing", max_nodes: int = 70,
-                 max_edges: int = 280) -> dict:
+                 max_edges: int = 280, sim: int = 60) -> dict:
         """A relevance-focused neighbourhood around `seeds` for VISUALIZATION: the seeds plus the
-        top hub-corrected nodes navigated from them, and the real edges induced among that set.
-        Returns {nodes:[{id,facet,post_count,score,seed}], edges:[{source,target,weight}], seeds}."""
+        top hub-corrected nodes navigated from them (trimmed by `sim`), and the real edges induced
+        among that set. Returns {nodes:[{id,facet,post_count,score,seed}], edges:[...], seeds}."""
         present = [_norm(s) for s in seeds if _norm(s) in self.G]
         if not present:
             return {"nodes": [], "edges": [], "seeds": []}
         attr = "app_facet" if kind == "appearance" else "clo_facet"
         scored = self.navigate(present)
-        top = [t for t, _ in sorted(scored.items(), key=lambda kv: -kv[1])][:max_nodes]
+        top = [t for t, _ in self._pool(scored, sim)][:max_nodes]
         keep = list(dict.fromkeys(present + top))
         keepset = set(keep)
         nodes = [{"id": t,

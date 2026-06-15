@@ -5,7 +5,7 @@
   // Self-contained force-directed view of the tag similarity graph around `seed`. Fetches
   // /tags/graph itself; lays out across a world 2× the viewport (pan by dragging the background or
   // moving the cursor to an edge); click a non-seed node to pick it. Calls onpick(tag).
-  let { seed = '', kind = 'clothing', onpick } = $props();
+  let { seed = '', kind = 'clothing', sim = 60, onpick } = $props();
 
   const COLORS = {
     hair:'#e0b04a', eyes:'#4ab0e0', skin:'#e08a6a', body:'#e06aa0', ears_tail:'#b06ae0', face:'#6ae0b0',
@@ -31,13 +31,13 @@
   function centerPan() { panX = (gW - WW) / 2; panY = (gH - WH) / 2; }
   function clampPan() { panX = Math.min(0, Math.max(gW - WW, panX)); panY = Math.min(0, Math.max(gH - WH, panY)); }
 
-  // (re)load whenever the seed or kind changes
-  $effect(() => { const s = seed, k = kind; void k; if (s) loadGraph(s); else stopGraph(); });
+  // (re)load whenever the seed, kind, or similarity changes
+  $effect(() => { const s = seed; void kind; void sim; if (s) loadGraph(s); else stopGraph(); });
 
   async function loadGraph(s) {
     stopGraph(); gloading = true; gempty = false;
     try {
-      const d = await get('/tags/graph?kind=' + kind + '&tags=' + encodeURIComponent(s));
+      const d = await get('/tags/graph?kind=' + kind + '&sim=' + sim + '&tags=' + encodeURIComponent(s));
       await buildGraph(d);
     } catch { gnodes = []; gempty = true; }
     gloading = false;

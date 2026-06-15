@@ -22,10 +22,10 @@ def register(app, ctx):
         return {"tags": ix.search(q or "", limit=n, include_noisy=bool(noisy or only is not None), only_cat=only)}
 
     @app.get("/api/tags/related")
-    async def tags_related(tags: str = "", kind: str = "clothing", per: int = 24):
+    async def tags_related(tags: str = "", kind: str = "clothing", per: int = 24, sim: int = 60):
         """Navigate the tag similarity graph from comma-separated `tags` and return a faceted palette
-        of correlated/compatible tags (kind='appearance'|'clothing'); `per` = max tags per facet.
-        Powers the prompt-editor suggestions + graph inspection."""
+        of correlated/compatible tags (kind='appearance'|'clothing'); `per` = max tags per facet,
+        `sim` (0-100) trades breadth (low) for tight similarity (high). Powers the prompt editor."""
         from fastapi.concurrency import run_in_threadpool
 
         from ...tags import get_graph
@@ -36,13 +36,14 @@ def register(app, ctx):
         if not g.ready:
             return {"palette": {}, "note": "graph not available"}
         kind = "appearance" if kind == "appearance" else "clothing"
-        per = max(4, min(int(per or 24), 60))
-        return {"palette": await run_in_threadpool(g.palette, seeds, kind, per)}
+        per = max(4, min(int(per or 24), 80))
+        sim = max(0, min(int(sim), 100))
+        return {"palette": await run_in_threadpool(g.palette, seeds, kind, per, sim)}
 
     @app.get("/api/tags/graph")
-    async def tags_graph(tags: str = "", kind: str = "clothing"):
+    async def tags_graph(tags: str = "", kind: str = "clothing", sim: int = 60):
         """Neighbourhood around `tags` (comma-separated) from the similarity graph, as
-        {nodes, edges, seeds} — the data behind the visualization at /api/tags/graph/view."""
+        {nodes, edges, seeds}. `sim` (0-100): breadth↔tight. Backs /tags/graph/view + the modal."""
         from fastapi.concurrency import run_in_threadpool
 
         from ...tags import get_graph
@@ -53,7 +54,8 @@ def register(app, ctx):
         if not g.ready:
             return {"nodes": [], "edges": [], "seeds": [], "note": "graph not available"}
         kind = "appearance" if kind == "appearance" else "clothing"
-        return await run_in_threadpool(g.subgraph, seeds, kind)
+        sim = max(0, min(int(sim), 100))
+        return await run_in_threadpool(g.subgraph, seeds, kind, 70, 280, sim)
 
     @app.get("/api/tags/graph/view", response_class=HTMLResponse)
     def tags_graph_view() -> str:

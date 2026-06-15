@@ -18,7 +18,8 @@
   let view = $state('list');       // 'list' (Suggestions) | 'graph'
   let suggestions = $state({});    // { facet: [tag, ...] }
   let busy = $state(false);
-  let length = $state(20);         // per-category density + AI-regenerate target
+  let length = $state(20);         // per-category display count + AI-regenerate target
+  let similarity = $state(60);     // 0 = broad graph search · 100 = tight similarity
   let regening = $state(false);
   let seeded = false;
 
@@ -42,7 +43,7 @@
     const seed = tags.join(',');
     if (!seed) { suggestions = {}; return; }
     busy = true;
-    try { const d = await get('/tags/related?per=60&kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
+    try { const d = await get('/tags/related?per=80&sim=' + similarity + '&kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
     catch { suggestions = {}; }
     busy = false;
   }
@@ -90,10 +91,16 @@
       </div>
 
       <div class="toolbar">
-        <label class="slbl">length <b>{length}</b></label>
-        <input class="slider" type="range" min="6" max="60" value={length}
-          oninput={(e) => (length = +e.target.value)}
-          title="how many suggestions per category, and the target size for AI regenerate" />
+        <div class="ctrls">
+          <label class="slbl">length <b>{length}</b></label>
+          <input class="slider" type="range" min="6" max="60" value={length}
+            oninput={(e) => (length = +e.target.value)}
+            title="suggestions shown per category, and the target size for AI regenerate" />
+          <label class="slbl">similarity <b>{similarity}</b></label>
+          <input class="slider" type="range" min="0" max="100" value={similarity}
+            oninput={(e) => { similarity = +e.target.value; scheduleSuggestions(); }}
+            title="low = broad graph search (many, looser) · high = tight similarity (fewer, closer)" />
+        </div>
         <button class="aibtn" onclick={regen} disabled={regening || !tags.length}
           title="regenerate the prompt with AI at the chosen length, drawing on the graph">
           {regening ? 'Regenerating…' : '✨ Regenerate with AI'}</button>
@@ -114,7 +121,7 @@
         <div class="cbody">
           {#if view === 'graph'}
             {#if target}
-              <TagGraphCanvas seed={target} {kind} onpick={applyTag} />
+              <TagGraphCanvas seed={target} {kind} sim={similarity} onpick={applyTag} />
             {:else}
               <div class="hintbox">Click a tag in the prompt above to explore its graph.</div>
             {/if}
@@ -157,11 +164,12 @@
   .chip .x { background: none; border: 0; color: var(--muted); font-size: 15px; padding: 0 7px 0 3px; box-shadow: none; cursor: pointer; }
   .chip .x:hover { color: #ff8a8a; }
   .empty { color: var(--faint); font-size: 12.5px; align-self: center; padding: 2px 4px; }
-  .toolbar { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
+  .toolbar { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
+  .ctrls { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px 10px; flex: 1; max-width: 460px; }
   .slbl { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .slbl b { color: var(--text); font-variant-numeric: tabular-nums; }
-  .slider { flex: 1; max-width: 280px; accent-color: var(--accent); }
-  .aibtn { margin-left: auto; font-size: 12.5px; padding: 6px 12px; border-radius: 8px;
+  .slider { width: 100%; accent-color: var(--accent); }
+  .aibtn { margin-left: auto; font-size: 12.5px; padding: 6px 12px; border-radius: 8px; white-space: nowrap;
     background: rgba(109,140,255,.16); border: 1px solid rgba(109,140,255,.4); color: #cdd8ff; box-shadow: none; }
   .aibtn:hover:not(:disabled) { background: rgba(109,140,255,.28); filter: none; }
   .aibtn:disabled { opacity: .55; }
