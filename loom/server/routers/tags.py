@@ -56,6 +56,83 @@ def register(app, ctx):
         Type seed tags; click a node to re-center. Data from GET /api/tags/graph."""
         return GRAPH_VIEW_HTML
 
+    @app.post("/api/tags/recompose")
+    async def tags_recompose(body: dict):
+        """AI-refine a set of image-prompt tags: feed the current tags + a graph palette of
+        compatible tags to the author model and ask for a coherent set of ~`length` booru tags.
+        body: {tags:[...], kind:'clothing'|'appearance', length:int}. Returns {tags:[...]}."""
+        from fastapi.concurrency import run_in_threadpool
+
+        from ...tags import get_cooccur, get_graph
+        from ..services.prompts import _dedupe_outfit_tags, _safe_image_tags, _snap_prompt
+        body = body or {}
+        tags = [str(t).strip() for t in (body.get("tags") or []) if str(t).strip()]
+        if not tags:
+            return JSONResponse({"error": "no tags"}, status_code=400)
+        kind = "appearance" if body.get("kind") == "appearance" else "clothing"
+        try:
+            length = int(body.get("length") or 0)
+        except (TypeError, ValueError):
+            length = 0
+        length = max(6, min(length or 24, 50))
+        provider = ctx.author_provider(body.get("model"))
+        if provider is None:
+            return JSONResponse({"error": "no author model configured"}, status_code=400)
+
+        def _palette():
+            try:
+                g = get_graph()
+                if g.ready:
+                    p = g.palette(tags, kind, per_facet=24)
+                    if p:
+                        return p
+            except Exception:  # noqa: BLE001
+                pass
+            try:
+                ix = get_cooccur()
+                if ix.ready:
+                    return ix.faceted_palette(tags, kind, per_facet=24)
+            except Exception:  # noqa: BLE001
+                pass
+            return {}
+
+        palette = await run_in_threadpool(_palette)
+        facet_lines = "\n".join(f"  {f.upper()}: {', '.join(ts)}" for f, ts in palette.items() if ts)
+        if kind == "appearance":
+            rules = ("Keep the SEX count tag (1girl/1boy) and persistent PHYSICAL identity (hair, "
+                     "eyes, skin, body, face/marks). NO clothing, expression, pose or background.")
+        else:
+            rules = ("Keep the SEX count tag (1girl/1boy). Build a COHERENT outfit — every garment "
+                     "with a COLOUR, plus legwear/footwear/accessories/makeup that fit; ONE palette. "
+                     "NO body/hair/eye/skin tags, NO expression, pose or background.")
+        system = ("You refine a Danbooru-tag image prompt for an Illustrious/SDXL model. Given the "
+                  "CURRENT tags and a PALETTE of compatible real tags, output a single coherent set "
+                  "of lowercase booru tags. Draw from the palette where it improves the look; keep the "
+                  "subject's identity. " + rules + " Output ONLY tags (no prose).")
+        prompt = (f"CURRENT TAGS:\n{', '.join(tags)}\n\n"
+                  + (f"PALETTE — real compatible tags by facet:\n{facet_lines}\n\n" if facet_lines else "")
+                  + f"Produce approximately {length} tags (aim for {max(6, length - 3)}–{length + 3}). "
+                  + ("Make it richer/more detailed." if length > len(tags) else
+                     "Tighten it to the essentials." if length < len(tags) else "Refine it."))
+        schema = {"type": "object", "additionalProperties": False, "required": ["tags"],
+                  "properties": {"tags": {"type": "array", "items": {"type": "string"}}}}
+
+        def _gen():
+            try:
+                data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
+            except Exception:  # noqa: BLE001
+                data = {}
+            out = [str(t) for t in (data.get("tags") or [])]
+            if not out:
+                return []
+            snapped = _snap_prompt(_safe_image_tags(", ".join(out)))
+            return _dedupe_outfit_tags([t.strip() for t in snapped.split(",") if t.strip()])
+
+        final = await run_in_threadpool(_gen)
+        if not final:
+            return JSONResponse({"error": "the model returned no tags"}, status_code=500)
+        return {"tags": final}
+
     @app.post("/api/tags/snap")
     async def tags_snap(body: dict):
         """Snap a free-text prompt onto real booru tags. Returns the full snap report

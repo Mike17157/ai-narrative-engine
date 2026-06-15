@@ -1,6 +1,6 @@
 <script>
   import { tick, onDestroy } from 'svelte';
-  import { get } from '$lib/api.js';
+  import { get, post } from '$lib/api.js';
   import { pickerState, resolveGraphPicker } from '$lib/graphpicker.svelte.js';
 
   // Graph-driven prompt editor. Shows the current prompt as chips; click a chip to TARGET it for
@@ -23,6 +23,8 @@
   let suggestions = $state({});   // { facet: [tag, ...] } — the no-target add list
   let busy = $state(false);
   let seeded = false;
+  let length = $state(20);        // target tag count for AI regenerate (slider)
+  let regening = $state(false);
 
   // query / autocomplete
   let query = $state('');
@@ -57,6 +59,7 @@
       tags = pickerState.tags.slice();
       kind = pickerState.kind;
       target = pickerState.target || null; query = ''; results = []; open = false; suggestions = {};
+      length = Math.min(40, Math.max(8, tags.length || 18));
       if (target) loadGraph(target); else refreshSuggestions();
     }
     if (!pickerState.open) { seeded = false; stopGraph(); }
@@ -81,6 +84,13 @@
     scheduleSuggestions();
   }
   function removeChip(t) { tags = tags.filter((x) => norm(x) !== norm(t)); if (target && norm(target) === norm(t)) setTarget(null); scheduleSuggestions(); }
+  async function regen() {
+    if (!tags.length || regening) return;
+    regening = true;
+    const r = await post('/tags/recompose', { tags, kind, length });
+    if (r.ok && r.data?.tags?.length) { tags = r.data.tags; setTarget(null); scheduleSuggestions(); }
+    regening = false;
+  }
   function setTarget(t) {
     const next = (t && target && norm(target) === norm(t)) ? null : t;   // toggle off if same
     target = next;
@@ -257,6 +267,15 @@
         {/if}
       </div>
 
+      <div class="tools">
+        <label class="slbl">length <b>{length}</b></label>
+        <input class="slider" type="range" min="6" max="44" value={length}
+          oninput={(e) => (length = +e.target.value)} title="target tag count for AI regenerate" />
+        <button class="aibtn" onclick={regen} disabled={regening || !tags.length}
+          title="regenerate the prompt with AI, drawing on the graph suggestions, at the chosen length">
+          {regening ? 'Regenerating…' : '✨ Regenerate with AI'}</button>
+      </div>
+
       <div class="body">
         {#if target}
           <!-- live similarity graph for the targeted tag -->
@@ -336,6 +355,14 @@
   .opt { display: flex; justify-content: space-between; gap: 8px; padding: 6px 9px; border-radius: 7px; cursor: pointer; font-size: 13px; }
   .opt.on, .opt:hover { background: var(--elev-2); }
   .opt .cnt { color: var(--faint); font-size: 11px; }
+  .tools { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+  .slbl { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .slbl b { color: var(--text); font-variant-numeric: tabular-nums; }
+  .slider { flex: 1; max-width: 280px; accent-color: var(--accent); }
+  .aibtn { margin-left: auto; font-size: 12.5px; padding: 6px 12px; border-radius: 8px;
+    background: rgba(109,140,255,.16); border: 1px solid rgba(109,140,255,.4); color: #cdd8ff; box-shadow: none; }
+  .aibtn:hover:not(:disabled) { background: rgba(109,140,255,.28); filter: none; }
+  .aibtn:disabled { opacity: .55; }
   .body { flex: 1; min-height: 0; margin: 10px 0; display: flex; }
   .sug { flex: 1; overflow: auto; padding-right: 4px; }
   .facet { margin-bottom: 10px; }
