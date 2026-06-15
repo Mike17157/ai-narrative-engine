@@ -121,18 +121,23 @@ class TagIndex:
         return bool(self.canon)
 
     # ---- query -------------------------------------------------------------
-    def search(self, query: str, limit: int = 20, include_noisy: bool = False) -> list[dict]:
+    def search(self, query: str, limit: int = 20, include_noisy: bool = False,
+               only_cat: int | None = None) -> list[dict]:
         """Autocomplete: canonical tags matching `query`, prefix-first then substring,
-        ranked within each band by post count. Returns display-ready dicts."""
+        ranked within each band by post count. Returns display-ready dicts. `only_cat` restricts
+        to one Danbooru category (e.g. 4 = character) — a 'special category' search."""
         qk = _key(query)
+        def _catok(n): return only_cat is None or self.canon[n].category == only_cat
         out: list[str] = []
         if not qk:
             out = [n for n in self._by_count
-                   if include_noisy or self.canon[n].category not in _NOISY_CATEGORIES][:limit]
+                   if (include_noisy or self.canon[n].category not in _NOISY_CATEGORIES) and _catok(n)][:limit]
         else:
             prefix, sub = [], []
             for n in self._by_count:
                 if not include_noisy and self.canon[n].category in _NOISY_CATEGORIES:
+                    continue
+                if not _catok(n):
                     continue
                 if n.startswith(qk):
                     prefix.append(n)
@@ -141,6 +146,8 @@ class TagIndex:
                 if len(prefix) >= limit:
                     break
             out = (prefix + sub)[:limit]
+            if only_cat is not None:
+                return [self._fmt(n) for n in out]   # category search: skip the fuzzy descriptor backfill
             # Backfill with SIMILAR tags (typo-tolerant) when literal matches are thin, so the
             # combobox still suggests e.g. "purple eyes" for "purpel". Pool = tags sharing a
             # token OR the first 3 chars (cheap). Rank by per-token similarity (NOT whole-string,

@@ -32,13 +32,12 @@ from .cooccur import get_cooccur
 
 _CACHE = Path(__file__).resolve().parent.parent / "data" / "tag_graph.pickle"
 
-MIN_POSTS = 50        # node floor: general tags with >= this many posts. Set at the point where the
-                      # NAVIGABLE node set plateaus (~4.7k nodes-with-edges) — going lower adds only
-                      # edgeless tags (dropped anyway), since edges come from the character bundles.
+MIN_POSTS = 20        # node floor: general tags with >= this many posts (low — most rare tags have
+                      # no bundle edges anyway, so this mainly widens the catalog cheaply).
 MIN_COCOUNT = 2       # edge floor: a pair must co-occur in >= this many bundles
 MAX_COSINE = 0.65     # similarity filter: drop edges at/above this (near-aliases)
 ALPHA = 0.4           # PageRank damping — low so it stays near the seeds (local, themed)
-TOP_NEIGHBORS = 80    # cap neighbours per node (densest hubs pruned to their strongest links)
+TOP_NEIGHBORS = 140   # cap neighbours per node — higher = richer navigation = more tags surfaced
 
 
 def _norm(s: str) -> str:
@@ -153,8 +152,8 @@ class TagGraph:
             if not f or len(buckets[f]) >= per_facet:
                 continue
             h = F.head_noun(t)
-            if h in heads[f] and sum(1 for x in buckets[f] if F.head_noun(x) == h) >= 3:
-                continue  # at most 3 variants of one item per facet (diversity)
+            if h in heads[f] and sum(1 for x in buckets[f] if F.head_noun(x) == h) >= 6:
+                continue  # cap variants of one item per facet (diversity, but allow a range)
             buckets[f].append(t)
             heads[f].add(h)
         return {f: v for f, v in buckets.items() if v}

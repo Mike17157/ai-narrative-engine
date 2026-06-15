@@ -6,16 +6,20 @@ from ._graph_view import GRAPH_VIEW_HTML
 
 
 def register(app, ctx):
+    # Danbooru category names accepted by the `cat` filter (special-category search).
+    _CAT_NAMES = {"general": 0, "artist": 1, "copyright": 3, "character": 4, "meta": 5}
+
     @app.get("/api/tags/search")
-    async def tags_search(q: str = "", limit: int = 20, noisy: bool = False):
-        """Autocomplete against the real Danbooru vocabulary — prefix-first, ranked by post
-        count. Returns {tags:[{tag, name, count, category}]}. Empty index → empty list."""
+    async def tags_search(q: str = "", limit: int = 20, noisy: bool = False, cat: str = ""):
+        """Autocomplete against the real Danbooru vocabulary — prefix-first, ranked by post count.
+        `cat` (e.g. 'character') restricts to one category. Returns {tags:[{tag,name,count,category}]}."""
         from fastapi.concurrency import run_in_threadpool
 
         from ...tags import get_index
         ix = await run_in_threadpool(get_index)          # first call parses the CSV (~0.4s)
         n = min(max(int(limit or 20), 1), 50)
-        return {"tags": ix.search(q or "", limit=n, include_noisy=bool(noisy))}
+        only = _CAT_NAMES.get((cat or "").strip().lower())
+        return {"tags": ix.search(q or "", limit=n, include_noisy=bool(noisy or only is not None), only_cat=only)}
 
     @app.get("/api/tags/related")
     async def tags_related(tags: str = "", kind: str = "clothing", per: int = 24):

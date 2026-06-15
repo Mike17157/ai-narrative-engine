@@ -23,8 +23,10 @@
   let suggestions = $state({});   // { facet: [tag, ...] } — the no-target add list
   let busy = $state(false);
   let seeded = false;
-  let length = $state(20);        // target tag count for AI regenerate (slider)
+  let length = $state(20);        // target tag count for AI regenerate / per-category display
   let regening = $state(false);
+  let searchScope = $state('all');  // 'all' | 'character' — special-category search
+  let tview = $state('list');       // 'list' | 'graph' — view shown when a tag is targeted
 
   // query / autocomplete
   let query = $state('');
@@ -60,7 +62,8 @@
       kind = pickerState.kind;
       target = pickerState.target || null; query = ''; results = []; open = false; suggestions = {};
       length = Math.min(40, Math.max(8, tags.length || 18));
-      if (target) loadGraph(target); else refreshSuggestions();
+      refreshSuggestions();
+      if (target && tview === 'graph') loadGraph(target);
     }
     if (!pickerState.open) { seeded = false; stopGraph(); }
   });
@@ -94,8 +97,10 @@
   function setTarget(t) {
     const next = (t && target && norm(target) === norm(t)) ? null : t;   // toggle off if same
     target = next;
-    if (next) loadGraph(next); else stopGraph();
+    refreshSuggestions();                                  // list of compatible swaps stays available
+    if (next && tview === 'graph') loadGraph(next); else stopGraph();
   }
+  function setView(v) { tview = v; if (target) { if (v === 'graph') loadGraph(target); else stopGraph(); } }
 
   // ---- the live graph ----
   async function loadGraph(seed) {
@@ -207,10 +212,11 @@
 
   // search the full vocabulary
   $effect(() => {
-    const q = query;
+    const q = query, sc = searchScope;   // track both
     if (!q.trim()) { results = []; open = false; return; }
     const id = setTimeout(async () => {
-      const d = await get('/tags/search?limit=12&q=' + encodeURIComponent(q));
+      const cat = sc === 'character' ? '&cat=character' : '';
+      const d = await get('/tags/search?limit=12' + cat + '&q=' + encodeURIComponent(q));
       results = d?.tags || []; active = results.length ? 0 : -1; open = results.length > 0;
     }, 1000);   // 1s debounce — update once typing pauses
     return () => clearTimeout(id);
@@ -222,7 +228,7 @@
     else if (e.key === 'Escape') { if (open) open = false; else cancel(); }
   }
 
-  function setKind(k) { if (k !== kind) { kind = k; if (target) loadGraph(target); else refreshSuggestions(); } }
+  function setKind(k) { if (k !== kind) { kind = k; refreshSuggestions(); if (target && tview === 'graph') loadGraph(target); } }
   const apply = () => resolveGraphPicker(dedupe(tags));
   const cancel = () => resolveGraphPicker(null);
   let facetOrder = $derived(Object.keys(suggestions));
@@ -250,12 +256,25 @@
       </div>
 
       <div class="status">
-        {#if target}Replacing <b>{target}</b> — click a node to swap it · drag the background to pan. <button class="link" onclick={() => setTarget(null)}>back to list</button>
-        {:else}Click a chip to replace it (opens its graph), or add tags below.{/if}
+        {#if target}
+          Replacing <b>{target}</b> — pick a tag to swap it.
+          <span class="vtoggle">
+            <button class:on={tview === 'list'} onclick={() => setView('list')}>list</button>
+            <button class:on={tview === 'graph'} onclick={() => setView('graph')}>graph</button>
+          </span>
+          <button class="link" onclick={() => setTarget(null)}>back</button>
+        {:else}Click a chip to replace it, or add tags below.{/if}
       </div>
 
       <div class="search">
-        <input placeholder="search any tag…" bind:value={query} onkeydown={onkey} />
+        <div class="srow">
+          <div class="scope">
+            <button class:on={searchScope === 'all'} onclick={() => (searchScope = 'all')}>tags</button>
+            <button class:on={searchScope === 'character'} onclick={() => (searchScope = 'character')}>characters</button>
+          </div>
+          <input placeholder={searchScope === 'character' ? 'search a character…' : 'search any tag…'}
+            bind:value={query} onkeydown={onkey} />
+        </div>
         {#if open}
           <div class="pop">
             {#each results as r, i (r.name)}
@@ -277,7 +296,7 @@
       </div>
 
       <div class="body">
-        {#if target}
+        {#if target && tview === 'graph'}
           <!-- live similarity graph for the targeted tag -->
           <div class="graphwrap">
             <canvas bind:this={canvasEl} onmousemove={gmove} onmouseleave={gleave}
@@ -305,7 +324,7 @@
                 <div class="facet">
                   <div class="fname">{f}</div>
                   <div class="pills">
-                    {#each suggestions[f].slice(0, length) as t (t)}<button class="pill" onclick={() => applyTag(t)} title="add">{t}</button>{/each}
+                    {#each suggestions[f].slice(0, length) as t (t)}<button class="pill" onclick={() => applyTag(t)} title={target ? 'swap for ' + target : 'add'}>{t}</button>{/each}
                   </div>
                 </div>
               {/each}
@@ -348,7 +367,13 @@
   .status b { color: var(--text); }
   .link { background: none; border: 0; color: var(--accent); box-shadow: none; cursor: pointer; font-size: 12px; padding: 0 2px; }
   .search { position: relative; }
-  .search input { width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 13px; }
+  .srow { display: flex; gap: 8px; align-items: stretch; }
+  .scope, .vtoggle { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
+  .scope button, .vtoggle button { background: var(--elev); border: 0; color: var(--muted); padding: 0 11px; font-size: 12px; box-shadow: none; cursor: pointer; }
+  .vtoggle button { padding: 2px 9px; }
+  .scope button.on, .vtoggle button.on { background: var(--accent); color: #fff; }
+  .vtoggle { margin: 0 6px; vertical-align: middle; }
+  .search input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 13px; }
   .search input:focus { border-color: var(--accent); outline: none; }
   .pop { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; margin-top: 5px; background: var(--elev);
     border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); max-height: 240px; overflow: auto; padding: 4px; }
