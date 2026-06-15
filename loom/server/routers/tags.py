@@ -42,7 +42,9 @@ def register(app, ctx):
             per_i = 24
         per_v = None if per_i <= 0 else min(per_i, 200)   # 0/negative → uncapped (full list)
         sim = max(0, min(int(sim), 100))
-        return {"palette": await run_in_threadpool(g.palette, seeds, kind, per_v, sim)}
+        from ...tags.facets import FACET_DESC
+        pal = await run_in_threadpool(g.palette, seeds, kind, per_v, sim)
+        return {"palette": pal, "facets": {f: FACET_DESC.get(f, "") for f in pal}}
 
     @app.get("/api/tags/graph")
     async def tags_graph(tags: str = "", kind: str = "clothing", sim: int = 60):

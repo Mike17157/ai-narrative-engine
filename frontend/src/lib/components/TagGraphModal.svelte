@@ -17,6 +17,7 @@
   let target = $state(null);       // chip selected for replacement (or null = add mode)
   let view = $state('list');       // 'list' (Suggestions) | 'graph'
   let suggestions = $state({});    // { facet: [tag, ...] }
+  let facetDesc = $state({});      // { facet: description }
   let busy = $state(false);
   let length = $state(20);         // per-category display count + AI-regenerate target
   let similarity = $state(60);     // 0 = broad graph search · 100 = tight similarity
@@ -45,8 +46,10 @@
     busy = true;
     // unified view: ALL 18 categories across clothing + appearance, uncapped (per=0); the length
     // slider caps per-category display client-side, similarity zooms relevance.
-    try { const d = await get('/tags/related?kind=all&per=0&sim=' + similarity + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
-    catch { suggestions = {}; }
+    try {
+      const d = await get('/tags/related?kind=all&per=0&sim=' + similarity + '&tags=' + encodeURIComponent(seed));
+      suggestions = d?.palette || {}; facetDesc = d?.facets || {};
+    } catch { suggestions = {}; facetDesc = {}; }
     busy = false;
   }
 
@@ -135,7 +138,7 @@
               <div class="hintbox">Click a tag in the prompt above to explore its graph.</div>
             {/if}
           {:else}
-            <FacetPalette palette={suggestions} per={length} swapLabel={target} {busy} onpick={applyTag} />
+            <FacetPalette palette={suggestions} desc={facetDesc} per={length} swapLabel={target} {busy} onpick={applyTag} />
           {/if}
         </div>
       </div>

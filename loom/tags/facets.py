@@ -36,7 +36,11 @@ FACETS_CLOTHING = [
     ("sleeves", ("sleeves",)),
     ("accessories", ("gloves", "scarf", "necktie", "belt", "choker", "bracelet", "necklace",
                      "earring", "anklet", "wristband", "armband", "jewelry", "bowtie",
-                     "collar", "bag", "glasses", "ribbon", "wings", "bow")),
+                     "collar", "bag", "ribbon", "bow", "detached sleeves")),
+    # underwear is LAST in the clothing list ON PURPOSE: it carries the bare token "bra", and
+    # "accessories" (above) owns "bracelet" — order ensures 'bracelet' resolves before 'bra'.
+    ("underwear", ("panties", "lingerie", "thong", "briefs", "boxers", "bralette", "sports bra",
+                   "underwear", "bra", "loincloth", "garter belt")),
 ]
 FACETS_APPEARANCE = [
     ("hair", ("hair", "bangs", "ahoge", "ponytail", "twintails", "braid", "bun", "sidelocks",
@@ -45,15 +49,39 @@ FACETS_APPEARANCE = [
     ("skin", ("skin",)),
     ("body", ("breasts", "chest", "petite", "slim", "toned", "athletic", "curvy", "plump",
               "muscular", "thighs", "hips", "waist", "navel", "build", "abs", "collarbone")),
-    ("ears_tail", ("animal ears", "cat ears", "fox ears", "dog ears", "rabbit ears", "wolf ears",
-                   "tail", "horns", "halo")),
-    ("face", ("mole", "freckles", "scar", "fang", "makeup", "lipstick", "eyeshadow",
-              "beauty mark", "mustache", "beard", "stubble", "teeth", "glasses")),
+    ("anthro", ("animal ears", "cat ears", "fox ears", "dog ears", "rabbit ears", "wolf ears",
+                "horse ears", "tail", "horns", "halo", "wings", "fur", "claws", "antlers",
+                "scales", "paws", "snout", "whiskers")),
+    ("face", ("mole", "freckles", "scar", "fang", "beauty mark", "mustache", "beard", "stubble",
+              "teeth", "glasses", "dimple")),
 ]
 
 # Unified, distinct categories across BOTH kinds — appearance first, then clothing. First substring
 # match wins, so every tag lands in exactly ONE category. Used by the editor's "all" view.
 FACETS_ALL = FACETS_APPEARANCE + FACETS_CLOTHING
+
+# Human-readable description per region — shown in the editor and used to inform the model.
+FACET_DESC = {
+    "hair": "Hair — colour, length & style",
+    "eyes": "Eyes — colour & shape",
+    "skin": "Skin — tone & texture",
+    "body": "Body — build, proportions, chest, marks",
+    "anthro": "Anthro — animal ears, tail, horns, wings, fur…",
+    "face": "Face — features & marks (mole, scar, glasses…)",
+    "swimwear": "Swimwear — bikinis, one-pieces, trunks",
+    "underwear": "Underwear & lingerie",
+    "dress": "Dress / one-piece — dresses, gowns, leotards, kimono",
+    "top": "Top — upper-body garment",
+    "bottom": "Bottom — skirts, pants, shorts",
+    "outerwear": "Outerwear — jackets, coats, capes, aprons",
+    "legwear": "Legwear — thighhighs, socks, pantyhose",
+    "footwear": "Footwear — boots, shoes, heels",
+    "headwear": "Headwear & hair accessories",
+    "sleeves": "Sleeves — sleeve styles",
+    "accessories": "Accessories — gloves, jewellery, belts, bags",
+    "makeup": "Makeup — lipstick, eyeshadow, nail polish",
+    "piercing": "Piercings",
+}
 
 _FACETSETS = {"appearance": FACETS_APPEARANCE, "clothing": FACETS_CLOTHING, "all": FACETS_ALL}
 
