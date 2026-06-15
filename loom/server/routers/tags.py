@@ -18,10 +18,10 @@ def register(app, ctx):
         return {"tags": ix.search(q or "", limit=n, include_noisy=bool(noisy))}
 
     @app.get("/api/tags/related")
-    async def tags_related(tags: str = "", kind: str = "clothing"):
+    async def tags_related(tags: str = "", kind: str = "clothing", per: int = 24):
         """Navigate the tag similarity graph from comma-separated `tags` and return a faceted palette
-        of correlated/compatible tags (kind='appearance'|'clothing'). Inspection/debug for the
-        graph that powers image-prompt construction."""
+        of correlated/compatible tags (kind='appearance'|'clothing'); `per` = max tags per facet.
+        Powers the prompt-editor suggestions + graph inspection."""
         from fastapi.concurrency import run_in_threadpool
 
         from ...tags import get_graph
@@ -32,7 +32,8 @@ def register(app, ctx):
         if not g.ready:
             return {"palette": {}, "note": "graph not available"}
         kind = "appearance" if kind == "appearance" else "clothing"
-        return {"palette": await run_in_threadpool(g.palette, seeds, kind)}
+        per = max(4, min(int(per or 24), 60))
+        return {"palette": await run_in_threadpool(g.palette, seeds, kind, per)}
 
     @app.get("/api/tags/graph")
     async def tags_graph(tags: str = "", kind: str = "clothing"):

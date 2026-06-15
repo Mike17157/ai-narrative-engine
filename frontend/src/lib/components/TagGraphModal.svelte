@@ -71,7 +71,7 @@
     const seed = tags.join(',');
     if (!seed) { suggestions = {}; return; }
     busy = true;
-    try { const d = await get('/tags/related?kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
+    try { const d = await get('/tags/related?per=44&kind=' + kind + '&tags=' + encodeURIComponent(seed)); suggestions = d?.palette || {}; }
     catch { suggestions = {}; }
     busy = false;
   }
@@ -305,7 +305,7 @@
                 <div class="facet">
                   <div class="fname">{f}</div>
                   <div class="pills">
-                    {#each suggestions[f] as t (t)}<button class="pill" onclick={() => applyTag(t)} title="add">{t}</button>{/each}
+                    {#each suggestions[f].slice(0, length) as t (t)}<button class="pill" onclick={() => applyTag(t)} title="add">{t}</button>{/each}
                   </div>
                 </div>
               {/each}
