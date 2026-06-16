@@ -51,7 +51,7 @@
   },
   "6": {
     "inputs": {
-      "text": "(anime style, cel shading, flat shading, clean lineart, expressive:1.1), {{image}}",
+      "text": "(intricate details, expressive, high-contrast manhwa style:1.1), {{image}}",
       "clip": [
         "303",
         1
@@ -64,7 +64,7 @@
   },
   "7": {
     "inputs": {
-      "text": "embedding:lazyneg, shadow, loli, shota, child, toddler, infant, baby, kid, aged down, childlike, chibi, 3d, cgi, render, photo, realistic, photorealistic, semi-realistic, manhwa, 2.5d, film grain, depth of field, subsurface scattering, text, watermark, low-quality, signature, moire pattern, downsampling, aliasing, blurry, blur, jpeg artifacts, compression artifacts, pixelated, censored, mosaic censoring, bar censor, bloom, deformed hands, deformed fingers, deformed toes, head out of frame, worst quality, low quality, bad hands, cross-eyed, cloned heads",
+      "text": "embedding:lazyneg, shadow, loli, shota, child, toddler, infant, baby, kid, aged down, childlike, chibi, 3d, cgi, render, photo, photorealistic, film grain, subsurface scattering, text, watermark, low-quality, signature, moire pattern, downsampling, aliasing, blurry, blur, jpeg artifacts, compression artifacts, pixelated, censored, mosaic censoring, bar censor, bloom, deformed hands, deformed fingers, deformed toes, head out of frame, worst quality, low quality, bad hands, cross-eyed, cloned heads",
       "clip": [
         "303",
         1
@@ -282,7 +282,7 @@
   "300": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "embedding:lazypos, masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest, anime, anime screencap, 2d, cel shading, flat color, crisp lineart, vibrant colors, clean coloring, official art",
+      "text": "embedding:lazypos, masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest, 2d, vibrant colors, soft shading, smooth coloring, clean lineart",
       "clip": [
         "303",
         1
