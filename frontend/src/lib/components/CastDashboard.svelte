@@ -9,7 +9,7 @@
 
   // cast: [{ character, name, role, primary, hasRef, height, desc, images:[url] }] · onChanged() reloads.
   let { storyKey, cast = [], onChanged = () => {} } = $props();
-  const CANDIDATES = 3;
+  const CANDIDATES = 5;
   const abs = (u) => (u && u.startsWith('/api') ? location.origin + u : u);
   const baseKey = (k) => `dashbase:${k}`;
 
@@ -51,6 +51,23 @@
   $effect(() => { if (cur) loadOutfits(cur.character); });
   const openCharacter = (k) => goto(`/stories/${storyKey}/cast?c=${k}`);
 
+  // ---- base-image style source (default OFF = clean txt2img, no pose copied) ----
+  // When ON, render via the style flow seeded from a chosen image. NOTE: img2img-style copies the
+  // source's POSE; only an IPAdapter style workflow transfers look without composition.
+  let primaryKey = $derived(cast.find((c) => c.primary)?.character || null);
+  let styleSources = $derived(cur ? [
+    ...(primaryKey && primaryKey !== cur.character
+        ? [{ id: 'primary', label: 'Primary style', thumb: abs(`/api/characters/${primaryKey}/reference`),
+             body: { style_from: primaryKey } }] : []),
+    ...((cur.images || []).map((u, i) => ({ id: 'img' + i, label: 'Card art', thumb: abs(u),
+                                            body: { style_url: abs(u) } }))),
+  ] : []);
+  let useStyle = $state(false);
+  let stylePick = $state(null);
+  $effect(() => { cur; useStyle = false; stylePick = null; });                 // reset per character
+  $effect(() => { if (useStyle && !stylePick && styleSources.length) stylePick = styleSources[0].id; });
+  const styleBody = () => (useStyle ? styleSources.find((s) => s.id === stylePick)?.body : null);
+
   // ---- whole-cast jobs (one GenStream at a time) ----------------------------
   let bulkJob = $state(null);
   let bulkTitle = $state('');
@@ -77,12 +94,12 @@
 
   // ---- bulk base-image candidates (review — never auto-saved) ----------------
   let genningAll = $state(false);
-  async function genBase(charKey) {
+  async function genBase(charKey, body = null) {
     const k = baseKey(charKey); rensure(k).cands = []; rensure(k).busy = true; rensure(k).err = null;
     const nm = cast.find((c) => c.character === charKey)?.name || charKey;
     const job = startJob('Base image render', nm, `stories/${storyKey}/cast`, CANDIDATES);
     for (let i = 0; i < CANDIDATES; i++) {
-      const r = await post(`/characters/${charKey}/base-candidate`, {});
+      const r = await post(`/characters/${charKey}/base-candidate`, body || {});
       if (r.ok && r.data?.image) { rensure(k).cands = [...rensure(k).cands, r.data.image]; job.done = i + 1; }
       else { rensure(k).err = r.data?.error || 'render failed'; job.status = 'error'; break; }
     }
@@ -195,9 +212,29 @@
 
           <div class="acts">
             <button class="ghost sm" onclick={() => openCharacter(cur.character)}>Open wardrobe →</button>
-            <button class="ghost sm" onclick={() => genBase(cur.character)} disabled={rget(baseKey(cur.character)).busy}>
-              {rget(baseKey(cur.character)).busy ? 'Rendering…' : '🎨 Base images'}</button>
+            <button class="ghost sm" onclick={() => genBase(cur.character, styleBody())} disabled={rget(baseKey(cur.character)).busy}>
+              {rget(baseKey(cur.character)).busy ? `Rendering ${CANDIDATES}…` : `🎨 Base images (${CANDIDATES})`}</button>
             <button class="ghost sm" onclick={() => toggleRegen(cur.character)}>↻ Regenerate</button>
+          </div>
+
+          <!-- base-image source: default txt2img (clean forward pose); optionally match a style image -->
+          <div class="stylectl">
+            <label class="sw"><input type="checkbox" bind:checked={useStyle} />
+              Match art style from an image <span class="lo">(off = txt2img, clean pose)</span></label>
+            {#if useStyle}
+              {#if styleSources.length}
+                <div class="srcs">
+                  {#each styleSources as s (s.id)}
+                    <button class="src" class:on={stylePick === s.id} onclick={() => (stylePick = s.id)} title={s.label}>
+                      <img src={s.thumb} alt={s.label} /><span>{s.label}</span>
+                    </button>
+                  {/each}
+                </div>
+                <div class="hint">⚠ The configured style flow (<code>sdxl_img2img</code>) re-noises this image, so it tends to copy its POSE. For style without the pose, point the <em>style</em> role at an IPAdapter workflow (e.g. <code>illustrious_style</code>) in Images → Roles.</div>
+              {:else}
+                <div class="hint">No source images available for {cur.name}.</div>
+              {/if}
+            {/if}
           </div>
 
           {#if openRegen === cur.character}
@@ -287,6 +324,18 @@
   .noout { font-size: 11.5px; color: var(--faint); }
 
   .acts { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 2px; }
+  .stylectl { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px dashed var(--border);
+              border-radius: 9px; background: var(--bg); }
+  .sw { display: flex; align-items: center; gap: 7px; font-size: 12px; color: var(--text); cursor: pointer; }
+  .sw input { width: auto; }
+  .sw .lo { color: var(--faint); }
+  .srcs { display: flex; gap: 8px; flex-wrap: wrap; }
+  .src { padding: 0; display: flex; flex-direction: column; gap: 3px; background: none; border: 0; cursor: pointer; box-shadow: none; }
+  .src img { width: 56px; height: 74px; object-fit: cover; border-radius: 7px; border: 2px solid var(--border); display: block; }
+  .src.on img { border-color: var(--accent); }
+  .src span { font-size: 10px; color: var(--muted); text-align: center; }
+  .hint { font-size: 11px; color: var(--faint); line-height: 1.45; }
+  .hint code { font-family: ui-monospace, monospace; font-size: 10.5px; color: var(--muted); }
   .regenbox { display: flex; flex-direction: column; gap: 6px; }
   .fld { width: 100%; padding: 7px 9px; font-size: 12.5px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); resize: vertical; line-height: 1.45; font-family: inherit; }
   .fld:focus { border-color: var(--accent); outline: none; }
