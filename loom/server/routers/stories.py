@@ -568,13 +568,11 @@ def register(app, ctx):
             ctx.reload_settings()
             keep = {source, *created}
             cdir = ctx.char_dir()
-            for m in st.cast:
-                ck = m.character
-                if ck in keep:
-                    continue
-                ch = ctx.base_settings.characters.get(ck)
-                bound = ch and (((ch.fields or {}).get("story") == key) or (ch.fields or {}).get("_generated"))
-                if not bound:
+            # Sweep EVERY character bound to THIS story that isn't part of the new cast — not just the
+            # previous st.cast — so duplicate/orphan members left by earlier or cancelled regenerations
+            # (e.g. a stale 'kaia_nakumura' beside the new 'kaia_nakumura_2') are cleared automatically.
+            for ck, ch in list(ctx.base_settings.characters.items()):
+                if ck in keep or (ch.fields or {}).get("story") != key:
                     continue
                 safe = re.sub(r"[^\w\-]+", "", ck)
                 for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
