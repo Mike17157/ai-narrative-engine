@@ -19,7 +19,9 @@
   const FALLBACK = 168;
   const hOf = (c) => Number(c?.height) || FALLBACK;
   let maxH = $derived(Math.max(172, ...cast.filter((c) => c.hasRef).map(hOf)));
-  const figPct = (c) => ((hOf(c) / maxH) * 96).toFixed(1);
+  // Scale the WHOLE figure by its height ratio (transform, feet-anchored) — robust against the
+  // width/max-width clamp that was collapsing every image to the same height.
+  const figScale = (c) => Math.max(0.7, Math.min(1, hOf(c) / maxH)).toFixed(3);
   const refUrl = (c) => abs(`/api/characters/${c.character}/reference`);
   function ftin(cm) { const t = Math.round(cm / 2.54); return `${Math.floor(t / 12)}'${t % 12}"`; }
   // show PAGE characters at once (feet on one floor, height-scaled); arrows slide the window by one
@@ -176,9 +178,9 @@
                   onclick={() => (selIdx = v.i)} title={v.c.name}>
             <div class="chart">
               {#if v.c.hasRef}
-                <img src={refUrl(v.c)} alt={v.c.name} style="height:{figPct(v.c)}%" />
+                <img src={refUrl(v.c)} alt={v.c.name} style="transform:scale({figScale(v.c)})" />
               {:else}
-                <div class="noimg" style="height:{figPct(v.c)}%">no base</div>
+                <div class="noimg" style="transform:scale({figScale(v.c)})">no base</div>
               {/if}
             </div>
             <span class="cap"><span class="nm">{v.c.name}{#if v.c.primary}<span class="lead">★</span>{/if}</span>
@@ -296,11 +298,13 @@
          background: none; border: 1px solid transparent; border-radius: 10px; cursor: pointer; box-shadow: none; }
   .fig:hover { background: var(--elev-2); filter: none; }
   .fig.sel { background: var(--panel); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-glow); }
-  .chart { width: 100%; height: 210px; display: flex; align-items: flex-end; justify-content: center; border-bottom: 2px solid var(--border); }
+  .chart { width: 100%; height: 210px; display: flex; align-items: flex-end; justify-content: center; border-bottom: 2px solid var(--border); overflow: hidden; }
   .fig.sel .chart { border-bottom-color: var(--accent); }
-  .chart img { width: auto; max-width: 100%; object-fit: contain; object-position: bottom; filter: drop-shadow(0 4px 12px rgba(0,0,0,.45)); }
-  .chart .noimg { width: 70px; display: grid; place-items: center; font-size: 10.5px; color: var(--faint);
-                  border: 1px dashed var(--border); border-radius: 8px; }
+  /* uniform base size; per-character height comes from the inline transform:scale (origin bottom = feet on the floor) */
+  .chart img { height: 96%; width: auto; max-width: 100%; object-fit: contain; object-position: bottom;
+               transform-origin: bottom center; filter: drop-shadow(0 4px 12px rgba(0,0,0,.45)); }
+  .chart .noimg { width: 70px; height: 90%; display: grid; place-items: center; font-size: 10.5px; color: var(--faint);
+                  border: 1px dashed var(--border); border-radius: 8px; transform-origin: bottom center; }
   .cap { text-align: center; line-height: 1.25; }
   .cap .nm { display: block; font-size: 12px; font-weight: 600; color: var(--text); }
   .cap .cm { display: block; font-size: 10.5px; color: var(--accent); font-variant-numeric: tabular-nums; }
