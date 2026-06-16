@@ -6,7 +6,8 @@
 
   // Global Story Builder configuration — the model + system prompt driving each stage
   // of story consolidation and generation. Persisted to configs/story_builder.json.
-  let { charItems = [], modelItems = [] } = $props();
+  // `section` is driven by the left side menu (?section=…); the in-page stage pills are gone.
+  let { section = 'storyboard', charItems = [], modelItems = [] } = $props();
 
   const STAGES = [
     { id: 'storyboard', label: 'Storyboard', note: 'generation — chapters from the card' },
@@ -95,6 +96,8 @@
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 700);
   });
+  // Follow the side-menu section into this component's stage state.
+  $effect(() => { if (section && section !== stage) changeStage(section); });
   const curStage = $derived(STAGES.find((s) => s.id === stage));
 </script>
 
@@ -102,13 +105,7 @@
   <p class="intro">Each stage of story consolidation and generation has its own model, invention level
     and system prompt. Choices are saved for every story; leave a model blank to use the active chat model.</p>
 
-  <label>Stage</label>
-  <div class="stagebtns">
-    {#each STAGES as s}
-      <button class="stbtn" class:on={stage === s.id} onclick={() => changeStage(s.id)}>{s.label}</button>
-    {/each}
-  </div>
-  {#if curStage}<p class="note">{curStage.note}</p>{/if}
+  {#if curStage}<h3 class="shead">{curStage.label}</h3><p class="note">{curStage.note}</p>{/if}
 
   {#if data}
     {#if !data.no_invention}
@@ -165,11 +162,7 @@
   .ivopt { flex: 1; padding: 8px; border-radius: 9px; box-shadow: none; background: var(--bg); border: 1px solid var(--border); color: var(--text); font-size: 13px; font-weight: 600; }
   .ivopt:hover { filter: none; border-color: var(--accent); } .ivopt.on { border-color: var(--accent); background: rgba(124,109,255,.12); }
   .ivopt.sm { padding: 6px; font-size: 12px; }
-  .stagebtns { display: flex; flex-wrap: wrap; gap: 6px; }
-  .stbtn { font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 999px; box-shadow: none;
-    background: var(--bg); border: 1px solid var(--border); color: var(--muted); }
-  .stbtn:hover { color: var(--text); border-color: var(--accent); filter: none; }
-  .stbtn.on { color: #fff; background: rgba(124,109,255,.14); border-color: var(--accent); }
+  .shead { margin: 0 0 2px; font-size: 16px; font-weight: 700; color: var(--text); }
   .note { font-size: 12px; color: var(--faint); margin: 6px 0 0; }
   .prow { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
   .pm { font-size: 12px; color: var(--muted); } .pm.ok { color: var(--good); } .pm.err { color: var(--bad); }

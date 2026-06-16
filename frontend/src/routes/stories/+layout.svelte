@@ -9,6 +9,23 @@
   let { children } = $props();
 
   const TOP = [{ id: 'library', label: 'Library' }, { id: 'config', label: '⚙ Config' }];
+  // ⚙ Config sub-tier: two groups (disabled headers as labels). Generation = text stages
+  // (story_builder.json); Imaging = image-render workflows (image_roles.json). The page picks the
+  // compatible workflow kind per section.
+  const CONFIG_SECTIONS = [
+    { id: '__gen', label: 'Generation', disabled: true },
+    { id: 'storyboard', label: 'Storyboard' },
+    { id: 'locations', label: 'Scenes' },
+    { id: 'characters', label: 'Characters' },
+    { id: 'wardrobe', label: 'Wardrobe' },
+    { id: 'base_image', label: 'Base features' },
+    { id: '__img', label: 'Imaging', disabled: true },
+    { id: 'base', label: 'Base render' },
+    { id: 'style', label: 'Style' },
+    { id: 'sprite', label: 'Sprites' },
+    { id: 'scene', label: 'Scene render' },
+    { id: 'chat', label: 'Chat' },
+  ];
   const SECTIONS = [
     { id: 'overview', label: 'Overview' },
     { id: 'backgrounds', label: 'Backgrounds' },
@@ -36,6 +53,9 @@
 
   // Panel: Library · Config, with the open story's editing sections as the sub-tier. (The wizard
   // shows nothing extra here — it navigates through its own in-page header.)
+  let configSection = $derived(segs[0] === 'config'
+    ? (page.url.searchParams.get('section') || 'storyboard') : null);
+
   $effect(() => {
     let sub = null;
     if (inStory) {
@@ -47,6 +67,11 @@
         onpick: (id) => goto(id === 'cast' ? `/stories/${storyKey}/cast` : `/stories/${storyKey}/${id}`),
         childValue: castChild,
         onpickChild: (cid) => goto(`/stories/${storyKey}/cast?c=${cid}`),
+      };
+    } else if (segs[0] === 'config') {
+      sub = {
+        items: CONFIG_SECTIONS, value: configSection,
+        onpick: (id) => goto(`/stories/config?section=${id}`),
       };
     }
     setSubnav({
