@@ -64,7 +64,7 @@
   },
   "7": {
     "inputs": {
-      "text": "shadow, loli, shota, child, toddler, infant, baby, kid, aged down, childlike, chibi, 3d, cgi, render, photo, photorealistic, film grain, subsurface scattering, text, watermark, low-quality, signature, moire pattern, downsampling, aliasing, blurry, blur, jpeg artifacts, compression artifacts, pixelated, censored, mosaic censoring, bar censor, bloom, deformed hands, deformed fingers, deformed toes, head out of frame, worst quality, low quality, bad hands, cross-eyed, cloned heads",
+      "text": "shadow, loli, shota, child, toddler, infant, baby, kid, aged down, childlike, chibi, 3d, cgi, render, photo, photorealistic, text, watermark, low-quality, signature, moire pattern, downsampling, aliasing, blurry, blur, jpeg artifacts, compression artifacts, pixelated, censored, mosaic censoring, bar censor, bloom, deformed hands, deformed fingers, deformed toes, head out of frame, worst quality, low quality, bad hands, cross-eyed, cloned heads",
       "clip": [
         "303",
         1
@@ -282,7 +282,7 @@
   "300": {
     "class_type": "CLIPTextEncode",
     "inputs": {
-      "text": "masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest, 2d, vibrant colors, soft shading, smooth coloring, clean lineart",
+      "text": "masterpiece, best quality, amazing quality, very aesthetic, absurdres, newest, 4k, high resolution, ultra-detailed, anime, vibrant colors, chromatic aberration, dispersion, volumetric lighting, light particles, subsurface scattering, depth of field",
       "clip": [
         "303",
         1
