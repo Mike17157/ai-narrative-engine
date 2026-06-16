@@ -271,11 +271,12 @@ _APPEARANCE_BLOCK = (
     "sweater", "blazer", "pants", "shorts", "gloves", "boots", "shoes", "socks",
     "wearing", "clothes", "outfit",
     "sitting", "lying", "kneeling", "jumping", "walking", "running", "from above", "from below",
+    "looking",   # gaze is a derived field (see `gaze`) — strip any gaze the prose leaks
 )
 FEATURES_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["count", "apparent_age", "expression", "skin_tone", "pose", "height_cm", "build",
-                 "bust", "distinguishing_feature", "appearance"],
+    "required": ["count", "apparent_age", "expression", "skin_tone", "pose", "gaze", "height_cm",
+                 "build", "bust", "distinguishing_feature", "appearance"],
     "properties": {
         "count": {"type": "string", "enum": ["1girl", "1boy"],
                   "description": "the character's SEX only: 1girl (female) or 1boy (male). "
@@ -312,6 +313,14 @@ FEATURES_SCHEMA = {
                                 "'hand on hip' or 'crossed arms'; shy/formal/reserved -> 'arms "
                                 "behind back'; casual/relaxed -> 'hands in pockets' or "
                                 "'contrapposto'; neutral default -> 'arms at sides'."},
+        "gaze": {"type": "string",
+                 "enum": ["looking at viewer", "looking to the side", "looking away"],
+                 "description":
+                     "where the character's EYES point. DEFAULT to 'looking at viewer' — most "
+                     "characters MEET the viewer's gaze (engaged, present, making eye contact). "
+                     "Choose 'looking to the side' or 'looking away' ONLY for a genuinely shy, timid, "
+                     "demure, aloof or evasive personality. A reference face must NEVER stare blankly "
+                     "at nothing — always commit to a clear gaze."},
         # FORCED, DERIVED body axes — the biggest anti-sameness lever. Free-text body description
         # collapses to "slim, average height" every time; explicit DERIVED picks do not. HEIGHT and
         # FIGURE are SEPARATE so combinations (a short + curvy 'short stack', a tall + slender model)
@@ -385,6 +394,9 @@ FEATURES_SCHEMA = {
 # AND 'small eyes'). Keep only the FIRST seen from each group, drop the rest.
 _EXCLUSIVE_GROUPS = [
     {"small eyes", "large eyes"},
+    # ONE gaze — the derived `gaze` is injected first, so it wins over any framing default
+    {"looking at viewer", "looking to the side", "looking away", "looking afar",
+     "looking up", "looking down", "looking back"},
     {"youthful face", "adult face", "mature face"},
     {"tall", "short", "very short", "average height"},
     # main body build — keep the FIRST the model picks (wide hips / narrow waist may co-exist)
@@ -501,8 +513,13 @@ def _assemble_base_prompt(f: dict) -> str:
     if pose not in ("arms at sides", "hand on hip", "crossed arms", "arms behind back",
                     "hands in pockets", "contrapposto"):
         pose = "arms at sides"
+    # GAZE — default 'looking at viewer' (eye contact); the model picks 'looking away'/'to the side'
+    # only for shy/aloof personas. A reference must never stare blankly at nothing.
+    gaze = (f.get("gaze") or "").strip().lower()
+    if gaze not in ("looking at viewer", "looking to the side", "looking away"):
+        gaze = "looking at viewer"
     # full-body swimwear template framing, on neutral grey (RMBG/Inspyrenet mattes it).
-    parts += [expr, "solo", "full body", "standing", pose, "facing viewer", attire,
+    parts += [expr, gaze, "solo", "full body", "standing", pose, "facing viewer", attire,
               "grey background", "simple background", "full body shot", "head to toe", "feet visible"]
     # normalise underscores → spaces; drop blanks; de-dup; resolve contradictions (keep first).
     seen, used_groups, out = set(), set(), []
