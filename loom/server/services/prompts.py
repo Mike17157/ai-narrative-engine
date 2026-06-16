@@ -274,8 +274,8 @@ _APPEARANCE_BLOCK = (
 )
 FEATURES_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["count", "apparent_age", "expression", "skin_tone", "pose",
-                 "distinguishing_feature", "appearance"],
+    "required": ["count", "apparent_age", "expression", "skin_tone", "pose", "height", "build",
+                 "bust", "distinguishing_feature", "appearance"],
     "properties": {
         "count": {"type": "string", "enum": ["1girl", "1boy"],
                   "description": "the character's SEX only: 1girl (female) or 1boy (male). "
@@ -312,6 +312,37 @@ FEATURES_SCHEMA = {
                                 "'hand on hip' or 'crossed arms'; shy/formal/reserved -> 'arms "
                                 "behind back'; casual/relaxed -> 'hands in pockets' or "
                                 "'contrapposto'; neutral default -> 'arms at sides'."},
+        # FORCED, DERIVED body axes — the biggest anti-sameness lever. Free-text body description
+        # collapses to "slim, average height" every time; explicit DERIVED picks do not. HEIGHT and
+        # FIGURE are SEPARATE so combinations (a short + curvy 'short stack', a tall + slender model)
+        # are reachable. The model must commit and justify by the character's life, not default.
+        "height": {"type": "string", "enum": ["short", "average height", "tall"],
+                   "description":
+                       "the character's STATURE — VARY it across the cast; do NOT make everyone the "
+                       "same height. Derive where it fits (a model / athlete / imposing figure tends "
+                       "'tall'; a cute / doll-like / youthful character 'short'). 'short', 'average "
+                       "height' and 'tall' should ALL appear across a cast — mix them."},
+        "build": {"type": "string",
+                  "enum": ["petite", "slim", "slender", "toned", "athletic",
+                           "curvy", "voluptuous", "plump", "muscular"],
+                  "description":
+                      "the character's FIGURE — DERIVE it from CONCRETE persona facts (age, "
+                      "profession, training, lifestyle, species/role); NEVER just default to slim. "
+                      "Aim for VARIETY across the cast — 'petite', 'curvy', 'voluptuous', 'plump', "
+                      "'slender', 'toned' should all show up. A dancer/runner -> 'toned'/'slender'; a "
+                      "noble/scholar -> 'slim'/'petite'; a hearty cook / earth-mother -> 'plump'/"
+                      "'voluptuous'; a bombshell / pin-up -> 'curvy'/'voluptuous'; a small doll-like "
+                      "character -> 'petite'. 'muscular' is ONLY for male characters or a true female "
+                      "bodybuilder — do NOT make ordinary women muscular. Combine with height for a "
+                      "'short stack' (short + curvy/voluptuous) or a 'tall and slender' look."},
+        "bust": {"type": "string",
+                 "enum": ["flat chest", "small breasts", "medium breasts", "large breasts",
+                          "huge breasts"],
+                 "description":
+                     "chest size, CONSISTENT with the figure + persona (ignored for male/child "
+                     "characters in code). Do NOT default everyone to medium — a petite / athletic / "
+                     "slender frame usually reads small or flat; a curvy / voluptuous / plump one "
+                     "large or huge. Vary it with the build."},
         "distinguishing_feature": {"type": "array", "items": {"type": "string"},
             "minItems": 1, "maxItems": 3,
             "description":
@@ -335,10 +366,12 @@ FEATURES_SCHEMA = {
                            "ponytail+bun+twintails; an afro/dreadlocks/cornrows is an all-over coily "
                            "style, never with bangs or straight/wavy hair); EYES (colour + shape, e.g. "
                            "sharp/tsurime or soft/tareme, eyes OPEN); SKIN texture + any MARKS (freckles, "
-                           "a mole under one eye, a scar across the eye, a tattoo, glasses); BODY (ONE "
-                           "build that FITS the persona — not always slim; name the bust size, e.g. "
-                           "'large breasts'; plus collarbone, wide hips, thick thighs, abs, height as "
-                           "they fit). Write naturally — do NOT worry about tag syntax; the system snaps "
+                           "a mole under one eye, a scar across the eye, a tattoo, glasses); and "
+                           "SECONDARY BODY PROPORTIONS that fit (collarbone, wide hips, narrow waist, "
+                           "thick thighs, toned abs) — but the PRIMARY height, build and chest size are "
+                           "chosen SEPARATELY in the `height`/`build`/`bust` fields, so do NOT restate "
+                           "them here. "
+                           "Write naturally — do NOT worry about tag syntax; the system snaps "
                            "your words to real booru tags. Stay LITERAL: plain colours (not raven/auburn/"
                            "emerald), real features (not 'olive skin' or 'almond eyes'). NO transient "
                            "emotion, clothing, pose, background or scene — those are added separately."},
@@ -428,7 +461,36 @@ def _assemble_base_prompt(f: dict) -> str:
     skin = (f.get("skin_tone") or "").strip().lower()
     if skin not in ("pale skin", "light skin", "tan", "dark skin", "very dark skin"):
         skin = "light skin"
-    parts = [*gender, skin, *face_hooks, *app]
+    # DERIVED BODY AXES (anti-sameness). HEIGHT and FIGURE are independent (separate _EXCLUSIVE_GROUPS)
+    # so they COMBINE — a short + curvy 'short stack', a tall + slender look. Picked before *app so
+    # they win their exclusive groups if the prose leaked a stray body word.
+    body_anchor = []
+    # STATURE — only emit a tag when it's NOT the implicit average (an 'average height' tag is weak
+    # and just noise). Varies proportions in a solo full-body shot; varies true height in scenes.
+    height = (f.get("height") or "").strip().lower()
+    if height in ("short", "tall"):
+        body_anchor.append(height)
+    # FIGURE — default to 'athletic' (NOT 'slim') when missing, the mean we're fighting. 'muscular'
+    # is male-only per the user's aesthetic: clamp a muscular WOMAN to 'athletic'.
+    _BUILDS = ("petite", "slim", "slender", "toned", "athletic", "muscular",
+               "curvy", "voluptuous", "plump")
+    build = (f.get("build") or "").strip().lower()
+    if build not in _BUILDS:
+        build = "athletic"
+    if build == "muscular" and not male:
+        build = "athletic"
+    # MINOR SAFETY: never put an adult/sexualised frame on a child — clamp to a neutral youthful
+    # figure and inject NO bust tag (loli/shota guards also live in the workflow negatives).
+    if minor and build in ("curvy", "voluptuous", "plump", "muscular"):
+        build = "slim"
+    body_anchor.append(build)
+    if not male and not minor:                       # bust only for adult women (males get
+        bust = (f.get("bust") or "").strip().lower() # 'flat chest' from the sex anchor)
+        if bust not in ("flat chest", "small breasts", "medium breasts",
+                        "large breasts", "huge breasts"):
+            bust = "medium breasts"
+        body_anchor.append(bust)
+    parts = [*gender, skin, *body_anchor, *face_hooks, *app]
     # Persistent RESTING expression by personality (NOT 'neutral expression' — a near-dead tag
     # that renders a cold resting-bitch-face). Fall back to a warm 'light smile'; never let a
     # neutral/expressionless value through. Sprites still vary emotion on top of this base.
@@ -468,12 +530,7 @@ def _assemble_base_prompt(f: dict) -> str:
     if low & {"afro", "dreadlocks", "cornrows"}:
         out = [t for t in out if "bangs" not in t.lower()
                and t.lower() not in ("straight hair", "wavy hair")]
-    # Guarantee a bust tag for adult women — the model under-tags it and skews flat by
-    # omission; 'medium breasts' is the natural default (it can still pick small/large above).
-    _BUST = ("flat chest", "small breasts", "medium breasts", "large breasts",
-             "huge breasts", "gigantic breasts")
-    if not male and not minor and not (low & set(_BUST)):
-        out.append("medium breasts")
+    # (Build + bust are now DERIVED, forced enum fields injected above — no blanket default here.)
     # literal-tag normalizer (olive->tan, …), snap to real booru tags (unknowns kept), then split
     # into coarse BREAK regions (subject · appearance · outfit · details) — the going-forward shape.
     return _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(out))))

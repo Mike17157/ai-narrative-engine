@@ -479,10 +479,11 @@ class AppContext:
 
     def compose_base_prompt(self, name: str, persona: str, appearance_notes: str = "",
                             role: str = "", model: str | None = None) -> dict:
-        """THE single appearance authority: FEATURES_SCHEMA draft → co-occurrence enrichment →
-        _assemble_base_prompt. Synchronous (call it inside a threadpool). Used by BOTH the ✨
-        button AND cast generation, so a regenerated cast produces the SAME rich base prompt as
-        the manual button. Returns {prompt, features, companions} or {error}."""
+        """THE single appearance authority: a natural-language physical description (+ DERIVED build/
+        bust and the other structured controls) → an ITERATIVE distinctiveness pass that fights the
+        model's slim/generic mode-collapse → `_assemble_base_prompt` (grounds prose to real tags,
+        applies safety guardrails, regionizes). Synchronous (call inside a threadpool). Used by BOTH
+        the ✨ button AND cast generation. Returns {prompt, features, companions} or {error}."""
         from ..scenario.builder import DEFAULT_SYSTEMS
         cfg = self.load_story_builder()
         provider = self.author_provider(config_files._stage_model(cfg, "base_image", model))
@@ -498,13 +499,32 @@ class AppContext:
         context = ("Fill the feature schema from this character's WRITTEN DESCRIPTION below "
                    "(persona + appearance). Write the `appearance` field as a RICH, natural-language "
                    "physical description — the system grounds it to real booru tags.\n\n" + context)
-        # ONE call: the model writes a natural-language physical description (+ the structured
-        # safety/quality controls), then `_assemble_base_prompt` GROUNDS the prose to real booru
-        # tags (n-gram extraction), applies the sex/age guardrails, and splits into BREAK regions.
+        # PASS 1 — the model writes a natural-language physical description + derives build/bust.
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
         if not feats:
             return {"error": "model returned no structured features "
                              "(author model may not support structured output)"}
+        # PASS 2 — ITERATIVE DISTINCTIVENESS critique. LLMs mode-collapse to a generic slim/pretty
+        # default; a vague "be creative" does nothing. So confront the draft with its OWN choices and
+        # force a persona-justified revision. Cheap insurance against a same-y cast; keep pass 1 on error.
+        critique = (
+            context
+            + f"\n\nYOUR DRAFT:\n- height: {feats.get('height')}\n- build: {feats.get('build')}\n"
+              f"- bust: {feats.get('bust')}\n- appearance: {feats.get('appearance')}\n\n"
+              "CRITIQUE THEN RE-EMIT ALL FIELDS. Be honest: did you reach for a GENERIC slim, "
+              "average-height body and a default pretty-anime face that is NOT specifically justified "
+              "by THIS persona? If so, FIX it. Pick a real silhouette from the range — petite, a short "
+              "and curvy 'short stack', tall and slender, soft and plump, voluptuous — whatever this "
+              "character's age, lifestyle and body genuinely imply, and VARY height (short / average / "
+              "tall) too. Do NOT make ordinary women muscular. Make the face DISTINCTIVE (a feature "
+              "the reader would remember). If the draft is already specific and well-justified, keep "
+              "it. Output the full schema.")
+        try:
+            d2 = provider.generate_text(system=system, prompt=critique, emits=_prompts.FEATURES_SCHEMA).data
+            if d2 and d2.get("appearance") and d2.get("build"):
+                feats = d2
+        except Exception:  # noqa: BLE001 — keep the pass-1 result
+            pass
         return {"prompt": _prompts._assemble_base_prompt(feats), "features": feats, "companions": []}
 
     def compose_expressions(self, persona: str, model: str | None = None) -> dict:
