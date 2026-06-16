@@ -128,15 +128,15 @@ storyboard:
 cast:
 - character: kaia_nakumura_2
   primary: true
-- character: maya_baptiste
+- character: maya_sol_s
   primary: false
-- character: trish_liwanag
+- character: trish_o_malley
   primary: false
-- character: linda_garza
+- character: linda_chen
   primary: false
-- character: darek_kovalenko
+- character: darek_nowak_2
   primary: false
-- character: kofi_van_der_meer
+- character: yuki_nakamura
   primary: false
 lorebook: {}
 locations:
