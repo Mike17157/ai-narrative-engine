@@ -154,7 +154,9 @@
       "Bash(grep -nE \"get\\\\\\(.\\\\/characters.\\\\\\)|@app.get\\\\\\(.*characters|def list_characters|\\\\\"reference\\\\\"|reference:|def _char_dict|to_character|height\" loom/server/routers/characters.py)",
       "Bash(python -c \"import warnings; warnings.filterwarnings\\('ignore'\\); import sys,os; sys.path.insert\\(0,os.getcwd\\(\\)\\); from loom.server import create_app; create_app\\('.'\\); print\\('app loads OK'\\)\")",
       "Bash(grep -nA 12 \"def character_images\" loom/server/context.py)",
-      "Bash(grep -nA 18 \"def role_model\\\\|_role_model\\\\|ROLE_DEFAULT\\\\|def _role\" loom/server/context.py)"
+      "Bash(grep -nA 18 \"def role_model\\\\|_role_model\\\\|ROLE_DEFAULT\\\\|def _role\" loom/server/context.py)",
+      "Bash(grep -nA8 \"def role_default\" loom/server/context.py)",
+      "Bash(grep -nB1 -A20 \"async def _render\\\\b\\\\|def _render\\\\b\" loom/server/routers/characters.py)"
     ]
   }
 }

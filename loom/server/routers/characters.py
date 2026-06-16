@@ -211,14 +211,14 @@ def register(app, ctx):
         provider, model_id = ctx.image_provider(body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        ref = ctx.reference_path(key)
-        # Outfit base is a FULL-BODY whole-look image (not a bust) — see the cast wardrobe flow.
+        # Outfit base is a FULL-BODY whole-look image (not a bust). TXT2IMG by design: identity comes
+        # from the appearance tags in the prompt, NOT img2img off the reference — seeding from the ref
+        # made every outfit inherit the reference's POSE (the bending-over problem).
         render_prompt = f"{prompt}, neutral expression, {_FULLBODY_FRAMING}"
         try:
             from ...comfy.server import get_server
             get_server(provider.base_url).ensure_up()
-            result = provider.generate_image(
-                prompt=render_prompt, init_image=ref.read_bytes() if ref else None)
+            result = provider.generate_image(prompt=render_prompt)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if not result.images:
