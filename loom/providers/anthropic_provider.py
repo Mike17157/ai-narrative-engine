@@ -67,7 +67,7 @@ class AnthropicProvider:
                 messages=messages,
             )
             text = next((b.text for b in resp.content if b.type == "text"), "")
-            data = json.loads(text) if text else {}
+            data = json.loads(text) if (text and text.strip()) else {}
             # Prefer an explicit "reply"/"text" field as the human-facing turn.
             reply = data.get("reply") or data.get("text") or ""
             return TextResult(text=reply, data=data)

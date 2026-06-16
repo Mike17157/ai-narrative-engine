@@ -71,9 +71,9 @@ def _gen_text(provider, system: str, prompt: str, images: list[str] | None = Non
 OUTFIT_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["outfit"],
     "properties": {
-        "outfit": {"type": "array", "items": {"type": "string"}, "minItems": 6, "maxItems": 22,
+        "outfit": {"type": "array", "items": {"type": "string"},
                    "description":
-                       "A LIST of short, EXPLICIT garment/accessory descriptors for ONE complete, "
+                       "A LIST of ~8-18 short, EXPLICIT garment/accessory descriptors for ONE complete, "
                        "DETAILED outfit — generous, never a lazy sketch. NOT prose, NOT sentences. "
                        "RULES:\n"
                        "(1) ONE item per garment or accessory, each a SINGLE concept = colour (and "
@@ -330,7 +330,7 @@ FEATURES_SCHEMA = {
         # collapses to "slim, average height" every time; explicit DERIVED picks do not. HEIGHT and
         # FIGURE are SEPARATE so combinations (a short + curvy 'short stack', a tall + slender model)
         # are reachable. The model must commit and justify by the character's life, not default.
-        "height_cm": {"type": "integer", "minimum": 90, "maximum": 260,
+        "height_cm": {"type": "integer",
                       "description":
                           "the character's height in CENTIMETRES — a REALISTIC number derived from "
                           "sex, age, build and species, and VARIED across the cast (do NOT make "
@@ -361,7 +361,6 @@ FEATURES_SCHEMA = {
                      "slender frame usually reads small or flat; a curvy / voluptuous / plump one "
                      "large or huge. Vary it with the build."},
         "distinguishing_feature": {"type": "array", "items": {"type": "string"},
-            "minItems": 1, "maxItems": 3,
             "description":
                 "1-2 DISTINCTIVE facial identity hooks that make THIS face unmistakable and "
                 "DIFFERENT from the model's default pretty-anime face — the single biggest lever "
@@ -375,9 +374,9 @@ FEATURES_SCHEMA = {
         # ATOMIC QUALIFIED DESCRIPTORS — a constrained list, not prose. Each item is ONE explicit
         # attribute (qualifier + head noun); the system grounds each to a real booru tag. Flexible
         # wording, structured shape, single meaning per item.
-        "appearance": {"type": "array", "items": {"type": "string"}, "minItems": 8, "maxItems": 22,
+        "appearance": {"type": "array", "items": {"type": "string"},
                        "description":
-                           "A LIST of short, EXPLICIT visual descriptors for THIS character's physical "
+                           "A LIST of ~10-20 short, EXPLICIT visual descriptors for THIS character's physical "
                            "look — specific and flattering, what makes them distinct. NOT prose, NOT "
                            "sentences. RULES:\n"
                            "(1) ONE concept per item — a head noun with its qualifier(s) for a SINGLE "

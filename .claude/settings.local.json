@@ -156,7 +156,8 @@
       "Bash(grep -nA 12 \"def character_images\" loom/server/context.py)",
       "Bash(grep -nA 18 \"def role_model\\\\|_role_model\\\\|ROLE_DEFAULT\\\\|def _role\" loom/server/context.py)",
       "Bash(grep -nA8 \"def role_default\" loom/server/context.py)",
-      "Bash(grep -nB1 -A20 \"async def _render\\\\b\\\\|def _render\\\\b\" loom/server/routers/characters.py)"
+      "Bash(grep -nB1 -A20 \"async def _render\\\\b\\\\|def _render\\\\b\" loom/server/routers/characters.py)",
+      "Bash(grep -nA25 \"^def _call\" loom/scenario/builder.py)"
     ]
   }
 }

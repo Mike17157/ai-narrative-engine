@@ -535,8 +535,12 @@ def register(app, ctx):
                 if cancelled():
                     return (pid, "")
                 emit({"type": "phase", "label": f"Rendering appearance — {p.get('name', '?')}"})
-                r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
-                                         p.get("appearance", ""), p.get("role", ""))
+                try:
+                    r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
+                                             p.get("appearance", ""), p.get("role", ""))
+                except Exception as exc:  # noqa: BLE001 — one character must not sink the whole regen
+                    emit({"type": "phase", "label": f"{p.get('name', '?')}: appearance failed ({exc})"})
+                    return (pid, "")
                 bp = r.get("prompt", "") if isinstance(r, dict) else ""
                 if isinstance(r, dict):
                     h = (r.get("features") or {}).get("height_cm")

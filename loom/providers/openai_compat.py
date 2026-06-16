@@ -94,7 +94,7 @@ class OpenAICompatProvider:
                 if resp.status_code >= 400:
                     raise RuntimeError(self._err(resp))
                 content = resp.json()["choices"][0]["message"]["content"]
-                data = json.loads(content) if content else {}
+                data = json.loads(content) if (content and content.strip()) else {}
                 return TextResult(text=data.get("reply") or data.get("text") or "", data=data)
 
             # Streaming structured: stream the JSON tokens (so a UI can watch it form), accumulate,
@@ -123,7 +123,7 @@ class OpenAICompatProvider:
                         on_delta(delta)
             content = "".join(chunks)
             try:
-                data = json.loads(content) if content else {}
+                data = json.loads(content) if (content and content.strip()) else {}
             except json.JSONDecodeError:
                 # streamed JSON arrived malformed/truncated — fall back to one clean blocking call
                 body.pop("stream", None)
@@ -131,7 +131,7 @@ class OpenAICompatProvider:
                 if resp.status_code >= 400:
                     raise RuntimeError(self._err(resp))
                 content = resp.json()["choices"][0]["message"]["content"]
-                data = json.loads(content) if content else {}
+                data = json.loads(content) if (content and content.strip()) else {}
             return TextResult(text=data.get("reply") or data.get("text") or "", data=data)
 
         # Streaming path.

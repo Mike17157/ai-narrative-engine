@@ -505,8 +505,15 @@ class AppContext:
                    "(persona + appearance). Give `appearance` as a LIST of short, explicit, ATOMIC "
                    "descriptors (one attribute each) — the system grounds each to a real booru tag.\n\n"
                    + context)
-        # PASS 1 — the model writes a natural-language physical description + derives build/bust.
-        feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
+        # PASS 1 — the model lists atomic appearance descriptors + derives build/bust/height. Retry
+        # once on an empty result (structured output occasionally returns empty/whitespace), and never
+        # let a provider/parse hiccup raise out of here — it would crash the whole cast job.
+        def _gen_feats():
+            return (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
+        try:
+            feats = _gen_feats() or _gen_feats()
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"appearance generation failed: {exc}"}
         if not feats:
             return {"error": "model returned no structured features "
                              "(author model may not support structured output)"}
