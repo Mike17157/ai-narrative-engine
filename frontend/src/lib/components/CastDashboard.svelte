@@ -6,6 +6,7 @@
   import { askConfirm } from '$lib/confirm.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import GenStream from '$lib/components/GenStream.svelte';
+  import CastHeightLineup from '$lib/components/CastHeightLineup.svelte';
 
   // cast: [{ character, name, role, hasRef, images:[url] }] · onChanged() reloads story+chars.
   let { storyKey, cast = [], onChanged = () => {} } = $props();
@@ -101,6 +102,8 @@
   {#if bulkErr}<div class="err">⚠ {bulkErr}</div>{/if}
   {#if bulkJob}<GenStream jobId={bulkJob} title={bulkTitle} onError={(m) => { bulkErr = m; bulkFailed = true; }} onDone={onBulkDone} />{/if}
   {#if regenErr}<div class="err">⚠ {regenErr}</div>{/if}
+
+  <CastHeightLineup {cast} />
 
   <div class="grid">
     {#each cast as c (c.character)}

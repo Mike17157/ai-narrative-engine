@@ -152,7 +152,8 @@
       "Bash(git -c 'user.name=Loom Dev' -c user.email=michael.codeguy@gmail.com commit -q -m 'feat\\(gen\\): make prose->extract->coarse-BREAK regions the DEFAULT prompt generation *)",
       "Bash(git -c user.name='Loom Dev' -c user.email='michael.codeguy@gmail.com' commit -q -F -)",
       "Bash(grep -nE \"get\\\\\\(.\\\\/characters.\\\\\\)|@app.get\\\\\\(.*characters|def list_characters|\\\\\"reference\\\\\"|reference:|def _char_dict|to_character|height\" loom/server/routers/characters.py)",
-      "Bash(python -c \"import warnings; warnings.filterwarnings\\('ignore'\\); import sys,os; sys.path.insert\\(0,os.getcwd\\(\\)\\); from loom.server import create_app; create_app\\('.'\\); print\\('app loads OK'\\)\")"
+      "Bash(python -c \"import warnings; warnings.filterwarnings\\('ignore'\\); import sys,os; sys.path.insert\\(0,os.getcwd\\(\\)\\); from loom.server import create_app; create_app\\('.'\\); print\\('app loads OK'\\)\")",
+      "Bash(grep -nA 12 \"def character_images\" loom/server/context.py)"
     ]
   }
 }
