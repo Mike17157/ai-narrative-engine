@@ -15,7 +15,6 @@
 
   // ---- carousel: pick a character; the strip shows the cast height-scaled (feet on one floor) ----
   let selIdx = $state(0);
-  let figEls = $state([]);
   let cur = $derived(cast[selIdx] || null);
   const FALLBACK = 168;
   const hOf = (c) => Number(c?.height) || FALLBACK;
@@ -23,17 +22,18 @@
   const figPct = (c) => ((hOf(c) / maxH) * 96).toFixed(1);
   const refUrl = (c) => abs(`/api/characters/${c.character}/reference`);
   function ftin(cm) { const t = Math.round(cm / 2.54); return `${Math.floor(t / 12)}'${t % 12}"`; }
-  function go(n) { if (!cast.length) return; selIdx = (selIdx + n + cast.length) % cast.length; }
+  // show PAGE characters at once (feet on one floor, height-scaled); arrows slide the window by one
+  const PAGE = 4;
+  let winStart = $state(0);
+  let maxStart = $derived(Math.max(0, cast.length - PAGE));
+  let visible = $derived(cast.map((c, i) => ({ c, i })).slice(winStart, winStart + PAGE));
+  function slide(n) { winStart = Math.min(maxStart, Math.max(0, winStart + n)); }
   function onKey(e) {
     if (e.target?.tagName === 'TEXTAREA' || e.target?.tagName === 'INPUT') return;
-    if (e.key === 'ArrowLeft') go(-1); else if (e.key === 'ArrowRight') go(1);
+    if (e.key === 'ArrowLeft') slide(-1); else if (e.key === 'ArrowRight') slide(1);
   }
-  // keep selection valid across reloads; center the selected figure in the strip
   $effect(() => { if (selIdx >= cast.length) selIdx = Math.max(0, cast.length - 1); });
-  $effect(() => {
-    const el = figEls[selIdx];
-    if (el?.scrollIntoView) el.scrollIntoView({ inline: 'center', block: 'nearest', behavior: 'smooth' });
-  });
+  $effect(() => { if (winStart > maxStart) winStart = maxStart; });
 
   // ---- outfits for the selected character (lazy) — the "outfit carousel" ----
   let outfits = $state({});   // char key -> [{ id, name, thumb }]
@@ -168,24 +168,25 @@
   {:else}
     <!-- height-scaled character carousel: arrows + click to select -->
     <div class="carousel">
-      <button class="nav" onclick={() => go(-1)} disabled={cast.length < 2} aria-label="Previous">‹</button>
+      <button class="nav" onclick={() => slide(-1)} disabled={winStart === 0} aria-label="Previous">‹</button>
       <div class="strip">
-        {#each cast as c, i (c.character)}
-          <button class="fig" class:sel={i === selIdx} class:primary={c.primary}
-                  bind:this={figEls[i]} onclick={() => (selIdx = i)} title={c.name}>
+        {#each visible as v (v.c.character)}
+          <button class="fig" class:sel={v.i === selIdx} class:primary={v.c.primary}
+                  onclick={() => (selIdx = v.i)} title={v.c.name}>
             <div class="chart">
-              {#if c.hasRef}
-                <img src={refUrl(c)} alt={c.name} style="height:{figPct(c)}%" />
+              {#if v.c.hasRef}
+                <img src={refUrl(v.c)} alt={v.c.name} style="height:{figPct(v.c)}%" />
               {:else}
-                <div class="noimg" style="height:{figPct(c)}%">no base</div>
+                <div class="noimg" style="height:{figPct(v.c)}%">no base</div>
               {/if}
             </div>
-            <span class="cap"><span class="nm">{c.name}{#if c.primary}<span class="lead">★</span>{/if}</span>
-              <span class="cm">{Number(c.height) ? `${c.height} cm · ${ftin(c.height)}` : '—'}</span></span>
+            <span class="cap"><span class="nm">{v.c.name}{#if v.c.primary}<span class="lead">★</span>{/if}</span>
+              <span class="cm">{Number(v.c.height) ? `${v.c.height} cm · ${ftin(v.c.height)}` : '—'}</span></span>
           </button>
         {/each}
       </div>
-      <button class="nav" onclick={() => go(1)} disabled={cast.length < 2} aria-label="Next">›</button>
+      <button class="nav" onclick={() => slide(1)} disabled={winStart >= maxStart} aria-label="Next">›</button>
+      {#if cast.length > PAGE}<div class="pageind">{winStart + 1}–{Math.min(winStart + PAGE, cast.length)} of {cast.length}</div>{/if}
     </div>
 
     <!-- selected character — description + outfits + every grid-card action -->
@@ -282,20 +283,21 @@
   .empty { font-size: 13px; color: var(--muted); padding: 24px; text-align: center; }
 
   /* ---- carousel strip (height-scaled, feet on one floor) ---- */
-  .carousel { display: flex; align-items: stretch; gap: 6px; background: var(--elev); border: 1px solid var(--border);
+  .carousel { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; background: var(--elev); border: 1px solid var(--border);
               border-radius: 12px; padding: 10px 6px; }
+  .pageind { flex-basis: 100%; text-align: center; font-size: 10.5px; color: var(--faint); margin-top: 2px; }
   .nav { flex: 0 0 auto; width: 34px; align-self: center; font-size: 22px; line-height: 1; padding: 10px 0;
          border-radius: 9px; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); box-shadow: none; }
   .nav:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); filter: none; }
   .nav:disabled { opacity: .35; }
-  .strip { flex: 1; display: flex; align-items: flex-end; gap: 12px; overflow-x: auto; padding: 0 6px 2px; scroll-padding-inline: 40px; }
-  .fig { flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 8px 4px;
+  .strip { flex: 1; min-width: 0; display: flex; align-items: flex-end; justify-content: center; gap: 10px; padding: 0 6px 2px; }
+  .fig { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 6px 8px 4px;
          background: none; border: 1px solid transparent; border-radius: 10px; cursor: pointer; box-shadow: none; }
   .fig:hover { background: var(--elev-2); filter: none; }
   .fig.sel { background: var(--panel); border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-glow); }
-  .chart { height: 210px; display: flex; align-items: flex-end; justify-content: center; border-bottom: 2px solid var(--border); }
+  .chart { width: 100%; height: 210px; display: flex; align-items: flex-end; justify-content: center; border-bottom: 2px solid var(--border); }
   .fig.sel .chart { border-bottom-color: var(--accent); }
-  .chart img { width: auto; object-fit: contain; filter: drop-shadow(0 4px 12px rgba(0,0,0,.45)); }
+  .chart img { width: auto; max-width: 100%; object-fit: contain; object-position: bottom; filter: drop-shadow(0 4px 12px rgba(0,0,0,.45)); }
   .chart .noimg { width: 70px; display: grid; place-items: center; font-size: 10.5px; color: var(--faint);
                   border: 1px dashed var(--border); border-radius: 8px; }
   .cap { text-align: center; line-height: 1.25; }

@@ -540,6 +540,10 @@ def register(app, ctx):
                 r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
                                          p.get("appearance", ""), p.get("role", ""))
                 bp = r.get("prompt", "") if isinstance(r, dict) else ""
+                if isinstance(r, dict):
+                    h = (r.get("features") or {}).get("height_cm")
+                    if h:
+                        p["height_cm"] = h        # same dict write_npc persists -> fields.height_cm
                 if bp:
                     emit({"type": "item", "name": p.get("name", "?"), "text": bp})
                 return (pid, bp)
