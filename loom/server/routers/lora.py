@@ -84,64 +84,6 @@ def register(app, ctx):
         prompts = [p for p in (res.data.get("prompts") or []) if isinstance(p, str) and p.strip()]
         return {"prompts": prompts[: body.count]}
 
-    # Random characters sampled straight from danbooru_character.csv — no LLM.
-    # Bias toward characters with enough solo posts that the base model knows
-    # them, then drop each into a varied scene/lighting/framing.
-    _DAN_SCENES = [
-        "concert stage", "bamboo forest at night", "manor garden", "snowy forest",
-        "rocky wasteland", "fountain plaza", "ruined city wall", "ancient overgrown ruins",
-        "ship deck", "dim library", "sunset clubroom", "golden wheat field",
-        "misty battlefield meadow", "city street at dusk", "student council room",
-        "flower field", "wisteria garden", "training grounds", "guild hall",
-        "riverside town", "desert highway", "laboratory interior", "cozy kitchen",
-        "empty classroom", "rooftop at night", "seaside cliff", "autumn shrine path",
-        "neon alley", "cherry blossom courtyard", "mountain lake",
-    ]
-    _DAN_LIGHT = [
-        "neon stage lighting", "moonlight", "soft morning light", "pale winter light",
-        "dramatic glow", "bright daylight", "overcast light", "soft mystical light",
-        "tropical sunlight", "lamplight", "warm window light", "golden hour",
-        "dawn light", "blue hour", "candlelight", "dappled light", "torchlight",
-        "clear daylight", "harsh sun", "cool lab light",
-    ]
-    _DAN_FRAME = ["upper body", "full body", "cowboy shot", "portrait", "dynamic pose"]
-
-    @app.post("/api/lora/danbooru")
-    def lora_danbooru(body: dict):
-        import csv as _csv
-        import random as _random
-
-        count = max(1, min(int((body or {}).get("count") or 30), 200))
-        min_solo = int((body or {}).get("min_solo") or 400)
-        path = ctx.root / "danbooru_character.csv"
-        if not path.is_file():
-            return JSONResponse({"error": "danbooru_character.csv not found in project root"}, status_code=404)
-
-        pool: list[str] = []
-        with path.open(encoding="utf-8", newline="") as fh:
-            for r_ in _csv.DictReader(fh):
-                try:
-                    if int(r_.get("solo_count") or 0) < min_solo:
-                        continue
-                except ValueError:
-                    continue
-                trig = (r_.get("trigger") or "").strip()
-                if trig:
-                    pool.append(trig)
-        if not pool:
-            return JSONResponse({"error": f"no characters with solo_count ≥ {min_solo}"}, status_code=400)
-
-        def esc(t: str) -> str:
-            return t.replace("(", "\\(").replace(")", "\\)")
-
-        picks = _random.sample(pool, min(count, len(pool)))
-        prompts = [
-            f"{esc(t)}, solo, {_random.choice(_DAN_SCENES)}, "
-            f"{_random.choice(_DAN_LIGHT)}, {_random.choice(_DAN_FRAME)}"
-            for t in picks
-        ]
-        return {"prompts": prompts, "name": "random danbooru prompt"}
-
     @app.post("/api/lora/generate")
     async def lora_generate(body: LoraGenRequest):
         from fastapi.concurrency import run_in_threadpool

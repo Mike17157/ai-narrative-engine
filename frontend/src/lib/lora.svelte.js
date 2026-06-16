@@ -9,7 +9,6 @@ export const lora = $state({
   sets: [], curSet: '', newSetName: '',
   promptsText: '', variations: 5,
   genCount: 60, genTheme: 'anime characters, diverse scenes, varied lighting', genBusy: false, genMsg: null,
-  danCount: 30, danBusy: false,
   zoom: null, // { src, cap } — enlarged image lightbox
   rows: [], progress: { done: 0, total: 0 }, busy: false, cancelling: false, jobStatus: null,
   baseModel: '', saveName: 'my-lora-set', saveMsg: null, choices: {}
@@ -39,17 +38,6 @@ export async function fillFromTheme() {
   if (r.data?.prompts) { lora.promptsText = r.data.prompts.join('\n'); lora.genMsg = { ok: true, text: `✓ ${r.data.prompts.length} prompts` }; }
   else lora.genMsg = { err: true, text: r.data?.error || 'failed' };
 }
-export async function fillFromDanbooru() {
-  lora.danBusy = true; lora.genMsg = { text: 'Sampling characters…' };
-  const r = await post('/lora/danbooru', { count: lora.danCount });
-  lora.danBusy = false;
-  if (r.data?.prompts) {
-    lora.promptsText = r.data.prompts.join('\n');
-    if (!lora.newSetName) lora.newSetName = r.data.name || 'random danbooru prompt';
-    lora.genMsg = { ok: true, text: `✓ ${r.data.prompts.length} random characters` };
-  } else lora.genMsg = { err: true, text: r.data?.error || 'failed' };
-}
-
 export async function genImages() {
   const ps = promptList();
   if (!ps.length || !app.activeImage) return;

@@ -1,6 +1,6 @@
 <script>
   import { app } from '$lib/app.svelte.js';
-  import { lora, promptList, loadSet, saveAsSet, fillFromTheme, fillFromDanbooru, genImages } from '$lib/lora.svelte.js';
+  import { lora, promptList, loadSet, saveAsSet, fillFromTheme, genImages } from '$lib/lora.svelte.js';
   import Combobox from '$lib/components/Combobox.svelte';
 
   let setItems = $derived(lora.sets.map((s) => ({ value: s, label: s })));
@@ -25,12 +25,6 @@
   <input type="number" bind:value={lora.genCount} min="1" style="width:70px" title="count" />
   <input bind:value={lora.genTheme} placeholder="theme…" style="flex:1" />
   <button class="ghost sm" onclick={fillFromTheme} disabled={lora.genBusy}>Generate</button>
-</div>
-<div class="helper">
-  <span class="hlbl">Random Danbooru characters:</span>
-  <input type="number" bind:value={lora.danCount} min="1" max="200" style="width:70px" title="how many" />
-  <span class="hint" style="flex:1">sampled from the local CSV (known characters, varied scenes)</span>
-  <button class="ghost sm" onclick={fillFromDanbooru} disabled={lora.danBusy}>Generate</button>
 </div>
 {#if lora.genMsg}<div class:ok={lora.genMsg.ok} class:err={lora.genMsg.err} style="font-size:12.5px;margin-top:6px">{lora.genMsg.text}</div>{/if}
 

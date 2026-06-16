@@ -180,3 +180,17 @@ models:
           field: text
       output_node: '9'
       timeout_s: 300
+
+  # duplicated from illustrious_monster
+  illustrious_v3:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/illustrious_v3_api.json
+      inputs:
+        positive:
+          node: '6'
+          field: text
+      output_node: '201'
+      timeout_s: 600
