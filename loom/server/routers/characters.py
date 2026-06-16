@@ -632,6 +632,23 @@ def register(app, ctx):
             (body or {}).get("model")))
         if "error" in out:
             return JSONResponse({"error": out["error"]}, status_code=500)
+        # Persist the derived numeric stature (used for sprite scaling, not a prompt tag) so it
+        # survives regardless of how the UI saves the prompt. Best-effort YAML field update.
+        height_cm = (out.get("features") or {}).get("height_cm")
+        if height_cm:
+            try:
+                from ...config.schema import Character
+                safe = re.sub(r"[^\w\-]+", "", key)
+                path = ctx.char_dir() / f"{safe}.yaml"
+                if path.is_file():
+                    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                    data.setdefault("fields", {})["height_cm"] = int(height_cm)
+                    Character(**data)  # validate
+                    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                                    encoding="utf-8")
+                    ctx.reload_settings()
+            except Exception:  # noqa: BLE001 — never sink the response over a metadata write
+                pass
         return out
 
     @app.post("/api/characters/{key}/base-candidate")

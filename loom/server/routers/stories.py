@@ -266,15 +266,20 @@ def register(app, ctx):
                 try:
                     r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
                                              p.get("appearance", ""), p.get("role", ""))
-                    return (idx, r.get("prompt", "") if isinstance(r, dict) else "")
+                    if not isinstance(r, dict):
+                        return (idx, "", None)
+                    return (idx, r.get("prompt", ""), (r.get("features") or {}).get("height_cm"))
                 except Exception:  # noqa: BLE001
-                    return (idx, "")
+                    return (idx, "", None)
 
             with ThreadPoolExecutor(max_workers=min(len(cast), 6)) as ex:
-                bps = dict(ex.map(_bp, list(enumerate(cast))))
+                bps = {idx: (pr, h) for idx, pr, h in ex.map(_bp, list(enumerate(cast)))}
             for idx, member in enumerate(cast):
-                if bps.get(idx):
-                    member["base_prompt"] = bps[idx]
+                pr, h = bps.get(idx, ("", None))
+                if pr:
+                    member["base_prompt"] = pr
+                if h:
+                    member["height_cm"] = h
             return {"cast": cast}
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
@@ -346,18 +351,24 @@ def register(app, ctx):
             idx, p = item
             existing = (p.get("base_prompt") or "").strip()
             if existing:
-                return (idx, existing)
+                return (idx, existing, p.get("height_cm"))
             try:
                 r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
                                          p.get("appearance", ""), p.get("role", ""))
-                return (idx, r.get("prompt", "") if isinstance(r, dict) else "")
+                if not isinstance(r, dict):
+                    return (idx, "", p.get("height_cm"))
+                return (idx, r.get("prompt", ""),
+                        (r.get("features") or {}).get("height_cm") or p.get("height_cm"))
             except Exception:  # noqa: BLE001
-                return (idx, "")
+                return (idx, "", p.get("height_cm"))
 
         bps: dict[int, str] = {}
         if cast_in:
             with ThreadPoolExecutor(max_workers=min(len(cast_in), 6)) as ex:
-                bps = dict(ex.map(_bp, list(enumerate(cast_in))))
+                for idx, pr, h in ex.map(_bp, list(enumerate(cast_in))):
+                    bps[idx] = pr
+                    if h:
+                        cast_in[idx]["height_cm"] = h   # so write_npc persists it
 
         # Write EVERY member through the SAME _write_npc path. The protagonist differs only by
         # carrying the source card's reference image (ref_from) and the `primary` flag — exactly one
@@ -832,7 +843,8 @@ def register(app, ctx):
             comp = ctx.compose_base_prompt(revised["name"], revised["persona"],
                                         revised["appearance"], revised["role"])
             base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
-            # 3. Persist the rewritten card (name / persona / role / appearance + base_prompt).
+            height_cm = (comp.get("features") or {}).get("height_cm") if isinstance(comp, dict) else None
+            # 3. Persist the rewritten card (name / persona / role / appearance + base_prompt + height).
             safe = re.sub(r"[^\w\-]+", "", char_key)
             path = ctx.char_dir() / f"{safe}.yaml"
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -840,6 +852,11 @@ def register(app, ctx):
             data["system"] = revised["persona"]
             data["fields"] = {**(data.get("fields") or {}), "role": revised["role"],
                               "appearance": revised["appearance"], "base_prompt": base_prompt}
+            try:
+                if height_cm:
+                    data["fields"]["height_cm"] = int(height_cm)
+            except (TypeError, ValueError):
+                pass
             from ...config.schema import Character
             Character(**data)  # validate
             path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")

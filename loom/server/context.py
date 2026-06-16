@@ -392,6 +392,11 @@ class AppContext:
                   "story": story_key, "_generated": True}
         if base_prompt:
             fields["base_prompt"] = base_prompt
+        try:                                              # numeric stature → sprite scaling (not a tag)
+            if npc.get("height_cm"):
+                fields["height_cm"] = int(npc["height_cm"])
+        except (TypeError, ValueError):
+            pass
         cdata = {
             "name": npc.get("name") or key,
             "system": npc.get("persona") or "",

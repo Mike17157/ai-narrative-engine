@@ -274,7 +274,7 @@ _APPEARANCE_BLOCK = (
 )
 FEATURES_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["count", "apparent_age", "expression", "skin_tone", "pose", "height", "build",
+    "required": ["count", "apparent_age", "expression", "skin_tone", "pose", "height_cm", "build",
                  "bust", "distinguishing_feature", "appearance"],
     "properties": {
         "count": {"type": "string", "enum": ["1girl", "1boy"],
@@ -316,12 +316,15 @@ FEATURES_SCHEMA = {
         # collapses to "slim, average height" every time; explicit DERIVED picks do not. HEIGHT and
         # FIGURE are SEPARATE so combinations (a short + curvy 'short stack', a tall + slender model)
         # are reachable. The model must commit and justify by the character's life, not default.
-        "height": {"type": "string", "enum": ["short", "average height", "tall"],
-                   "description":
-                       "the character's STATURE — VARY it across the cast; do NOT make everyone the "
-                       "same height. Derive where it fits (a model / athlete / imposing figure tends "
-                       "'tall'; a cute / doll-like / youthful character 'short'). 'short', 'average "
-                       "height' and 'tall' should ALL appear across a cast — mix them."},
+        "height_cm": {"type": "integer", "minimum": 90, "maximum": 260,
+                      "description":
+                          "the character's height in CENTIMETRES — a REALISTIC number derived from "
+                          "sex, age, build and species, and VARIED across the cast (do NOT make "
+                          "everyone the same). Rough human ranges: adult women ~150-178, adult men "
+                          "~165-195, a petite/doll-like adult ~148-156, a tall/imposing one 180+; "
+                          "children scale by age; non-human species may exceed these. This is used to "
+                          "SCALE the sprite (compositing), NOT as an image tag — give an honest "
+                          "number, and make a cast genuinely span short to tall."},
         "build": {"type": "string",
                   "enum": ["petite", "slim", "slender", "toned", "athletic",
                            "curvy", "voluptuous", "plump", "muscular"],
@@ -368,9 +371,9 @@ FEATURES_SCHEMA = {
                            "sharp/tsurime or soft/tareme, eyes OPEN); SKIN texture + any MARKS (freckles, "
                            "a mole under one eye, a scar across the eye, a tattoo, glasses); and "
                            "SECONDARY BODY PROPORTIONS that fit (collarbone, wide hips, narrow waist, "
-                           "thick thighs, toned abs) — but the PRIMARY height, build and chest size are "
-                           "chosen SEPARATELY in the `height`/`build`/`bust` fields, so do NOT restate "
-                           "them here. "
+                           "thick thighs, toned abs) — but the PRIMARY build and chest size are chosen "
+                           "SEPARATELY in the `build`/`bust` fields and height in `height_cm`, so do "
+                           "NOT restate them here. "
                            "Write naturally — do NOT worry about tag syntax; the system snaps "
                            "your words to real booru tags. Stay LITERAL: plain colours (not raven/auburn/"
                            "emerald), real features (not 'olive skin' or 'almond eyes'). NO transient "
@@ -461,15 +464,11 @@ def _assemble_base_prompt(f: dict) -> str:
     skin = (f.get("skin_tone") or "").strip().lower()
     if skin not in ("pale skin", "light skin", "tan", "dark skin", "very dark skin"):
         skin = "light skin"
-    # DERIVED BODY AXES (anti-sameness). HEIGHT and FIGURE are independent (separate _EXCLUSIVE_GROUPS)
-    # so they COMBINE — a short + curvy 'short stack', a tall + slender look. Picked before *app so
-    # they win their exclusive groups if the prose leaked a stray body word.
+    # DERIVED FIGURE (anti-sameness). The body description collapses to "slim" without an explicit,
+    # persona-justified pick. (Absolute HEIGHT is NOT a tag — it can't render in a solo full-body
+    # shot; it's captured as numeric `height_cm` metadata and applied by sprite scaling at composite
+    # time.) Picked before *app so it wins its _EXCLUSIVE_GROUP if the prose leaked a stray body word.
     body_anchor = []
-    # STATURE — only emit a tag when it's NOT the implicit average (an 'average height' tag is weak
-    # and just noise). Varies proportions in a solo full-body shot; varies true height in scenes.
-    height = (f.get("height") or "").strip().lower()
-    if height in ("short", "tall"):
-        body_anchor.append(height)
     # FIGURE — default to 'athletic' (NOT 'slim') when missing, the mean we're fighting. 'muscular'
     # is male-only per the user's aesthetic: clamp a muscular WOMAN to 'athletic'.
     _BUILDS = ("petite", "slim", "slender", "toned", "athletic", "muscular",

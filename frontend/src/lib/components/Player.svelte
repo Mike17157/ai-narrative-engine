@@ -10,7 +10,19 @@
   let names = $state({});      // char key -> name
   let refs = $state({});       // char key -> reference image url
   let sprites = $state({});    // char key -> { emotion -> url }
+  let heights = $state({});    // char key -> height_cm (for sprite scaling)
   let bust = 0;
+
+  // Stature → sprite scale. Height can't render in a solo full-body sprite (it fills the frame),
+  // so it's stored as height_cm metadata and applied HERE: a taller character's sprite is drawn
+  // taller, feet bottom-aligned on the shared floor. 172cm ≈ the 96% baseline; clamped so a child
+  // isn't invisible and a giant doesn't overflow. Missing height → baseline.
+  const REF_CM = 172, BASE = 96;
+  function spriteH(k) {
+    const h = Number(heights[k]);
+    if (!h) return BASE;
+    return (BASE * Math.max(0.72, Math.min(1.14, h / REF_CM))).toFixed(1);
+  }
 
   let history = $state([]);    // { role:'user'|'assistant', text }
   let scene = $state({ location: null, present: [], emotions: {}, movement: false });
@@ -23,7 +35,11 @@
     for (const l of story.locations) locs[l.id] = { name: l.name, description: l.description, background: l.background };
     scene.location = story.start || story.locations[0]?.id || null;
     const all = await get('/characters');
-    for (const c of all) { names[c.key] = c.name; if (c.reference) refs[c.key] = c.reference; }
+    for (const c of all) {
+      names[c.key] = c.name;
+      if (c.reference) refs[c.key] = c.reference;
+      if (c.fields?.height_cm) heights[c.key] = c.fields.height_cm;
+    }
     for (const m of story.cast) {
       try {
         const p = await get(`/characters/${m.character}/portraits`);
@@ -72,7 +88,7 @@
     <div class="cast">
       {#each scene.present as k (k)}
         {#if spriteOf(k)}
-          <div class="sprite"><img src={spriteOf(k)} alt={names[k] || k} /></div>
+          <div class="sprite" style="height:{spriteH(k)}%"><img src={spriteOf(k)} alt={names[k] || k} /></div>
         {/if}
       {/each}
     </div>
@@ -112,7 +128,7 @@
   }
   .stage.nobg { background: linear-gradient(160deg, #2a2f3e, #14171f); }
   .cast { position: absolute; inset: 0 0 28% 0; display: flex; align-items: flex-end; justify-content: center; gap: 4%; pointer-events: none; }
-  .sprite { height: 96%; }
+  .sprite { height: 96%; }   /* fallback; per-character height set inline from height_cm */
   .sprite img { height: 100%; width: auto; object-fit: contain; filter: drop-shadow(0 6px 18px rgba(0,0,0,.5)); }
 
   .dialogue {
