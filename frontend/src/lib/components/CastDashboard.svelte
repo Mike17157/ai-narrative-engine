@@ -55,8 +55,9 @@
   // When ON, render via the style flow seeded from a chosen image. NOTE: img2img-style copies the
   // source's POSE; only an IPAdapter style workflow transfers look without composition.
   let primaryKey = $derived(cast.find((c) => c.primary)?.character || null);
+  let primaryHasRef = $derived(!!cast.find((c) => c.character === primaryKey)?.hasRef);
   let styleSources = $derived(cur ? [
-    ...(primaryKey && primaryKey !== cur.character
+    ...(primaryKey && primaryKey !== cur.character && primaryHasRef
         ? [{ id: 'primary', label: 'Primary style', thumb: abs(`/api/characters/${primaryKey}/reference`),
              body: { style_from: primaryKey } }] : []),
     ...((cur.images || []).map((u, i) => ({ id: 'img' + i, label: 'Card art', thumb: abs(u),

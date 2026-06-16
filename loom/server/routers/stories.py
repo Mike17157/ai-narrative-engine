@@ -370,17 +370,15 @@ def register(app, ctx):
                     if h:
                         cast_in[idx]["height_cm"] = h   # so write_npc persists it
 
-        # Write EVERY member through the SAME _write_npc path. The protagonist differs only by
-        # carrying the source card's reference image (ref_from) and the `primary` flag — exactly one
-        # member is primary.
+        # Write EVERY member through the SAME _write_npc path — the protagonist differs ONLY by the
+        # `primary` flag. Its base image is generated like everyone else's (no ref_from copy of the
+        # source art); the source card remains the style anchor via story.fields.source_character.
         cast = []
         seen_primary = False
         for idx, member in enumerate(cast_in):
             is_primary = bool(member.get("primary")) and not seen_primary
             seen_primary = seen_primary or is_primary
-            k = ctx.write_npc(member, story_key=skey,
-                           ref_from=(primary_key if is_primary else None),
-                           base_prompt=bps.get(idx, ""))
+            k = ctx.write_npc(member, story_key=skey, base_prompt=bps.get(idx, ""))
             created.append(k)
             cast.append({"character": k, "primary": is_primary})
 
@@ -559,8 +557,9 @@ def register(app, ctx):
             created: list[str] = []
             cast = []
             if prot_data is not None:
-                pkey = ctx.write_npc(prot_data, story_key=key, ref_from=prot_key,
-                                  base_prompt=bps.get("__prot__", ""))
+                # No ref_from: the protagonist's base image is GENERATED like everyone else (the
+                # source card stays the STYLE anchor via source_character, not the literal image).
+                pkey = ctx.write_npc(prot_data, story_key=key, base_prompt=bps.get("__prot__", ""))
                 cast.append({"character": pkey, "primary": True}); created.append(pkey)
             for i, npc in enumerate(npcs):
                 nk = ctx.write_npc(npc, story_key=key, base_prompt=bps.get(str(i), ""))
