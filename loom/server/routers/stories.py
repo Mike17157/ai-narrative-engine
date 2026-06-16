@@ -18,6 +18,7 @@ from ..services.prompts import (
     PLAY_SCHEMA,
     _FULLBODY_FRAMING,
     _assemble_base_prompt,
+    _regionize_prompt,
     _safe_image_tags,
     _snap_prompt,
 )
@@ -782,8 +783,9 @@ def register(app, ctx):
             ids = {x.get("id") for x in m["outfits"]}
             while oid in ids:
                 oid, n = f"{base_oid}-{n}", n + 1
-            # Snap the attire to real Danbooru tags — same care the base image gets.
-            attire = _snap_prompt(_safe_image_tags((o.get("attire_prompt") or "").strip()))
+            # Snap the attire to real Danbooru tags + split into BREAK regions — same care the base
+            # image gets (the going-forward shape; re-derived again when combined at render).
+            attire = _regionize_prompt(_snap_prompt(_safe_image_tags((o.get("attire_prompt") or "").strip())))
             m["outfits"].append({"id": oid, "name": nm, "instruction": "",
                                  "prompt": attire, "attire_prompt": attire, "expressions": {}})
             existing.add(nm.lower())

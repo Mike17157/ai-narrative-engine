@@ -496,31 +496,16 @@ class AppContext:
         ] if p)
         system = (cfg.get("systems") or {}).get("base_image") or DEFAULT_SYSTEMS["base_image"]
         context = ("Fill the feature schema from this character's WRITTEN DESCRIPTION below "
-                   "(persona + appearance).\n\n" + context)
+                   "(persona + appearance). Write the `appearance` field as a RICH, natural-language "
+                   "physical description — the system grounds it to real booru tags.\n\n" + context)
+        # ONE call: the model writes a natural-language physical description (+ the structured
+        # safety/quality controls), then `_assemble_base_prompt` GROUNDS the prose to real booru
+        # tags (n-gram extraction), applies the sex/age guardrails, and splits into BREAK regions.
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
         if not feats:
             return {"error": "model returned no structured features "
                              "(author model may not support structured output)"}
-        # 2nd pass — the STANDARD image-prompt method (same as outfits): retrieve a FACETED PALETTE
-        # of real, PMI-ranked booru tags (hair/eyes/skin/body/face), plus a few intact real
-        # character bundles for coherence, and CONSTRUCT the final appearance by drawing richly from
-        # it. The organized, ranked palette surfaces far more usable tags than a flat soup of lines.
-        draft = [str(t) for t in (feats.get("appearance") or [])]
-        palette, lines = _retrieve_palette(draft, "appearance")
-        if palette:
-            refine = (context + "\n\nYOUR DRAFT appearance tags:\n" + ", ".join(draft)
-                      + "\n\n" + _palette_block(palette, lines)
-                      + "\n\nCONSTRUCT the FINAL appearance by DRAWING RICHLY from the palette above — "
-                        "make it specific and complete. Keep ~24-32 persistent PHYSICAL tags (hair, "
-                        "eyes, skin, body, face/marks); do NOT add clothing, expression, pose or "
-                        "background.")
-            try:
-                d2 = provider.generate_text(system=system, prompt=refine, emits=_prompts.FEATURES_SCHEMA).data
-                if d2 and d2.get("appearance"):
-                    feats = d2
-            except Exception:  # noqa: BLE001 — keep the 1st-pass result
-                pass
-        return {"prompt": _prompts._assemble_base_prompt(feats), "features": feats, "companions": lines}
+        return {"prompt": _prompts._assemble_base_prompt(feats), "features": feats, "companions": []}
 
     def compose_expressions(self, persona: str, model: str | None = None) -> dict:
         """Face-only booru expression tags for the FIXED canonical emotion taxonomy, personalized to
@@ -562,9 +547,10 @@ class AppContext:
             return {"attire": ""}
 
         system = ((cfg.get("systems") or {}).get("wardrobe") or DEFAULT_SYSTEMS["wardrobe"]) + (
-            "\n\nNOW compose the SINGLE outfit below: a COMPLETE, DETAILED `outfit` — every garment "
-            "coloured, plus accessories, piercings and makeup that fit. Be generous and specific, "
-            "never minimal.")
+            "\n\nNOW describe the SINGLE outfit below in NATURAL LANGUAGE: a COMPLETE, DETAILED look "
+            "— every garment coloured, plus the accessories, piercings and makeup that fit. Be "
+            "generous and specific, never minimal. Don't worry about tag syntax — the system grounds "
+            "your description to real booru tags.")
         context = "\n\n".join(p for p in [
             f"CHARACTER PERSONA:\n{persona}" if persona else "",
             (f"CHARACTER BASE APPEARANCE (body + persistent worn jewelry/piercings — pick a palette "
@@ -572,34 +558,17 @@ class AppContext:
             f"OUTFIT: {outfit_name}" if outfit_name else "",
             f"DRAFT / CONCEPT: {attire_draft}" if attire_draft else "",
         ] if p)
+        # ONE call: the model DESCRIBES the outfit in prose, then we GROUND it to real booru tags
+        # (n-gram extraction), snap, drop subsumed dupes ('skirt' vs 'red skirt'), and split into
+        # BREAK regions (outfit · details) — the going-forward shape.
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.OUTFIT_SCHEMA).data) or {}
-        draft = [str(t) for t in (feats.get("outfit") or [])]
-        if not draft:
+        prose = str(feats.get("outfit") or "").strip()
+        if not prose:
             return {"attire": ""}
-        # 2nd pass — retrieve a FACETED PALETTE of real, PMI-ranked clothing tags (top/bottom/dress/
-        # outerwear/legwear/footwear/headwear/accessories/swimwear/makeup/piercing), plus a few intact
-        # real outfits for coherence, and CONSTRUCT the final outfit by drawing richly from it. The
-        # palette is far richer + more colour-complete than a flat soup; _snap + _dedupe clean it.
-        palette, lines = _retrieve_palette(draft, "clothing")
-        if palette:
-            refine = (context + "\n\nYOUR DRAFT outfit tags:\n" + ", ".join(draft)
-                      + "\n\n" + _palette_block(palette, lines)
-                      + "\n\nCONSTRUCT the final outfit for THIS character by DRAWING RICHLY from the "
-                        "palette above (mix the pieces that fit the concept). Requirements: a RICH, "
-                        "complete look — top, bottom or dress, layers, LEGWEAR, FOOTWEAR — plus fitting "
-                        "ACCESSORIES, PIERCINGS and MAKEUP. EVERY garment carries a COLOUR (prefer the "
-                        "real coloured tags in the palette; a colour must form a real booru tag — "
-                        "'navy blue skirt', 'white blouse'). NEVER include both a bare garment and its "
-                        "coloured version. ONE coherent palette.")
-            try:
-                d2 = provider.generate_text(system=system, prompt=refine, emits=_prompts.OUTFIT_SCHEMA).data
-                if d2 and d2.get("outfit"):
-                    draft = [str(t) for t in d2["outfit"]]
-            except Exception:  # noqa: BLE001 — keep the 1st-pass result
-                pass
-        snapped = _prompts._snap_prompt(_prompts._safe_image_tags(", ".join(draft)))
-        attire = ", ".join(_prompts._dedupe_outfit_tags([t.strip() for t in snapped.split(",") if t.strip()]))
-        return {"attire": attire}
+        tags = _prompts._extract_tags(prose)
+        snapped = _prompts._snap_prompt(_prompts._safe_image_tags(", ".join(tags)))
+        deduped = _prompts._dedupe_outfit_tags([t.strip() for t in snapped.split(",") if t.strip()])
+        return {"attire": _prompts._regionize_prompt(", ".join(deduped))}
 
     def refine_outfits(self, outfits: list, persona: str, base_appearance: str,
                        model: str | None = None, emit=None) -> list:

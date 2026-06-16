@@ -22,6 +22,7 @@ from ..services.prompts import (
     _base_prompt,
     _gen_text,
     _persona_text,
+    _regionize_prompt,
     _safe_image_tags,
     _snap_prompt,
 )
@@ -408,8 +409,8 @@ def register(app, ctx):
         expr = ((outfit.get("expression_prompts") or {}).get(emotion)
                 or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
         # Every outfit picture is FULL BODY (the expression sprite shows the whole look + the face).
-        prompt = _snap_prompt(_safe_image_tags(
-            ", ".join(p for p in (appearance, attire, expr, _FULLBODY_FRAMING) if p)))
+        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
+            ", ".join(p for p in (appearance, attire, expr, _FULLBODY_FRAMING) if p))))
         model = ctx.role_model("sprite", body.get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
@@ -492,8 +493,8 @@ def register(app, ctx):
                     if cancelled():
                         return None
                     expr = canon.get(emo) or (_o.get("expression_prompts") or {}).get(emo) or emo
-                    prompt = _snap_prompt(_safe_image_tags(
-                        ", ".join(p for p in (appearance, _attire, expr, _FULLBODY_FRAMING) if p)))
+                    prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
+                        ", ".join(p for p in (appearance, _attire, expr, _FULLBODY_FRAMING) if p))))
                     try:
                         prov2, _mid = ctx.image_provider(model)   # own workflow+seed per thread
                         _randomize_seeds(prov2.workflow)
@@ -566,7 +567,7 @@ def register(app, ctx):
             return JSONResponse({"error": "no such outfit"}, status_code=404)
         appearance = (ch.fields or {}).get("appearance") or ""
         attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
-        prompt = _snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, _FULLBODY_FRAMING) if p)))
+        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, _FULLBODY_FRAMING) if p))))
         model = ctx.role_model("sprite", (body or {}).get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:

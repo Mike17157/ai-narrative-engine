@@ -171,41 +171,9 @@ def register(app, ctx):
         'off' (one comma prompt, no BREAK), 'coarse' (a few macro-regions: subject · appearance ·
         outfit · details — default, SDXL-friendly), 'fine' (a BREAK per category). Subject/framing
         tags (no facet) lead. Returns {tags:[...with 'BREAK' separators...], prompt: comma-joined}."""
-        from ...tags.facets import FACETS_ALL, MACRO_REGIONS, facet_of_any
+        from ...tags.facets import regionize
         body = body or {}
-        mode = body.get("mode") if body.get("mode") in ("off", "coarse", "fine") else "coarse"
-        raw = [str(t).strip() for t in body.get("tags", []) if str(t).strip()]
-        tags = [t for t in raw if t.upper() != "BREAK"]
-        if not tags:
-            return {"tags": [], "prompt": ""}
-        order = [f for f, _ in FACETS_ALL]
-        regions = {f: [] for f in order}
-        lead, seen = [], set()
-        for t in tags:
-            k = t.lower()
-            if k in seen:
-                continue
-            seen.add(k)
-            f = facet_of_any(t)
-            (regions[f] if f else lead).append(t)
-        if mode == "fine":
-            blocks = ([lead] if lead else []) + [regions[f] for f in order if regions[f]]
-        elif mode == "off":
-            flat = list(lead)
-            for f in order:
-                flat += regions[f]
-            blocks = [flat] if flat else []
-        else:   # coarse — subject + macro groups
-            blocks = [lead] if lead else []
-            for _macro, fs in MACRO_REGIONS:
-                blk = [t for f in fs for t in regions.get(f, [])]
-                if blk:
-                    blocks.append(blk)
-        arr = []
-        for i, blk in enumerate(blocks):
-            if i:
-                arr.append("BREAK")
-            arr.extend(blk)
+        arr = regionize(body.get("tags", []), body.get("mode") or "coarse")
         return {"tags": arr, "prompt": ", ".join(arr)}
 
     @app.post("/api/tags/snap")

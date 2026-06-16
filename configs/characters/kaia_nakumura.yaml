@@ -52,10 +52,10 @@ fields:
   role: protagonist
   story: aria
   _generated: true
-  base_prompt: 1girl, mature female, pale skin, black hair, short hair, bob cut, messy
-    hair, hair between eyes, swept bangs, blue eyes, tsurime, eyelashes, freckles,
-    slim, collarbone, medium breasts, narrow waist, bare shoulders, navel, midriff,
-    thighs, long legs, scowl, solo, full body, standing, arms behind back, facing
-    viewer, bikini, grey background, simple background, full body shot, head to toe,
-    feet visible
+  base_prompt: 1girl, mature female, pale skin, black hair, short hair, messy hair,
+    bob cut, asymmetrical hair, hair over one eye, blue eyes, tsurime, eyelashes,
+    thick eyebrows, freckles, mole under eye, shiny skin, slim, medium breasts, narrow
+    waist, collarbone, thighs, long legs, serious, solo, full body, standing, arms
+    at sides, facing viewer, bikini, grey background, simple background, full body
+    shot, head to toe, feet visible
 _migrated_split: true

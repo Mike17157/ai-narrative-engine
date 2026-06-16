@@ -310,11 +310,11 @@ DEFAULT_SYSTEMS = {
         "physical-feature schema for their base reference image. Draw specific detail from the "
         "persona/appearance notes; where sparse, INFER tasteful detail that fits their world, age "
         "and role — but never contradict anything stated. These are PERSISTENT physical traits "
-        "only — NO clothing, pose, expression or background (added later). The tags must be valid "
-        "Danbooru tags an Illustrious model understands. Use the enum values where given; for "
-        "face_age and body_type pick VISUAL-TRAIT tags that convey the right age (e.g. a grown man "
-        "= 'mature face' + 'defined jawline'; a child-like character = 'youthful face' + 'large "
-        "eyes'). Keep choices internally consistent — never combine contradictory tags."
+        "only — NO clothing, pose, expression or background (added later). Write the `appearance` "
+        "field as a RICH, NATURAL-LANGUAGE physical description (a few plain sentences) — do NOT "
+        "worry about tag syntax; the system grounds your words to real Danbooru tags an Illustrious "
+        "model understands. Use the enum values for the other fields where given. Stay literal and "
+        "internally consistent — never describe contradictory traits."
     ),
 }
 

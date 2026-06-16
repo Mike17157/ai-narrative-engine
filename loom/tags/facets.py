@@ -96,6 +96,49 @@ MACRO_REGIONS = [
 _FACETSETS = {"appearance": FACETS_APPEARANCE, "clothing": FACETS_CLOTHING, "all": FACETS_ALL}
 
 
+def regionize(tags, mode: str = "coarse") -> list:
+    """Order a flat tag list by category and group it into BREAK regions — the going-forward prompt
+    shape (literal 'BREAK' separators, honoured by the ComfyUI provider). `mode`: 'off' (one block,
+    no BREAK), 'coarse' (subject · appearance · outfit · details — SDXL-friendly default), 'fine'
+    (a BREAK per category). Subject/framing tags (no facet) lead. Returns the tag list with literal
+    'BREAK' tokens interleaved; existing BREAK tokens in the input are dropped and re-derived."""
+    if mode not in ("off", "coarse", "fine"):
+        mode = "coarse"
+    raw = [" ".join(str(t).split()) for t in (tags or []) if str(t).strip()]
+    flat_tags = [t for t in raw if t.upper() != "BREAK"]
+    if not flat_tags:
+        return []
+    order = [f for f, _ in FACETS_ALL]
+    regions = {f: [] for f in order}
+    lead, seen = [], set()
+    for t in flat_tags:
+        k = t.lower()
+        if k in seen:
+            continue
+        seen.add(k)
+        f = facet_of_any(t)
+        (regions[f] if f else lead).append(t)
+    if mode == "fine":
+        blocks = ([lead] if lead else []) + [regions[f] for f in order if regions[f]]
+    elif mode == "off":
+        flat = list(lead)
+        for f in order:
+            flat += regions[f]
+        blocks = [flat] if flat else []
+    else:   # coarse — subject + macro groups
+        blocks = [lead] if lead else []
+        for _macro, fs in MACRO_REGIONS:
+            blk = [t for f in fs for t in regions.get(f, [])]
+            if blk:
+                blocks.append(blk)
+    arr = []
+    for i, blk in enumerate(blocks):
+        if i:
+            arr.append("BREAK")
+        arr.extend(blk)
+    return arr
+
+
 def facet_of(tag: str, kind: str = "clothing") -> str | None:
     """The facet a tag belongs to for `kind` ('appearance' | 'clothing' | 'all'), or None if it
     matches no facet (mostly pose/expression/scene/meta/copyright — deliberately excluded)."""

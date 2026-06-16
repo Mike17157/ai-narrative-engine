@@ -71,28 +71,21 @@ def _gen_text(provider, system: str, prompt: str, images: list[str] | None = Non
 OUTFIT_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["outfit"],
     "properties": {
-        "outfit": {"type": "array", "items": {"type": "string"},
+        "outfit": {"type": "string",
                    "description":
-                       "18-30 CANONICAL Danbooru tags fully specifying ONE complete, DETAILED "
-                       "outfit — be GENEROUS and specific, never a lazy 5-tag sketch. Slot order: "
-                       "count tag (1girl/1boy); MAIN garment(s); LAYERS (jacket / cardigan / coat "
-                       "/ vest); LEGWEAR; FOOTWEAR; HEADWEAR; then ACCESSORIES (jewelry, bag, "
-                       "gloves, belt, scarf — with placement: 'single bracelet', 'pendant "
-                       "necklace', 'single earring'); PIERCINGS ('navel piercing', 'ear piercing') "
-                       "and MAKEUP ('red lipstick', 'eyeshadow', 'eyeliner', 'blush') where they "
-                       "suit the character + occasion.\n"
-                       "Give each garment a COLOUR — but as a simple colour+garment tag ('red "
-                       "pleated skirt', 'white blouse', 'black thighhighs', 'brown loafers'). NEVER "
-                       "output BOTH a bare garment AND its coloured version ('jeans' AND 'black "
-                       "jeans') — output ONLY the coloured one. (Accessories / piercings / makeup may "
-                       "omit colour.) Keep ONE coherent palette.\n"
-                       "PREFER real Danbooru tags, but each entry may be a short, natural descriptor "
-                       "when no exact tag exists — DON'T cram several attributes into one invented "
-                       "'tag'. Split extra material/pattern modifiers into their OWN tag: write "
-                       "'rainbow bikini, crochet' (two real tags), NOT 'crochet rainbow bikini'; "
-                       "'plaid skirt, pleated', not 'pleated plaid wool skirt'. No metaphor or brand "
-                       "poetry. CLOTHING, ACCESSORIES, PIERCINGS and MAKEUP only — NO body / hair / "
-                       "eye / skin tags, NO facial EXPRESSION, NO pose, NO background."},
+                       "Describe ONE complete, DETAILED outfit in NATURAL LANGUAGE — a couple of "
+                       "plain sentences, GENEROUS and specific, never a lazy sketch. Cover: the MAIN "
+                       "garment(s); any LAYERS (jacket / cardigan / coat / vest); LEGWEAR; FOOTWEAR; "
+                       "HEADWEAR; then ACCESSORIES (jewellery, bag, gloves, belt, scarf — note "
+                       "placement, e.g. 'a single bracelet', 'a pendant necklace'); PIERCINGS and "
+                       "MAKEUP where they suit the character + occasion.\n"
+                       "Give every garment a COLOUR (and material/pattern where it matters) using "
+                       "plain words — 'a red pleated skirt', 'a white blouse', 'sheer black "
+                       "thighhighs', 'brown leather loafers', 'a crocheted rainbow bikini'. Keep ONE "
+                       "coherent palette. Write naturally — do NOT worry about tag syntax; the system "
+                       "grounds your description to real booru tags. CLOTHING, ACCESSORIES, PIERCINGS "
+                       "and MAKEUP only — NO body / hair / eye / skin, NO facial EXPRESSION, NO pose, "
+                       "NO background."},
     },
 }
 
@@ -212,6 +205,46 @@ def _snap_prompt(text: str) -> str:
         return text or ""
 
 
+# Going-forward prompt shape: every GENERATED prompt is grounded (real tags) then split into BREAK
+# regions. 'coarse' (subject · appearance · outfit · details) is the SDXL/Illustrious-friendly
+# default; the provider honours BREAK (ConditioningConcat) with a comma strip-fallback.
+_BREAK_MODE = "coarse"
+
+
+def _extract_tags(text: str) -> list:
+    """Ground a NATURAL-LANGUAGE description into real booru tags (the default generation method:
+    let the model write freely, then snap n-grams onto the canonical vocabulary). Returns a tag
+    list. Falls back to a plain comma-split when the vocabulary index is unavailable, so generation
+    never hard-depends on it."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    try:
+        from ...tags import get_index
+        ix = get_index()
+        if ix.ready:
+            return list(ix.extract(text)["tags"])
+    except Exception:  # noqa: BLE001 — vocabulary is a nicety, never a hard dependency
+        pass
+    return [t.strip() for t in re.split(r"[,\n]", text) if t.strip()]
+
+
+def _regionize_prompt(text: str, mode: str | None = None) -> str:
+    """Re-order a comma/BREAK prompt into category BREAK regions (the going-forward shape). Any
+    existing BREAK tokens are dropped and re-derived. Silent no-op passthrough if facets are
+    unavailable. `mode` defaults to _BREAK_MODE ('coarse')."""
+    if not text or not text.strip():
+        return text or ""
+    try:
+        from ...tags.facets import regionize
+        # split on commas AND any existing BREAK token, so this is IDEMPOTENT — combining several
+        # already-regionized fragments and re-regionizing re-derives clean regions.
+        tags = [t.strip() for t in re.split(r"\bBREAK\b|,", text) if t.strip()]
+        return ", ".join(regionize(tags, mode or _BREAK_MODE))
+    except Exception:  # noqa: BLE001
+        return text
+
+
 def _base_prompt(ch) -> str:
     """The default positive prompt for a character's base image: their own physical
     `appearance` (falls back to the persona/name — never a hard-coded gender) framed as
@@ -223,9 +256,9 @@ def _base_prompt(ch) -> str:
     # Swimwear template by apparent gender (read the count tag in the appearance).
     male = re.search(r"\b1\s*(boy|man|male)\b", appearance.lower()) is not None
     swim = "swim trunks, bare chest" if male else "bikini"
-    return _safe_image_tags(
+    return _regionize_prompt(_safe_image_tags(
         f"{appearance}, solo, full body, standing, facing viewer, {swim}, "
-        "grey background, simple background, full body shot, head to toe, feet visible")
+        "grey background, simple background, full body shot, head to toe, feet visible"))
 
 
 # -- base-appearance feature schema + assembler ------------------------------
@@ -291,30 +324,23 @@ FEATURES_SCHEMA = {
                 "'scar across eye', 'facial mark', 'sharp eyes', 'tsurime', 'tareme'. Choose what "
                 "fits the persona (a tidy character might get glasses + a mole; a striking one "
                 "heterochromia). Marks only — NOT hair/clothing/expression/pose."},
-        # Free-form: the model writes as many descriptive booru tags as it needs (no rigid slots).
-        "appearance": {"type": "array", "items": {"type": "string"},
+        # Natural-language physical description — the model writes freely; the system grounds it to
+        # real booru tags (n-gram extraction). Frees the model from tag syntax while staying literal.
+        "appearance": {"type": "string",
                        "description":
-                           "~22-30 SPECIFIC, FLATTERING canonical booru tags — capture what makes THIS "
-                           "character distinct AND attractive; tight, not a generic 8-tag sketch and not "
-                           "padded. LAYER a few tags per facet (slot pattern, fill each with a real tag "
-                           "that fits THIS character — vary every value, don't reuse the same defaults): "
-                           "HAIR (<colour> + <length> + ONE primary style + 1-2 details — don't stack "
-                           "ponytail+bun+twintails; an afro/dreadlocks/cornrows is an all-over COILY "
-                           "style, so NEVER pair it with 'bangs' or 'straight/wavy hair'); EYES (<colour> + <shape> + optional lashes; eyebrows "
-                           "ONLY if distinctive, don't default to 'thick eyebrows'); SKIN+MARKS (texture "
-                           "like 'shiny skin' + marks like 'freckles'/'mole under eye'/'scar across eye'/"
-                           "'tattoo'/'glasses'); BODY (ONE "
-                           "build that FITS the persona — NOT always 'slim'; medium breasts is the usual "
-                           "adult default (small/large to fit), 'flat chest' for males only; + 'collarbone', "
-                           "'wide hips', 'thick thighs', 'abs', height) and FACE/CUTE tags ('fang', 'blush "
-                           "stickers', 'mole under eye', 'facial mark', 'makeup').\n"
-                           "THE IMAGE MODEL IS LITERAL — only real booru tags render; unknown/figurative "
-                           "phrases render as nothing or the literal object. NEVER: 'olive skin' (->GREEN; "
-                           "use pale/tan/dark), 'almond eyes' (->almonds; use tsurime/tareme), gem/"
-                           "metaphor colours (raven/auburn/emerald -> plain black/red/green). Face/chin/"
-                           "cheekbone/nose/lip SHAPE is barely tagged — OMIT it; convey mood through eye "
-                           "SHAPE ('tsurime' sharp, 'tareme' soft) with eyes OPEN — NEVER half-closed/jitome/"
-                           "closed eyes/eyebags (sleepy, ugly). NO transient "
+                           "Describe THIS character's PHYSICAL APPEARANCE in NATURAL LANGUAGE — a few "
+                           "plain sentences, SPECIFIC and FLATTERING, capturing what makes them distinct "
+                           "AND attractive (not a generic sketch). Cover, with concrete plain words: "
+                           "HAIR (colour + length + ONE primary style + a detail or two — don't stack "
+                           "ponytail+bun+twintails; an afro/dreadlocks/cornrows is an all-over coily "
+                           "style, never with bangs or straight/wavy hair); EYES (colour + shape, e.g. "
+                           "sharp/tsurime or soft/tareme, eyes OPEN); SKIN texture + any MARKS (freckles, "
+                           "a mole under one eye, a scar across the eye, a tattoo, glasses); BODY (ONE "
+                           "build that FITS the persona — not always slim; name the bust size, e.g. "
+                           "'large breasts'; plus collarbone, wide hips, thick thighs, abs, height as "
+                           "they fit). Write naturally — do NOT worry about tag syntax; the system snaps "
+                           "your words to real booru tags. Stay LITERAL: plain colours (not raven/auburn/"
+                           "emerald), real features (not 'olive skin' or 'almond eyes'). NO transient "
                            "emotion, clothing, pose, background or scene — those are added separately."},
     },
 }
@@ -390,7 +416,9 @@ def _assemble_base_prompt(f: dict) -> str:
                     out.append(a)
         return out
 
-    app = _clean_tags(f.get("appearance"))
+    # `appearance` is now a NATURAL-LANGUAGE description — ground it to real booru tags, then run
+    # the same leakage/count filter the tag-list path used.
+    app = _clean_tags(_extract_tags(f.get("appearance")))
     # DISTINCTIVE FACE HOOKS (mole/freckles/heterochromia/glasses/makeup/…) — placed EARLY so
     # they carry prompt weight and break Illustrious's "house face" prior that otherwise renders
     # every character with the same default anime face.
@@ -446,5 +474,6 @@ def _assemble_base_prompt(f: dict) -> str:
              "huge breasts", "gigantic breasts")
     if not male and not minor and not (low & set(_BUST)):
         out.append("medium breasts")
-    # literal-tag normalizer (olive->tan, …) then snap to real booru tags — unknowns kept.
-    return _snap_prompt(_safe_image_tags(", ".join(out)))
+    # literal-tag normalizer (olive->tan, …), snap to real booru tags (unknowns kept), then split
+    # into coarse BREAK regions (subject · appearance · outfit · details) — the going-forward shape.
+    return _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(out))))
