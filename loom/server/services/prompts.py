@@ -143,10 +143,12 @@ _IMAGE_TAG_FIXES = [
     # young girl/boy is written as 1girl/1boy + child/teen, which we leave untouched.)
     (r"\byoung\s+adult\b", "adult"),
     (r"\byoung\s+(woman|man|female|male)\b", r"\1"),
-    # plain hair colours — common artistic/metaphor words the model still slips in
+    # plain hair colours — common artistic/metaphor words the model still slips in. NOTE: 'auburn
+    # hair' IS a real booru tag and renders as a NATURAL warm reddish-brown (much gentler than the
+    # vivid anime 'red hair'), so we KEEP it; only bare 'auburn' is pinned to the hair tag.
     (r"\bbrunette\b", "brown"),
     (r"\braven\s+(hair|black)\b", "black hair"),
-    (r"\bauburn\b", "red"),
+    (r"\bauburn\b(?!\s+hair)", "auburn hair"),
     # neutral-grey the base backdrop (RMBG-2.0 mattes it). Rewrite any other bg tag to grey.
     (r"\b(?:plain white|plain simple|plain|white|green|magenta)\s+background\b", "grey background"),
     # literal-model traps: figurative/shape-by-analogy phrases render as the literal object.
@@ -384,8 +386,13 @@ FEATURES_SCHEMA = {
                            "SEPARATELY in the `build`/`bust` fields and height in `height_cm`, so do "
                            "NOT restate them here. "
                            "Write naturally — do NOT worry about tag syntax; the system snaps "
-                           "your words to real booru tags. Stay LITERAL: plain colours (not raven/auburn/"
-                           "emerald), real features (not 'olive skin' or 'almond eyes'). NO transient "
+                           "your words to real booru tags. Stay LITERAL (no metaphor colours like "
+                           "'raven' or 'emerald'). PREFER NATURAL HAIR TONES — for a redhead use "
+                           "'auburn hair' (warm reddish-brown) rather than the vivid cartoon 'red "
+                           "hair'; reach for 'strawberry blonde', 'ginger', 'maroon hair', 'ash "
+                           "brown', 'light brown hair' where they fit. Reserve pure 'red hair' / "
+                           "'pink hair' / 'green hair' for a DELIBERATELY bright, stylised character. "
+                           "Real features only (not 'olive skin' or 'almond eyes'). NO transient "
                            "emotion, clothing, pose, background or scene — those are added separately."},
     },
 }

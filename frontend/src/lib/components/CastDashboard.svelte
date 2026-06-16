@@ -108,7 +108,12 @@
   }
   async function genBaseAll() {
     genningAll = true;
-    for (const c of cast) await genBase(c.character);   // sequential — one GPU
+    const seen = new Set();
+    for (const c of cast) {                             // sequential — one GPU; dedupe keys
+      if (seen.has(c.character)) continue;
+      seen.add(c.character);
+      await genBase(c.character);
+    }
     genningAll = false;
   }
   async function pickBase(charKey, dataUri) {
@@ -212,7 +217,7 @@
 
           <div class="acts">
             <button class="ghost sm" onclick={() => openCharacter(cur.character)}>Open wardrobe →</button>
-            <button class="ghost sm" onclick={() => genBase(cur.character, styleBody())} disabled={rget(baseKey(cur.character)).busy}>
+            <button class="ghost sm" onclick={() => genBase(cur.character, styleBody())} disabled={rget(baseKey(cur.character)).busy || genningAll}>
               {rget(baseKey(cur.character)).busy ? `Rendering ${CANDIDATES}…` : `🎨 Base images (${CANDIDATES})`}</button>
             <button class="ghost sm" onclick={() => toggleRegen(cur.character)}>↻ Regenerate</button>
           </div>
