@@ -94,7 +94,7 @@ class TagIndex:
         self._token_built = False
         self._prefix3: dict[str, list[str]] = {}          # first-3-chars -> canon names (lazy)
         self._prefix_built = False
-        self._control = {_key(t) for t in CONTROL_TAGS}
+        self._control = {_key(t): t for t in CONTROL_TAGS}   # normalized key -> source spelling (keeps BREAK upper)
         self._load()
 
     # ---- build -------------------------------------------------------------
@@ -203,7 +203,7 @@ class TagIndex:
             return {"input": raw, "status": "empty", "tag": None, "display": "", "suggestions": []}
         if k in self._control:
             return {"input": raw, "status": "control", "tag": k,
-                    "display": _display(k), "suggestions": []}
+                    "display": self._control[k], "suggestions": []}
         if k in self.canon:
             return self._verdict(raw, "ok", k)
         if k in self.alias:
@@ -222,40 +222,61 @@ class TagIndex:
         return {"input": raw, "status": "unknown", "tag": None, "display": _display(k),
                 "suggestions": [self._fmt(n) for n in self._suggest(k)]}
 
+    def _lookup(self, *words) -> str | None:
+        """The canonical tag for a word sequence, trying exact / lemma / alias / token-reorder."""
+        for variant in (list(words), [_lemma(w) for w in words]):
+            k = "_".join(variant)
+            if k in self.canon:
+                return _display(k)
+            if k in self.alias:
+                return _display(self.alias[k])
+        fs = frozenset(words)
+        if fs in self._by_tokens:
+            return _display(self._by_tokens[fs])
+        return None
+
     def extract(self, text: str, max_n: int = 4) -> dict:
-        """Ground free natural language into real booru tags: drop function words, then greedy
-        LONGEST-MATCH n-grams (with a crude lemma + token-reorder fallback) against the canonical
-        vocabulary. Leftover content words are kept as free-text. Returns
-        {tags:[real…], free:[words…], coverage: matched/total}. ('crocheted rainbow bikini' →
-        tags=['crochet','rainbow bikini']; 'scar across his eye' → ['scar across eye'].)"""
-        raw = re.findall(r"[a-z0-9']+", (text or "").lower())
-        words = [w for w in raw if w not in _STOP]
-        total = len(words)
+        """Ground free natural language into real booru tags. Split on punctuation/conjunctions into
+        PHRASES; within each: (1) greedy LONGEST-MATCH n-grams (exact/lemma/alias/reorder), then
+        (2) pair each leftover modifier with the phrase's HEAD noun ('long wavy silver hair' →
+        long hair + wavy hair + grey hair). Remaining content words are kept as free-text. Returns
+        {tags:[real…], free:[words…], coverage}. Fixes the adjective→noun loss of plain longest-match."""
+        # clause boundaries = punctuation + conjunctions; a bare newline is soft (line-wrap, not a
+        # boundary) so a modifier never gets split from its noun across a wrapped line.
+        phrases = re.split(r"[,.;:/()]| and | with | featuring | wearing ", (text or "").replace("\n", " ").lower())
         tags: list[str] = []
         free: list[str] = []
-        matched = 0
-        i = 0
-        while i < len(words):
-            hit = None
-            for n in range(min(max_n, len(words) - i), 0, -1):
-                window = words[i:i + n]
-                for variant in (window, [_lemma(x) for x in window]):
-                    k = "_".join(variant)
-                    if k in self.canon:
-                        hit = (_display(k), n); break
-                    if k in self.alias:
-                        hit = (_display(self.alias[k]), n); break
+        matched = total = 0
+        for phrase in phrases:
+            words = [w for w in re.findall(r"[a-z0-9']+", phrase) if w not in _STOP]
+            if not words:
+                continue
+            total += len(words)
+            taken = [False] * len(words)
+            i = 0
+            while i < len(words):                    # (1) longest-match
+                hit = None
+                for n in range(min(max_n, len(words) - i), 0, -1):
+                    t = self._lookup(*words[i:i + n])
+                    if t:
+                        hit = (t, n); break
                 if hit:
-                    break
-                fs = frozenset(window)               # token-reorder ('blue navy' → 'navy blue')
-                if fs in self._by_tokens:
-                    hit = (_display(self._by_tokens[fs]), n); break
-            if hit:
-                tags.append(hit[0]); matched += hit[1]; i += hit[1]
-            else:
-                if len(words[i]) > 2:
-                    free.append(words[i])
-                i += 1
+                    tags.append(hit[0]); matched += hit[1]
+                    for j in range(i, i + hit[1]):
+                        taken[j] = True
+                    i += hit[1]
+                else:
+                    i += 1
+            head = words[-1]                          # (2) pair leftover modifiers with the head noun
+            for idx, w in enumerate(words):
+                if taken[idx] or w == head:
+                    continue
+                t = self._lookup(w, head)
+                if t:
+                    tags.append(t); taken[idx] = True; matched += 1
+            for idx, w in enumerate(words):           # (3) leftovers → free
+                if not taken[idx] and len(w) > 2:
+                    free.append(w)
         out, seen = [], set()
         for t in tags:                               # dedup, keep order
             if t not in seen:
