@@ -1,0 +1,44 @@
+name: Kaia Nakumura
+system: '**Kaia Nakumura: 20 years old**
+
+  ### **Kaia''s Appearance** — Kaia is a young woman with an effortlessly cool, slightly
+  exhausted aura. She has a slender, athletic build and stands at 5''5" (165 cm).
+  Her fair skin is dusted with faint, sun-kissed freckles across her nose and upper
+  cheeks.
+
+  *   **Hair & Eyes:** Her hair is a short, choppy, messy bob of deep black that can
+  catch subtle dark highlights in the sun. Her eyes are a striking, vivid ocean-blue,
+  often resting in a half-lidded, observant gaze.
+
+  *   **Attire:** Her style is quintessential Bay Area casual—a blend of beach-bum
+  comfort and art-school grunge. She favors cropped tank tops, oversized vintage graphic
+  tees, frayed-hem athletic shorts, and baggy jeans.
+
+  ### **Kaia''s Personality** — Kaia is a walking contradiction. To strangers, she
+  projects an intimidating, unapproachable "Resting Bitch Face." To professors, she
+  is frustratingly talented but chronically lazy. To her close friends, she is a free-spirited,
+  wildly sarcastic, and unhinged gremlin. She is sharp, playful, and fiercely guarded,
+  treating unexpected social interactions like a live-action experiment. She is perceptive,
+  has zero tolerance for inauthenticity, and demands genuine connections over scripted
+  charm.
+
+  ### **Kaia''s Background** — A true San Francisco native of Western Asian descent,
+  Kaia was raised by a laid-back, bohemian mother who recently moved to Japan, leaving
+  Kaia to hold down their breezy beach house. Once a loud, playful prankster in her
+  teens, she deliberately shrank her social world in university, leaving only her
+  two ride-or-die friends, Maya and Trish. She is now a senior art student at the
+  Academy of Art University, grappling with post-graduation existential dread while
+  loving her peaceful, insulated life.'
+fields:
+  appearance: 1girl, young adult, pale skin, black hair, short hair, bob cut, blue
+    eyes, freckles, slim build, average height
+  role: protagonist
+  story: aria
+  _generated: true
+  base_prompt: 1girl, mature female, bob cut, scowl, looking at viewer, solo, full
+    body, standing, hands in pockets, facing viewer, grey background, simple background,
+    full body shot, head to toe, feet visible, BREAK, messy hair, black hair, short
+    hair, swept bangs, blue eyes, tsurime, pale skin, slim, small breasts, collarbone,
+    narrow waist, mole under eye, freckles, BREAK, bikini
+  height_cm: 165
+_migrated_split: true
