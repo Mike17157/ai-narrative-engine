@@ -71,21 +71,24 @@ def _gen_text(provider, system: str, prompt: str, images: list[str] | None = Non
 OUTFIT_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["outfit"],
     "properties": {
-        "outfit": {"type": "string",
+        "outfit": {"type": "array", "items": {"type": "string"}, "minItems": 6, "maxItems": 22,
                    "description":
-                       "Describe ONE complete, DETAILED outfit in NATURAL LANGUAGE — a couple of "
-                       "plain sentences, GENEROUS and specific, never a lazy sketch. Cover: the MAIN "
-                       "garment(s); any LAYERS (jacket / cardigan / coat / vest); LEGWEAR; FOOTWEAR; "
-                       "HEADWEAR; then ACCESSORIES (jewellery, bag, gloves, belt, scarf — note "
-                       "placement, e.g. 'a single bracelet', 'a pendant necklace'); PIERCINGS and "
-                       "MAKEUP where they suit the character + occasion.\n"
-                       "Give every garment a COLOUR (and material/pattern where it matters) using "
-                       "plain words — 'a red pleated skirt', 'a white blouse', 'sheer black "
-                       "thighhighs', 'brown leather loafers', 'a crocheted rainbow bikini'. Keep ONE "
-                       "coherent palette. Write naturally — do NOT worry about tag syntax; the system "
-                       "grounds your description to real booru tags. CLOTHING, ACCESSORIES, PIERCINGS "
-                       "and MAKEUP only — NO body / hair / eye / skin, NO facial EXPRESSION, NO pose, "
-                       "NO background."},
+                       "A LIST of short, EXPLICIT garment/accessory descriptors for ONE complete, "
+                       "DETAILED outfit — generous, never a lazy sketch. NOT prose, NOT sentences. "
+                       "RULES:\n"
+                       "(1) ONE item per garment or accessory, each a SINGLE concept = colour (and "
+                       "material/pattern) + the piece: 'red pleated skirt', 'white blouse', 'black "
+                       "thighhighs', 'brown loafers', 'pearl necklace', 'navel piercing', 'red "
+                       "lipstick'. NEVER cram several attributes into one item — 'crocheted rainbow "
+                       "bikini' is WRONG; split into 'rainbow bikini' + 'crochet'.\n"
+                       "(2) EXPLICIT, LITERAL words; no metaphor/brand poetry. Descriptive wording is "
+                       "fine (the system grounds each item to a real tag).\n"
+                       "(3) No 'she wears', no connectives, no sentences.\n"
+                       "COVER: main garment(s); layers (jacket/cardigan/coat/vest); LEGWEAR; FOOTWEAR; "
+                       "HEADWEAR; ACCESSORIES (jewellery, bag, gloves, belt — note placement: 'single "
+                       "bracelet', 'pendant necklace'); PIERCINGS and MAKEUP that fit. ONE coherent "
+                       "palette. CLOTHING / ACCESSORIES / PIERCINGS / MAKEUP only — NO body, hair, "
+                       "eyes, skin, expression, pose or background."},
     },
 }
 
@@ -369,31 +372,33 @@ FEATURES_SCHEMA = {
                 "'scar across eye', 'facial mark', 'sharp eyes', 'tsurime', 'tareme'. Choose what "
                 "fits the persona (a tidy character might get glasses + a mole; a striking one "
                 "heterochromia). Marks only — NOT hair/clothing/expression/pose."},
-        # Natural-language physical description — the model writes freely; the system grounds it to
-        # real booru tags (n-gram extraction). Frees the model from tag syntax while staying literal.
-        "appearance": {"type": "string",
+        # ATOMIC QUALIFIED DESCRIPTORS — a constrained list, not prose. Each item is ONE explicit
+        # attribute (qualifier + head noun); the system grounds each to a real booru tag. Flexible
+        # wording, structured shape, single meaning per item.
+        "appearance": {"type": "array", "items": {"type": "string"}, "minItems": 8, "maxItems": 22,
                        "description":
-                           "Describe THIS character's PHYSICAL APPEARANCE in NATURAL LANGUAGE — a few "
-                           "plain sentences, SPECIFIC and FLATTERING, capturing what makes them distinct "
-                           "AND attractive (not a generic sketch). Cover, with concrete plain words: "
-                           "HAIR (colour + length + ONE primary style + a detail or two — don't stack "
-                           "ponytail+bun+twintails; an afro/dreadlocks/cornrows is an all-over coily "
-                           "style, never with bangs or straight/wavy hair); EYES (colour + shape, e.g. "
-                           "sharp/tsurime or soft/tareme, eyes OPEN); SKIN texture + any MARKS (freckles, "
-                           "a mole under one eye, a scar across the eye, a tattoo, glasses); and "
-                           "SECONDARY BODY PROPORTIONS that fit (collarbone, wide hips, narrow waist, "
-                           "thick thighs, toned abs) — but the PRIMARY build and chest size are chosen "
-                           "SEPARATELY in the `build`/`bust` fields and height in `height_cm`, so do "
-                           "NOT restate them here. "
-                           "Write naturally — do NOT worry about tag syntax; the system snaps "
-                           "your words to real booru tags. Stay LITERAL (no metaphor colours like "
-                           "'raven' or 'emerald'). PREFER NATURAL HAIR TONES — for a redhead use "
-                           "'auburn hair' (warm reddish-brown) rather than the vivid cartoon 'red "
-                           "hair'; reach for 'strawberry blonde', 'ginger', 'maroon hair', 'ash "
-                           "brown', 'light brown hair' where they fit. Reserve pure 'red hair' / "
-                           "'pink hair' / 'green hair' for a DELIBERATELY bright, stylised character. "
-                           "Real features only (not 'olive skin' or 'almond eyes'). NO transient "
-                           "emotion, clothing, pose, background or scene — those are added separately."},
+                           "A LIST of short, EXPLICIT visual descriptors for THIS character's physical "
+                           "look — specific and flattering, what makes them distinct. NOT prose, NOT "
+                           "sentences. RULES:\n"
+                           "(1) ONE concept per item — a head noun with its qualifier(s) for a SINGLE "
+                           "attribute: 'silver hair', 'waist-length hair', 'wavy hair', 'blunt bangs', "
+                           "'violet eyes', 'sharp eyes', 'pale skin', 'freckles', 'mole under eye'. "
+                           "NEVER cram several attributes into one item — 'long silver wavy hair' is "
+                           "WRONG; split it into 'silver hair' + 'long hair' + 'wavy hair'.\n"
+                           "(2) EXPLICIT, LITERAL words only — no metaphor or figurative phrasing "
+                           "('raven', 'almond eyes', 'emerald', 'olive skin' are WRONG; use 'black "
+                           "hair', 'sharp eyes', 'green eyes', 'tan').\n"
+                           "(3) No 'she has', no connectives, no full sentences. Descriptive wording "
+                           "is fine (the system grounds each item to a real tag).\n"
+                           "COVER: hair (colour, length, ONE primary style, a detail — as SEPARATE "
+                           "items; an afro/dreadlocks/cornrows is all-over coily, never with bangs or "
+                           "straight/wavy hair); eyes (colour + shape, e.g. tsurime/tareme, eyes OPEN); "
+                           "skin texture + marks (freckles, mole under eye, scar across eye, tattoo, "
+                           "glasses); secondary proportions (collarbone, wide hips, narrow waist, thick "
+                           "thighs). For a redhead PREFER 'auburn hair' (natural) over the cartoon 'red "
+                           "hair'; 'strawberry blonde'/'ginger'/'maroon hair'/'ash brown' where they "
+                           "fit. NOT height/build/bust (separate fields), NO expression, clothing, "
+                           "pose, background or scene."},
     },
 }
 
@@ -471,9 +476,9 @@ def _assemble_base_prompt(f: dict) -> str:
                     out.append(a)
         return out
 
-    # `appearance` is now a NATURAL-LANGUAGE description — ground it to real booru tags, then run
-    # the same leakage/count filter the tag-list path used.
-    app = _clean_tags(_extract_tags(f.get("appearance")))
+    # `appearance` is a LIST of ATOMIC descriptors — filter leakage/count tags; the closing
+    # _snap_prompt grounds each item to a real booru tag (and decomposes any compound that slips in).
+    app = _clean_tags(f.get("appearance"))
     # DISTINCTIVE FACE HOOKS (mole/freckles/heterochromia/glasses/makeup/…) — placed EARLY so
     # they carry prompt weight and break Illustrious's "house face" prior that otherwise renders
     # every character with the same default anime face.

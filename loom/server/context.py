@@ -502,8 +502,9 @@ class AppContext:
         ] if p)
         system = (cfg.get("systems") or {}).get("base_image") or DEFAULT_SYSTEMS["base_image"]
         context = ("Fill the feature schema from this character's WRITTEN DESCRIPTION below "
-                   "(persona + appearance). Write the `appearance` field as a RICH, natural-language "
-                   "physical description — the system grounds it to real booru tags.\n\n" + context)
+                   "(persona + appearance). Give `appearance` as a LIST of short, explicit, ATOMIC "
+                   "descriptors (one attribute each) — the system grounds each to a real booru tag.\n\n"
+                   + context)
         # PASS 1 — the model writes a natural-language physical description + derives build/bust.
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
         if not feats:
@@ -572,10 +573,10 @@ class AppContext:
             return {"attire": ""}
 
         system = ((cfg.get("systems") or {}).get("wardrobe") or DEFAULT_SYSTEMS["wardrobe"]) + (
-            "\n\nNOW describe the SINGLE outfit below in NATURAL LANGUAGE: a COMPLETE, DETAILED look "
-            "— every garment coloured, plus the accessories, piercings and makeup that fit. Be "
-            "generous and specific, never minimal. Don't worry about tag syntax — the system grounds "
-            "your description to real booru tags.")
+            "\n\nNOW list the SINGLE outfit below as short, EXPLICIT garment descriptors (ONE coloured "
+            "piece per item): a COMPLETE, DETAILED look — every garment coloured, plus the accessories, "
+            "piercings and makeup that fit. Generous, never minimal. The system grounds each item to a "
+            "real booru tag.")
         context = "\n\n".join(p for p in [
             f"CHARACTER PERSONA:\n{persona}" if persona else "",
             (f"CHARACTER BASE APPEARANCE (body + persistent worn jewelry/piercings — pick a palette "
@@ -583,15 +584,14 @@ class AppContext:
             f"OUTFIT: {outfit_name}" if outfit_name else "",
             f"DRAFT / CONCEPT: {attire_draft}" if attire_draft else "",
         ] if p)
-        # ONE call: the model DESCRIBES the outfit in prose, then we GROUND it to real booru tags
-        # (n-gram extraction), snap, drop subsumed dupes ('skirt' vs 'red skirt'), and split into
-        # BREAK regions (outfit · details) — the going-forward shape.
+        # ONE call: the model lists ATOMIC garment descriptors, then we GROUND each to a real booru
+        # tag (snap, which also decomposes any compound), drop subsumed dupes ('skirt' vs 'red skirt'),
+        # and split into BREAK regions (outfit · details) — the going-forward shape.
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.OUTFIT_SCHEMA).data) or {}
-        prose = str(feats.get("outfit") or "").strip()
-        if not prose:
+        items = [str(t).strip() for t in (feats.get("outfit") or []) if str(t).strip()]
+        if not items:
             return {"attire": ""}
-        tags = _prompts._extract_tags(prose)
-        snapped = _prompts._snap_prompt(_prompts._safe_image_tags(", ".join(tags)))
+        snapped = _prompts._snap_prompt(_prompts._safe_image_tags(", ".join(items)))
         deduped = _prompts._dedupe_outfit_tags([t.strip() for t in snapped.split(",") if t.strip()])
         return {"attire": _prompts._regionize_prompt(", ".join(deduped))}
 

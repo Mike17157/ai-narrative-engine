@@ -311,11 +311,12 @@ DEFAULT_SYSTEMS = {
         "physical-feature schema for their base reference image. Draw specific detail from the "
         "persona/appearance notes; where sparse, INFER tasteful detail that fits their world, age "
         "and role — but never contradict anything stated. These are PERSISTENT physical traits "
-        "only — NO clothing, pose, expression or background (added later). Write the `appearance` "
-        "field as a RICH, NATURAL-LANGUAGE physical description (a few plain sentences) — do NOT "
-        "worry about tag syntax; the system grounds your words to real Danbooru tags an Illustrious "
-        "model understands. Use the enum values for the other fields where given. Stay literal and "
-        "internally consistent — never describe contradictory traits."
+        "only — NO clothing, pose, expression or background (added later). Give the `appearance` "
+        "field as a LIST of short, EXPLICIT, ATOMIC descriptors — one attribute per item ('silver "
+        "hair', 'long hair', 'wavy hair', 'violet eyes', 'pale skin', 'mole under eye'), NOT prose "
+        "and never compound ('long silver hair' -> split). The system grounds each to a real Danbooru "
+        "tag an Illustrious model understands. Use the enum values for the other fields. Stay literal "
+        "and internally consistent — never describe contradictory traits."
     ),
 }
 
