@@ -149,7 +149,8 @@
       "Bash(python -W ignore -c \"import sys,json;d=json.load\\(sys.stdin\\);print\\(d if d else 'idle/none'\\)\")",
       "Bash(python -W ignore -c \"import sys,json;print\\(json.load\\(sys.stdin\\).get\\('comfyui',{}\\).get\\('up'\\)\\)\")",
       "Bash(python -W ignore -c \"import sys,json;print\\(len\\(json.load\\(sys.stdin\\).get\\('checkpoints',[]\\)\\),'found'\\)\")",
-      "Bash(git -c 'user.name=Loom Dev' -c user.email=michael.codeguy@gmail.com commit -q -m 'feat\\(gen\\): make prose->extract->coarse-BREAK regions the DEFAULT prompt generation *)"
+      "Bash(git -c 'user.name=Loom Dev' -c user.email=michael.codeguy@gmail.com commit -q -m 'feat\\(gen\\): make prose->extract->coarse-BREAK regions the DEFAULT prompt generation *)",
+      "Bash(git -c user.name='Loom Dev' -c user.email='michael.codeguy@gmail.com' commit -q -F -)"
     ]
   }
 }
