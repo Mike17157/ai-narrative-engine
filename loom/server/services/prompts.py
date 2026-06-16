@@ -280,8 +280,8 @@ _APPEARANCE_BLOCK = (
 )
 FEATURES_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["count", "apparent_age", "expression", "skin_tone", "pose", "gaze", "height_cm",
-                 "build", "bust", "distinguishing_feature", "appearance"],
+    "required": ["count", "apparent_age", "expression", "skin_tone", "hair_color", "pose", "gaze",
+                 "height_cm", "build", "bust", "distinguishing_feature", "appearance"],
     "properties": {
         "count": {"type": "string", "enum": ["1girl", "1boy"],
                   "description": "the character's SEX only: 1girl (female) or 1boy (male). "
@@ -309,6 +309,21 @@ FEATURES_SCHEMA = {
                                      "Mediterranean -> tan, South-Asian/African -> dark or very dark "
                                      "skin. TONE only; texture ('shiny skin') and marks ('freckles') "
                                      "go in the appearance list. Never 'olive'/'fair' (not real tags)."},
+        # FORCED, VARIED hair colour — without it the model collapses to black/brown every time and a
+        # cast is never blonde/red/etc. Hair colour is NOT dictated by ethnicity (any character can be
+        # any colour); pick from the persona if it states one, else VARY it across the cast.
+        "hair_color": {"type": "string",
+                       "enum": ["black hair", "dark brown hair", "brown hair", "light brown hair",
+                                "blonde hair", "platinum blonde", "strawberry blonde", "ginger",
+                                "orange hair", "auburn hair", "red hair", "grey hair", "white hair",
+                                "blue hair", "pink hair", "purple hair", "green hair"],
+                       "description":
+                           "the character's HAIR COLOUR. If the persona states one, use it; otherwise "
+                           "CHOOSE and VARY across the cast — do NOT default everyone to black/brown, "
+                           "and blonde/red/etc. are valid for ANY character (hair colour is NOT tied to "
+                           "skin tone or ethnicity). For a natural redhead prefer 'auburn hair' over the "
+                           "vivid 'red hair'. Reserve blue/pink/purple/green for deliberately stylised "
+                           "characters."},
         "pose": {"type": "string",
                  "enum": ["arms at sides", "hand on hip", "crossed arms", "arms behind back",
                           "hands in pockets", "contrapposto"],
@@ -389,14 +404,14 @@ FEATURES_SCHEMA = {
                            "hair', 'sharp eyes', 'green eyes', 'tan').\n"
                            "(3) No 'she has', no connectives, no full sentences. Descriptive wording "
                            "is fine (the system grounds each item to a real tag).\n"
-                           "COVER: hair (colour, length, ONE primary style, a detail — as SEPARATE "
-                           "items; an afro/dreadlocks/cornrows is all-over coily, never with bangs or "
-                           "straight/wavy hair); eyes (colour + shape, e.g. tsurime/tareme, eyes OPEN); "
-                           "skin texture + marks (freckles, mole under eye, scar across eye, tattoo, "
-                           "glasses); secondary proportions (collarbone, wide hips, narrow waist, thick "
-                           "thighs). For a redhead PREFER 'auburn hair' (natural) over the cartoon 'red "
-                           "hair'; 'strawberry blonde'/'ginger'/'maroon hair'/'ash brown' where they "
-                           "fit. NOT height/build/bust (separate fields), NO expression, clothing, "
+                           "COVER: hair LENGTH + ONE primary style + a detail (as SEPARATE items — the "
+                           "base COLOUR is the `hair_color` field, do NOT repeat it here; only add "
+                           "highlights/streaks if any; an afro/dreadlocks/cornrows is all-over coily, "
+                           "never with bangs or straight/wavy hair); eyes (colour + shape, e.g. "
+                           "tsurime/tareme, eyes OPEN); skin texture + marks (freckles, mole under eye, "
+                           "scar across eye, tattoo, glasses); secondary proportions (collarbone, wide "
+                           "hips, narrow waist, thick thighs). NOT hair base-colour / height / build / "
+                           "bust (separate fields), NO expression, clothing, "
                            "pose, background or scene."},
     },
 }
@@ -405,6 +420,12 @@ FEATURES_SCHEMA = {
 # AND 'small eyes'). Keep only the FIRST seen from each group, drop the rest.
 _EXCLUSIVE_GROUPS = [
     {"small eyes", "large eyes"},
+    # ONE hair colour — the derived hair_color is injected first, so it wins over any colour the
+    # appearance list slips in (keeps a character from being two hair colours at once).
+    {"black hair", "dark brown hair", "brown hair", "light brown hair", "blonde hair", "blond hair",
+     "platinum blonde", "strawberry blonde", "ginger", "orange hair", "auburn hair", "red hair",
+     "grey hair", "gray hair", "white hair", "silver hair", "blue hair", "pink hair", "purple hair",
+     "green hair", "aqua hair", "dark blue hair"},
     # ONE gaze — the derived `gaze` is injected first, so it wins over any framing default
     {"looking at viewer", "looking to the side", "looking away", "looking afar",
      "looking up", "looking down", "looking back"},
@@ -487,6 +508,14 @@ def _assemble_base_prompt(f: dict) -> str:
     skin = (f.get("skin_tone") or "").strip().lower()
     if skin not in ("pale skin", "light skin", "tan", "dark skin", "very dark skin"):
         skin = "light skin"
+    # DERIVED HAIR COLOUR (anti-collapse): forced + varied so a cast isn't always black/brown. Placed
+    # before *app so it wins the hair-colour _EXCLUSIVE_GROUP. Default 'brown hair' (NOT black) if absent.
+    _HAIR = ("black hair", "dark brown hair", "brown hair", "light brown hair", "blonde hair",
+             "platinum blonde", "strawberry blonde", "ginger", "orange hair", "auburn hair",
+             "red hair", "grey hair", "white hair", "blue hair", "pink hair", "purple hair", "green hair")
+    hair = (f.get("hair_color") or "").strip().lower()
+    if hair not in _HAIR:
+        hair = "brown hair"
     # DERIVED FIGURE (anti-sameness). The body description collapses to "slim" without an explicit,
     # persona-justified pick. (Absolute HEIGHT is NOT a tag — it can't render in a solo full-body
     # shot; it's captured as numeric `height_cm` metadata and applied by sprite scaling at composite
@@ -512,7 +541,7 @@ def _assemble_base_prompt(f: dict) -> str:
                         "large breasts", "huge breasts"):
             bust = "medium breasts"
         body_anchor.append(bust)
-    parts = [*gender, skin, *body_anchor, *face_hooks, *app]
+    parts = [*gender, skin, hair, *body_anchor, *face_hooks, *app]
     # Persistent RESTING expression by personality (NOT 'neutral expression' — a near-dead tag
     # that renders a cold resting-bitch-face). Fall back to a warm 'light smile'; never let a
     # neutral/expressionless value through. Sprites still vary emotion on top of this base.
