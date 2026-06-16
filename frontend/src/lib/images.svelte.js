@@ -126,12 +126,37 @@ export function connectLink(targetId, inputName, sourceId, slot = 0) {
   if (!t || !inputName) return;
   (t.inputs ||= {})[inputName] = [String(sourceId), Number(slot) || 0];
 }
+// Map each OUTPUT slot of a node to its own same-typed INPUT link (model->model, clip->clip, …)
+// using objectInfo, so the node can be SPLICED out: a consumer of one of its outputs gets rewired
+// to that input's source. Falls back to {} for nodes with no matching passthrough.
+function passthroughSources(node) {
+  const def = (img.objectInfo || {})[node?.class_type];
+  const outs = def?.outputs || [];
+  const src = {};
+  outs.forEach((o, slot) => {
+    for (const f in (node.inputs || {})) {
+      const v = node.inputs[f];
+      if (!Array.isArray(v)) continue;
+      const di = def?.inputs?.find((x) => x.name === f);
+      if (di && o && di.type === o.type) { src[slot] = v; break; }
+    }
+  });
+  return src;
+}
+
 export function deleteNode(id) {
   if (!img.workflow) return;
+  // SPLICE, don't sever: before removing the node, wire each consumer of its outputs to the node's
+  // matching-typed input source (deleting a LoRA bridges prev model/clip -> next). No match -> unset.
+  const pass = passthroughSources(img.workflow[id]);
   delete img.workflow[id];
   for (const n of Object.values(img.workflow)) {
     for (const [k, v] of Object.entries(n.inputs || {})) {
-      if (Array.isArray(v) && String(v[0]) === String(id)) delete n.inputs[k];
+      if (Array.isArray(v) && String(v[0]) === String(id)) {
+        const repl = pass[v[1]];
+        if (repl) n.inputs[k] = [String(repl[0]), Number(repl[1]) || 0];
+        else delete n.inputs[k];
+      }
     }
   }
 }
@@ -156,22 +181,10 @@ export function isBypassed(id) {
 // its outputs, consumers are repointed to the node's same-typed input source.
 function executableWorkflow() {
   const g = JSON.parse(JSON.stringify($state.snapshot(img.workflow) || {}));
-  const oi = img.objectInfo || {};
   for (const id of Object.keys(g)) {
     if (!g[id]?._meta?.bypassed) continue;
-    const node = g[id];
-    const def = oi[node.class_type];
-    const outs = def?.outputs || [];
-    // map each output slot -> the node's matching-typed input link (passthrough)
-    const passSrc = {};
-    outs.forEach((o, slot) => {
-      for (const f in node.inputs) {
-        const v = node.inputs[f];
-        if (!Array.isArray(v)) continue;
-        const di = def?.inputs?.find((x) => x.name === f);
-        if (di && o && di.type === o.type) { passSrc[slot] = v; break; }
-      }
-    });
+    // map each output slot -> the node's matching-typed input link (same splice as deleteNode)
+    const passSrc = passthroughSources(g[id]);
     // reroute consumers of this node, then drop it
     for (const cid in g) {
       const ins = g[cid]?.inputs;
