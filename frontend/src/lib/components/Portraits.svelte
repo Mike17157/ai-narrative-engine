@@ -2,6 +2,7 @@
   import { get, post, put, del } from '$lib/api.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
+  import GenStream from '$lib/components/GenStream.svelte';
 
   let { charKey, charName, imageModel = '' } = $props();
 
@@ -23,6 +24,25 @@
   $effect(() => {
     if (charKey && charKey !== loaded) { loaded = charKey; load(); }
   });
+
+  // headless end-to-end generation (flesh → base → outfit → poses/exprs → sprite set)
+  let genJob = $state(null);
+  async function generateAll() {
+    busy = null; err = null; genJob = null;
+    const r = await post(`/characters/${charKey}/generate-all`, {});
+    if (r.ok && r.data?.job) genJob = r.data.job;
+    else err = r.data?.error || 'could not start (is the backend restarted?)';
+  }
+  async function onGenDone() { genJob = null; await load(); bust++; }
+
+  let fleshed = $state(null);   // the rewritten persona, shown after fleshing
+  async function fleshOut() {
+    busy = 'Fleshing out the persona…'; err = null; fleshed = null;
+    const r = await post(`/characters/${charKey}/flesh`, {});
+    busy = null;
+    if (r.ok && r.data?.persona) fleshed = r.data.persona;
+    else err = r.data?.error || 'flesh failed';
+  }
 
   async function describe() {
     busy = 'Describing reference…'; err = null;
@@ -95,6 +115,25 @@
 
   {#if busy}<div class="busy">⏳ {busy}</div>{/if}
   {#if err}<div class="err">⚠ {err}</div>{/if}
+
+  <!-- one-click: run the whole chain headless on the backend -->
+  <div class="block genall">
+    <div class="row">
+      <button class="sm primary" onclick={generateAll} disabled={!!busy || !!genJob}>⚡ Generate everything</button>
+      <span class="lo">flesh → base prompt → base image → one outfit → poses + expressions → full sprite set (saved to disk)</span>
+    </div>
+    {#if genJob}<GenStream jobId={genJob} title="Generating {charName}" onError={(m) => (err = m)} onDone={onGenDone} />{/if}
+  </div>
+
+  <!-- 0. Flesh out — thin seed → disciplined prose (feeds appearance, poses, expressions) -->
+  <div class="block">
+    <div class="blab">0 · Flesh out the character</div>
+    <p class="phint" style="margin:0 0 8px">Rewrites a thin description into a thorough, disciplined-prose
+      persona (look + personality + how they carry &amp; express themselves) — the source every section
+      parses into tags. Also runs automatically the first time you generate on a thin character.</p>
+    <div class="row"><button class="sm" onclick={fleshOut} disabled={!!busy}>✨ Flesh out persona</button></div>
+    {#if fleshed}<pre class="fleshed">{fleshed}</pre>{/if}
+  </div>
 
   <!-- 1. Appearance -->
   <div class="block">
@@ -169,6 +208,14 @@
   .err { font-size: 12.5px; color: var(--bad); background: rgba(255,122,122,.1); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 11px; margin-bottom: 10px; }
 
   .block { margin-bottom: 14px; }
+  .genall { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
+  .genall .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .genall .lo { font-size: 11.5px; color: var(--faint); }
+  :global(.portraits) .sm.primary { background: var(--accent); border-color: transparent; color: #fff; }
+  :global(.portraits) .sm.primary:hover:not(:disabled) { filter: brightness(1.08); }
+  .fleshed { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5;
+    color: var(--text); background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
+    padding: 10px; margin: 8px 0 0; max-height: 300px; overflow: auto; }
   .blab { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .4px; margin-bottom: 6px; }
   .appear {
     width: 100%; resize: vertical; min-height: 56px; padding: 8px 10px; font-size: 13px; border-radius: 8px;

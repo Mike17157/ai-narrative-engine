@@ -12,6 +12,7 @@ closure, with the mechanical substitutions defined in REFACTOR_CONTRACT.md:
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 
@@ -94,6 +95,16 @@ class AppContext:
         self.base_settings = base_settings
         self.user = user
         self.comfy_url = comfy_url
+        # RunPod config for dynamic GPU scaling
+        self.runpod_config = {
+            # Env var wins so the secret can live in .env (gitignored) rather than user.yaml.
+            "api_key": os.environ.get("RUNPOD_API_KEY", "") or (user.runpod.api_key if hasattr(user, 'runpod') else ""),
+            "serverless_endpoint_id": os.environ.get("RUNPOD_ENDPOINT_ID", "") or (user.runpod.serverless_endpoint_id if hasattr(user, 'runpod') else ""),
+            "images_per_instance": user.runpod.images_per_instance if hasattr(user, 'runpod') else 10,
+            "min_instances": user.runpod.min_instances if hasattr(user, 'runpod') else 1,
+            "max_instances": user.runpod.max_instances if hasattr(user, 'runpod') else 10,
+            "template_id": user.runpod.template_id if hasattr(user, 'runpod') else None,
+        }
 
     def reload_settings(self) -> None:
         self.base_settings = load_settings(self.root)
@@ -101,6 +112,54 @@ class AppContext:
     # -- config-loader wrappers ---------------------------------------------
     def load_image_roles(self) -> dict:
         return config_files.load_image_roles(self.root)
+
+    def pose_tags(self, character_key: str | None, emo: str) -> str:
+        """Body-language tags for ONE character at an emotion. Per-character (composed from persona,
+        stored on the manifest as `pose_prompts`); 'neutral' uses the generic standing stance; absent =
+        empty (framing alone). Body language is personality-driven, so there's no static default set."""
+        from .services.poses import NEUTRAL_POSE
+        if emo == "neutral":
+            return NEUTRAL_POSE
+        if not character_key:
+            return ""
+        return ((self.portrait_manifest(character_key).get("pose_prompts") or {}).get(emo) or "").strip()
+
+    def pose_framing(self, emo: str) -> str:
+        """Camera-crop framing tags (cowboy / full body) for this emotion's shot geometry (global)."""
+        from .services.poses import FRAMING_TAGS, resolve_geometry
+        return FRAMING_TAGS[resolve_geometry(emo, config_files.load_poses(self.root))["framing"]]
+
+    def pose_latent(self, emo: str) -> tuple[int, int]:
+        """The (width, height) latent canvas for this emotion's aspect (global shot geometry)."""
+        from .services.poses import ASPECT_DIMS, resolve_geometry
+        return ASPECT_DIMS[resolve_geometry(emo, config_files.load_poses(self.root))["aspect"]]
+
+    def compose_poses(self, persona: str, model: str | None = None) -> dict:
+        """Body-language booru tags for the FIXED emotion taxonomy, personalized to the persona — ONE
+        structured call (mirrors compose_expressions). Each emotion → THIS character's stance/limbs/energy,
+        grounded to real tags. Returns {emotion_key: pose_tags} (best-effort; omitted ones → '')."""
+        from .services.emotions import EMOTIONS, EMOTION_KEYS
+        from .services.poses import _POSE_SYSTEM
+        cfg = self.load_story_builder()
+        provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
+        if provider is None:
+            return {k: "" for k in EMOTION_KEYS}
+        schema = {"type": "object", "additionalProperties": False, "required": EMOTION_KEYS,
+                  "properties": {k: {"type": "string"} for k in EMOTION_KEYS}}
+        listing = "\n".join(f"- {e['key']} ({e['label']})" for e in EMOTIONS)
+        system = _POSE_SYSTEM + ("\n\nYou are given a FIXED list of emotions. For EVERY emotion key, output "
+                                 "how THIS character's BODY carries it as thorough body-language tags. "
+                                 "Return exactly one field per emotion key.")
+        prompt = f"CHARACTER PERSONA:\n{persona}\n\nEMOTIONS (give a body-language prompt for each):\n{listing}"
+        try:
+            data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
+        except Exception:  # noqa: BLE001
+            data = {}
+        out = {}
+        for k in EMOTION_KEYS:
+            raw = str(data.get(k) or "").strip()
+            out[k] = _prompts._snap_prompt(_prompts._safe_image_tags(raw)) if raw else ""
+        return out
 
     def load_story_builder(self) -> dict:
         return config_files.load_story_builder(self.root)
@@ -114,7 +173,52 @@ class AppContext:
         return Settings(models=models, characters=self.base_settings.characters, pipelines=self.base_settings.pipelines)
 
     def image_model_items(self) -> list[dict]:
-        return [{"id": k, "name": k} for k, m in self.base_settings.models.items() if m.kind == "image"]
+        fams = self.image_families()
+        return [{"id": k, "name": k, "family": fams.get(k, "unknown")}
+                for k, m in self.base_settings.models.items() if m.kind == "image"]
+
+    def workflow_family(self, model_id: str | None) -> str:
+        """The sub-family (illustrious/pony/anima/…) of an image workflow, read from its
+        checkpoint/UNet (folder + tensor arch), with a manual override (configs/families.json) keyed
+        by the workflow id or the base filename. 'unknown' if unresolved."""
+        from ..comfy.family import family_of
+        from ..comfy.scan import classify
+        md = self.base_settings.models.get(model_id) if model_id else None
+        if md is None or md.kind != "image":
+            return "unknown"
+        base_name, folder = None, None
+        wf = md.options.get("workflow")
+        try:
+            p = self.root / wf if wf else None
+            if p and p.is_file():
+                for node in json.loads(p.read_text(encoding="utf-8")).values():
+                    ct = node.get("class_type") if isinstance(node, dict) else None
+                    if ct == "CheckpointLoaderSimple":
+                        base_name, folder = node.get("inputs", {}).get("ckpt_name"), "checkpoints"; break
+                    if ct in ("UNETLoader", "UnetLoaderGGUF"):
+                        base_name, folder = node.get("inputs", {}).get("unet_name"), "diffusion_models"; break
+        except Exception:  # noqa: BLE001
+            pass
+        arch = ""
+        bd = self.comfy_base_dir()
+        if base_name and bd and folder:
+            fp = bd / "models" / folder / base_name.replace("\\", "/")
+            if fp.is_file():
+                arch = classify(str(fp)).get("arch") or ""
+        ov = config_files.load_families(self.root)
+        return family_of(base_name, arch=arch or None,
+                         override=ov.get(model_id) or (ov.get(base_name) if base_name else None))
+
+    def image_families(self) -> dict:
+        """{workflow_id: family} for every image workflow — for grouping the pickers by container."""
+        return {k: self.workflow_family(k)
+                for k, m in self.base_settings.models.items() if m.kind == "image"}
+
+    def output_prefix_for(self, model_id: str | None, role: str, character: str | None = None) -> str:
+        """Organized ComfyUI output path for a render: loom/<family>/<role>/<character|misc>.
+        Pass the resolved workflow id the render actually uses."""
+        from .services.img_naming import output_prefix
+        return output_prefix(self.workflow_family(model_id), role, character)
 
     def text_provider_for(self, model_sel: str | None):
         """Build a text provider for a model selection: a registered model key,
@@ -201,6 +305,52 @@ class AppContext:
         if provider is None or not hasattr(provider, "generate_text"):
             return None, "no chat connection — connect a chat model first", None
         return provider, config_files._stage_invention(cfg, stage), (cfg.get("systems") or {})
+
+    # A thin seed → a thorough, disciplined-prose character sheet. The single "flesh thin→rich" front
+    # door that feeds every downstream parser (appearance / pose / expression → tags).
+    _FLESH_INSTRUCTION = (
+        "Expand this thin seed into a thorough, vivid character: full physical appearance, personality, "
+        "demeanor, and how they physically carry and express themselves — while staying faithful to the "
+        "details given.")
+
+    def flesh_character(self, key: str, instruction: str = "") -> dict:
+        """Rewrite a (thin) character into a thorough disciplined-prose sheet (persona + appearance +
+        role) via the story reviser, persisted IN PLACE. Returns the new fields or {error}."""
+        from ..scenario import revise_character
+        ch = self.base_settings.characters.get(key)
+        if ch is None:
+            return {"error": "no such character"}
+        provider, invention, systems = self.builder_ctx({}, "characters")
+        if provider is None:
+            return {"error": invention}
+        fields = ch.fields or {}
+        try:
+            revised = revise_character(
+                provider, name=ch.name, persona=ch.system or "", role=fields.get("role", ""),
+                appearance=fields.get("appearance", ""),
+                instruction=instruction.strip() or self._FLESH_INSTRUCTION,
+                invention=invention, systems=systems)
+        except Exception as exc:  # noqa: BLE001
+            return {"error": f"flesh failed: {exc}"}
+        safe = re.sub(r"[^\w\-]+", "", key)
+        path = self.char_dir() / f"{safe}.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {} if path.is_file() else {}
+        data["name"] = revised.get("name") or data.get("name") or ch.name
+        data["system"] = revised.get("persona") or ch.system or ""
+        data["fields"] = {**(data.get("fields") or {}), "role": revised.get("role") or fields.get("role", ""),
+                          "appearance": revised.get("appearance") or fields.get("appearance", "")}
+        Character(**data)  # validate
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self.reload_settings()
+        return {"ok": True, "name": data["name"], "persona": data["system"],
+                "appearance": data["fields"]["appearance"], "role": data["fields"]["role"]}
+
+    def ensure_fleshed(self, key: str) -> None:
+        """Auto-fallback: if a character's persona is still thin (a bare seed), flesh it into the
+        disciplined-prose sheet before generation parses tags from it. No-op on thorough personas."""
+        ch = self.base_settings.characters.get(key)
+        if ch is not None and len((ch.system or "").strip()) < 320:
+            self.flesh_character(key)
 
     def card_extras(self, ch, char_key: str) -> dict:
         scen = self.base_settings.scenarios.get(char_key)
@@ -485,8 +635,7 @@ class AppContext:
     def compose_base_prompt(self, name: str, persona: str, appearance_notes: str = "",
                             role: str = "", model: str | None = None) -> dict:
         """THE single appearance authority: a natural-language physical description (+ DERIVED build/
-        bust and the other structured controls) → an ITERATIVE distinctiveness pass that fights the
-        model's slim/generic mode-collapse → `_assemble_base_prompt` (grounds prose to real tags,
+        bust and the other structured controls) → `_assemble_base_prompt` (grounds prose to real tags,
         applies safety guardrails, regionizes). Synchronous (call inside a threadpool). Used by BOTH
         the ✨ button AND cast generation. Returns {prompt, features, companions} or {error}."""
         from ..scenario.builder import DEFAULT_SYSTEMS
@@ -505,8 +654,8 @@ class AppContext:
                    "(persona + appearance). Give `appearance` as a LIST of short, explicit, ATOMIC "
                    "descriptors (one attribute each) — the system grounds each to a real booru tag.\n\n"
                    + context)
-        # PASS 1 — the model lists atomic appearance descriptors + derives build/bust/height. Retry
-        # once on an empty result (structured output occasionally returns empty/whitespace), and never
+        # Generate the feature schema — the model lists atomic appearance descriptors + derives build/bust/height.
+        # Retry once on an empty result (structured output occasionally returns empty/whitespace), and never
         # let a provider/parse hiccup raise out of here — it would crash the whole cast job.
         def _gen_feats():
             return (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
@@ -517,27 +666,6 @@ class AppContext:
         if not feats:
             return {"error": "model returned no structured features "
                              "(author model may not support structured output)"}
-        # PASS 2 — ITERATIVE DISTINCTIVENESS critique. LLMs mode-collapse to a generic slim/pretty
-        # default; a vague "be creative" does nothing. So confront the draft with its OWN choices and
-        # force a persona-justified revision. Cheap insurance against a same-y cast; keep pass 1 on error.
-        critique = (
-            context
-            + f"\n\nYOUR DRAFT:\n- height: {feats.get('height')}\n- build: {feats.get('build')}\n"
-              f"- bust: {feats.get('bust')}\n- appearance: {feats.get('appearance')}\n\n"
-              "CRITIQUE THEN RE-EMIT ALL FIELDS. Be honest: did you reach for a GENERIC slim, "
-              "average-height body and a default pretty-anime face that is NOT specifically justified "
-              "by THIS persona? If so, FIX it. Pick a real silhouette from the range — petite, a short "
-              "and curvy 'short stack', tall and slender, soft and plump, voluptuous — whatever this "
-              "character's age, lifestyle and body genuinely imply, and VARY height (short / average / "
-              "tall) too. Do NOT make ordinary women muscular. Make the face DISTINCTIVE (a feature "
-              "the reader would remember). If the draft is already specific and well-justified, keep "
-              "it. Output the full schema.")
-        try:
-            d2 = provider.generate_text(system=system, prompt=critique, emits=_prompts.FEATURES_SCHEMA).data
-            if d2 and d2.get("appearance") and d2.get("build"):
-                feats = d2
-        except Exception:  # noqa: BLE001 — keep the pass-1 result
-            pass
         return {"prompt": _prompts._assemble_base_prompt(feats), "features": feats, "companions": []}
 
     def compose_expressions(self, persona: str, model: str | None = None) -> dict:

@@ -3,8 +3,9 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { img, loadWorkflow, loadChoices, runTest, cancelTest, saveTestPrompt, TEST_COUNT,
-           workflowNeedsInit, sweepParams, sweepValues, runSweep } from '$lib/images.svelte.js';
+           workflowNeedsInit, sweepParams, sweepValues, runSweep, composeTestCells } from '$lib/images.svelte.js';
   import { app, clearSubnav } from '$lib/app.svelte.js';
+  import { chars, loadChars } from '$lib/characters.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import Combobox from '$lib/components/Combobox.svelte';
 
@@ -16,8 +17,14 @@
   // img2img workflows need a source image for the test grid to run against.
   let needsInit = $derived(workflowNeedsInit());
 
-  // --- test modes: random tags (existing) vs parameter sweep ---
-  let testMode = $state('tags'); // tags | sweep
+  // --- test modes: sprite/scene mirror real production renders; tags/sweep are raw experimentation ---
+  let testMode = $state('sprite'); // sprite | scene | tags | sweep
+  // Subject source for the parity modes (sprite/scene): typed prompt, or a picked character's appearance.
+  let subjectMode = $state('typed'); // typed | char
+  let testChar = $state('');
+  let charItems = $derived((chars.list || []).map((c) => ({ value: c.key, label: c.name || c.key })));
+  const REP_EMOTIONS = ['Neutral', 'Joy', 'Sadness', 'Anger', 'Fear', 'Surprise', 'Desire', 'Disgust'];
+  const runParity = (mode) => composeTestCells(mode, { subjectMode, subject: img.testPrompt, character: testChar });
   let params = $derived(testMode === 'sweep' && img.test ? sweepParams() : []);
   let paramItems = $derived(params.map((p) => ({ value: `${p.id}.${p.field}`, label: p.label })));
   let sel = $state('');
@@ -44,7 +51,12 @@
       : sweepParam.options.filter((o) => comboPick[o]);
     if (values.length) runSweep(sweepParam, values);
   }
-  function rerun() { img.test?.mode === 'sweep' ? runSweepClick() : runTest(); }
+  function rerun() {
+    const m = img.test?.mode;
+    if (m === 'sweep') runSweepClick();
+    else if (m === 'sprite' || m === 'scene') runParity(m);
+    else runTest();
+  }
 
   function pickTestSource(e) {
     const f = e.target.files?.[0];
@@ -68,6 +80,7 @@
     { id: 'models', label: 'Models' },
     { id: 'graph', label: 'Graph' },
     { id: 'roles', label: 'Roles' },
+    { id: 'poses', label: 'Poses' },
     { id: 'lora', label: 'LoRA' },
     { id: 'connection', label: 'Connection' }
   ];
@@ -84,7 +97,7 @@
   // editor needs the full width. Keep the global sub-nav cleared so no left panel renders here.
   $effect(() => { clearSubnav(); });
 
-  onMount(loadChoices);
+  onMount(() => { loadChoices(); loadChars(); });
   // Load the workflow when the active image model becomes available / changes
   // (avoids a race with refreshAll() setting app.activeImage on first paint).
   let loadedFor = $state(null);
@@ -125,7 +138,10 @@
     <div class="modal" onclick={(e) => e.stopPropagation()}>
       <div class="mhead">
         <strong>
-          {img.test.mode === 'sweep' ? `Parameter sweep — ${img.test.param}` : 'Test render — random tags'}{img.test.phase === 'running' ? ` (${img.test.cells.filter((c) => c.image || c.error).length}/${img.test.cells.length})` : ''}
+          {img.test.mode === 'sweep' ? `Parameter sweep — ${img.test.param}`
+            : img.test.mode === 'sprite' ? 'Sprite test — full body × emotions'
+            : img.test.mode === 'scene' ? 'Scene test'
+            : 'Test render — random tags'}{img.test.phase === 'running' ? ` (${img.test.cells.filter((c) => c.image || c.error).length}/${img.test.cells.length})` : ''}
         </strong>
         <button class="icon" title={img.test.phase === 'running' ? 'Cancel & close' : 'Close'}
           onclick={() => { if (img.test.phase === 'running') cancelTest(); img.test = null; }}>✕</button>
@@ -133,12 +149,36 @@
 
       {#if img.test.phase === 'input'}
         <div class="modeseg">
+          <button class:on={testMode === 'sprite'} onclick={() => (testMode = 'sprite')}>Sprite</button>
+          <button class:on={testMode === 'scene'} onclick={() => (testMode = 'scene')}>Scene</button>
           <button class:on={testMode === 'tags'} onclick={() => (testMode = 'tags')}>Random tags</button>
           <button class:on={testMode === 'sweep'} onclick={() => (testMode = 'sweep')}>Parameter sweep</button>
         </div>
 
-        <label for="tprompt">Subject / prompt {#if testMode === 'tags'}<span class="lo">— a random booru tag is appended per sample</span>{:else}<span class="lo">— held fixed across the sweep</span>{/if}</label>
-        <textarea id="tprompt" rows="3" bind:value={img.testPrompt} placeholder="e.g. rio \(blue archive\), 1girl, safe, masterpiece"></textarea>
+        {#if testMode === 'sprite' || testMode === 'scene'}
+          <p class="lo" style="margin:0 0 8px">
+            {testMode === 'sprite'
+              ? 'Renders the REAL sprite prompt — subject + expression + pose + full-body framing — so framing/pose match production.'
+              : 'Renders the subject through the scene workflow’s own framing.'}
+          </p>
+          <div class="modeseg" style="margin-bottom:10px">
+            <button class:on={subjectMode === 'typed'} onclick={() => (subjectMode = 'typed')}>Typed subject</button>
+            <button class:on={subjectMode === 'char'} onclick={() => (subjectMode = 'char')}>From character</button>
+          </div>
+          {#if subjectMode === 'char'}
+            <label>Character <span class="lo">— uses its real appearance tags</span></label>
+            <Combobox items={charItems} value={testChar} placeholder="pick a character…" onpick={(v) => (testChar = v)} />
+          {:else}
+            <label for="tprompt">Subject <span class="lo">— appearance tags; framing &amp; pose are added automatically</span></label>
+            <textarea id="tprompt" rows="2" bind:value={img.testPrompt} placeholder="e.g. 1girl, long blue hair, red eyes, school uniform"></textarea>
+          {/if}
+          {#if testMode === 'sprite'}
+            <p class="lo" style="margin:8px 0 0">Emotions: {REP_EMOTIONS.join(' · ')}</p>
+          {/if}
+        {:else}
+          <label for="tprompt">Subject / prompt {#if testMode === 'tags'}<span class="lo">— a random booru tag is appended per sample</span>{:else}<span class="lo">— held fixed across the sweep</span>{/if}</label>
+          <textarea id="tprompt" rows="3" bind:value={img.testPrompt} placeholder="e.g. rio \(blue archive\), 1girl, safe, masterpiece"></textarea>
+        {/if}
 
         {#if needsInit}
           <label for="tsrc">Source image <span class="lo">— this is an img2img workflow; every sample starts from it</span></label>
@@ -175,7 +215,11 @@
         {/if}
 
         <div class="row" style="margin-top:12px">
-          {#if testMode === 'tags'}
+          {#if testMode === 'sprite'}
+            <button onclick={() => runParity('sprite')} disabled={subjectMode === 'char' && !testChar}>Generate sprite set</button>
+          {:else if testMode === 'scene'}
+            <button onclick={() => runParity('scene')} disabled={subjectMode === 'char' && !testChar}>Render scene</button>
+          {:else if testMode === 'tags'}
             <button onclick={runTest} disabled={needsInit && !img.testInitImage}>Generate {TEST_COUNT} samples</button>
           {:else}
             <button onclick={runSweepClick} disabled={!sweepParam || (needsInit && !img.testInitImage)}>Run sweep</button>

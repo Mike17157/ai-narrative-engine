@@ -18,6 +18,18 @@
   let filtered = $derived(
     items.filter((it) => norm(it.label).includes(norm(query))).slice(0, 300)
   );
+  // Optional grouping: when items carry a `group`, render headers (in first-seen order). If none do,
+  // a single headerless section — identical to the old flat list.
+  let sections = $derived.by(() => {
+    const order = [], by = {};
+    for (const it of filtered) {
+      const g = it.group || '';
+      if (!(g in by)) { by[g] = []; order.push(g); }
+      by[g].push(it);
+    }
+    return order.map((g) => ({ group: g, items: by[g] }));
+  });
+  let hasGroups = $derived(items.some((it) => it.group));
 
   function labelFor(v) {
     const it = items.find((i) => i.value === v);
@@ -66,10 +78,13 @@
     <div class="pop">
       <input class="search" placeholder="search…" bind:value={query} onclick={(e) => e.stopPropagation()} />
       <div class="list">
-        {#each filtered as it (it.value)}
-          <div class="opt" class:sel={isSel(it.value)} onclick={(e) => { e.stopPropagation(); pick(it); }}>
-            {it.label}
-          </div>
+        {#each sections as sec (sec.group)}
+          {#if hasGroups && sec.group}<div class="grp">{sec.group}</div>{/if}
+          {#each sec.items as it (it.value)}
+            <div class="opt" class:sel={isSel(it.value)} onclick={(e) => { e.stopPropagation(); pick(it); }}>
+              {it.label}
+            </div>
+          {/each}
         {:else}
           <div class="empty">no matches</div>
         {/each}
@@ -105,5 +120,7 @@
   .opt { padding: 8px 10px; cursor: pointer; font-size: 13.5px; border-radius: 7px; }
   .opt:hover { background: var(--elev-2); }
   .opt.sel { background: rgba(109,140,255,.16); color: #cdd8ff; }
+  .grp { padding: 8px 10px 3px; font-size: 10.5px; font-weight: 700; text-transform: uppercase;
+         letter-spacing: .4px; color: var(--faint); }
   .empty { padding: 12px; color: var(--muted); font-size: 13px; }
 </style>

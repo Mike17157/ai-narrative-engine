@@ -8,13 +8,15 @@ hard dependencies.
 from __future__ import annotations
 
 
-async def _render(provider, prompt: str, init_image: bytes | None = None) -> bytes | None:
+async def _render(provider, prompt: str, init_image: bytes | None = None,
+                  out_prefix: str | None = None, latent: tuple[int, int] | None = None) -> bytes | None:
     from fastapi.concurrency import run_in_threadpool
 
     from ...comfy.server import get_server
     await run_in_threadpool(get_server(provider.base_url).ensure_up)
     result = await run_in_threadpool(
-        lambda: provider.generate_image(prompt=prompt, init_image=init_image))
+        lambda: provider.generate_image(prompt=prompt, init_image=init_image,
+                                        out_prefix=out_prefix, latent=latent))
     return result.images[0] if result.images else None
 
 

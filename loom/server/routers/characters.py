@@ -10,13 +10,14 @@ from pydantic import BaseModel
 
 from ...cards import extract_card_json, to_character
 from ...card_sources import fetch_card
-from ..services.emotions import EMOTION_KEYS
+from ..services import config_files
+from ..services.emotions import EMOTION_KEYS, EMOTION_LABELS
 from ..services.images import _clean_reference_png, _randomize_seeds, _render
+from ..services.batch_images import batch_generate_image
 from ..services.jobs_util import _start_stream_job
 from ..services.prompts import (
     _DESCRIBE_SYSTEM,
     _EXPRESSION_SYSTEM,
-    _FULLBODY_FRAMING,
     _OUTFIT_SYSTEM,
     _PORTRAIT_FRAMING,
     _base_prompt,
@@ -34,6 +35,114 @@ class CharacterImportRequest(BaseModel):
 
 
 def register(app, ctx):
+    @app.get("/api/poses")
+    def get_poses() -> dict:
+        """Global shot GEOMETRY per emotion (+ neutral): camera framing (cowboy 3/4 vs full body) and
+        latent aspect. Body language itself is generated per character (not global), so this is geometry
+        only. Returns each emotion's effective framing/aspect + whether it overrides the default."""
+        from ..services.poses import FRAMING_TAGS, ASPECT_DIMS, geometry_default, resolve_geometry
+        ov = config_files.load_poses(ctx.root)
+        labels = {"neutral": "Neutral", **EMOTION_LABELS}
+        keys = ["neutral", *EMOTION_KEYS]
+        def row(k):
+            g = resolve_geometry(k, ov)
+            return {"key": k, "label": labels.get(k, k), "framing": g["framing"], "aspect": g["aspect"],
+                    "custom": g != geometry_default(k)}
+        return {"poses": [row(k) for k in keys],
+                "framings": list(FRAMING_TAGS.keys()), "aspects": list(ASPECT_DIMS.keys())}
+
+    @app.post("/api/poses")
+    def set_poses(body: dict):
+        """Save shot-geometry overrides. Accepts one {key, framing?, aspect?} or {config:{key:entry}}.
+        An entry equal to the built-in geometry default is dropped. Read fresh per render — no restart."""
+        from ..services.poses import FRAMING_TAGS, ASPECT_DIMS, geometry_default
+        body = body or {}
+        updates = body.get("config")
+        if updates is None and body.get("key"):
+            updates = {body["key"]: {kk: body[kk] for kk in ("framing", "aspect") if kk in body}}
+        if not isinstance(updates, dict):
+            return JSONResponse({"error": "expected {key,framing,aspect} or {config:{key:entry}}"}, status_code=400)
+        valid = {"neutral", *EMOTION_KEYS}
+        ov = config_files.load_poses(ctx.root)
+        for k, v in updates.items():
+            if k not in valid:
+                return JSONResponse({"error": f"unknown emotion '{k}'"}, status_code=400)
+            entry = {}
+            if (v or {}).get("framing") in FRAMING_TAGS:
+                entry["framing"] = v["framing"]
+            if (v or {}).get("aspect") in ASPECT_DIMS:
+                entry["aspect"] = v["aspect"]
+            # keep only the fields that differ from the geometry default
+            d = geometry_default(k)
+            entry = {kk: vv for kk, vv in entry.items() if vv != d.get(kk)}
+            if entry:
+                ov[k] = entry
+            else:
+                ov.pop(k, None)
+        config_files.save_poses(ctx.root, ov)
+        return {"ok": True}
+
+    @app.get("/api/characters/{key}/poses")
+    def get_character_poses(key: str):
+        """A character's per-emotion body-language tags (composed from persona, stored on the manifest).
+        Empty until composed (regenerate / wardrobe). Editable as prose → tags."""
+        if key not in ctx.base_settings.characters:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        pp = ctx.portrait_manifest(key).get("pose_prompts") or {}
+        return {"poses": [{"key": k, "label": EMOTION_LABELS[k], "tags": (pp.get(k) or "")} for k in EMOTION_KEYS]}
+
+    @app.post("/api/characters/{key}/poses")
+    def set_character_pose(key: str, body: dict):
+        """Edit ONE emotion's body-language for a character. `tags` is snapped to booru tags (prose ok);
+        empty clears it. Or {compose:true} (re)generates the whole set from the persona."""
+        c = ctx.base_settings.characters.get(key)
+        if c is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        body = body or {}
+        m = ctx.portrait_manifest(key)
+        pp = dict(m.get("pose_prompts") or {})
+        if body.get("compose"):
+            ctx.ensure_fleshed(key)          # thin seed → disciplined prose first
+            c = ctx.base_settings.characters.get(key)
+            pp = ctx.compose_poses(_persona_text(c))
+        else:
+            emo = (body.get("emotion") or "").strip()
+            if emo not in EMOTION_KEYS:
+                return JSONResponse({"error": f"unknown emotion '{emo}'"}, status_code=400)
+            tags = _snap_prompt(_safe_image_tags((body.get("tags") or "").strip()))
+            if tags:
+                pp[emo] = tags
+            else:
+                pp.pop(emo, None)
+        m["pose_prompts"] = pp
+        ctx.save_portrait_manifest(key, m)
+        return {"ok": True, "poses": {k: pp.get(k, "") for k in EMOTION_KEYS}}
+
+    @app.post("/api/characters/{key}/generate-all")
+    def generate_all(key: str, body: dict):
+        """Headless end-to-end: flesh → base prompt → base image → one outfit → expressions + poses →
+        full emotion sprite set, all saved to disk. Streamed job; same orchestrator the CLI uses."""
+        from ..services.full_gen import generate_full_character
+        if key not in ctx.base_settings.characters:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        ch = ctx.base_settings.characters[key]
+        job = _start_stream_job("character", "Generate full character", ch.name,
+                                f"characters/{key}",
+                                lambda emit, cancelled: generate_full_character(ctx, key, emit, cancelled))
+        return {"job": job.id}
+
+    @app.post("/api/characters/{key}/flesh")
+    async def flesh_character_route(key: str, body: dict):
+        """Flesh a thin character seed into a thorough, disciplined-prose sheet (rewrites the persona in
+        place) — the front door for thin→rich: appearance/pose/expression all parse from this prose."""
+        from fastapi.concurrency import run_in_threadpool
+        if key not in ctx.base_settings.characters:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        out = await run_in_threadpool(ctx.flesh_character, key, (body or {}).get("instruction", ""))
+        if "error" in out:
+            return JSONResponse({"error": out["error"]}, status_code=500)
+        return out
+
     @app.get("/api/characters")
     def characters() -> list:
         char_dir = ctx.char_dir()
@@ -214,11 +323,12 @@ def register(app, ctx):
         # Outfit base is a FULL-BODY whole-look image (not a bust). TXT2IMG by design: identity comes
         # from the appearance tags in the prompt, NOT img2img off the reference — seeding from the ref
         # made every outfit inherit the reference's POSE (the bending-over problem).
-        render_prompt = f"{prompt}, neutral expression, {_FULLBODY_FRAMING}"
+        render_prompt = f"{prompt}, neutral expression, {ctx.pose_tags(key, 'neutral')}, {ctx.pose_framing('neutral')}"
         try:
             from ...comfy.server import get_server
             get_server(provider.base_url).ensure_up()
-            result = provider.generate_image(prompt=render_prompt)
+            result = provider.generate_image(prompt=render_prompt, latent=ctx.pose_latent('neutral'),
+                                             out_prefix=ctx.output_prefix_for(model_id, "outfit", key))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if not result.images:
@@ -270,11 +380,12 @@ def register(app, ctx):
         provider, model_id = ctx.image_provider((body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        render_prompt = f"{outfit.get('prompt','')}, {expr_tags}, {_PORTRAIT_FRAMING}"
+        render_prompt = f"{outfit.get('prompt','')}, {expr_tags}, {ctx.pose_tags(key, emotion)}, {_PORTRAIT_FRAMING}"
         try:
             from ...comfy.server import get_server
             get_server(provider.base_url).ensure_up()
-            result = provider.generate_image(prompt=render_prompt, init_image=base_png.read_bytes())
+            result = provider.generate_image(prompt=render_prompt, init_image=base_png.read_bytes(),
+                                             out_prefix=ctx.output_prefix_for(model_id, "sprite", key))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if not result.images:
@@ -410,7 +521,7 @@ def register(app, ctx):
                 or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
         # Every outfit picture is FULL BODY (the expression sprite shows the whole look + the face).
         prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
-            ", ".join(p for p in (appearance, attire, expr, _FULLBODY_FRAMING) if p))))
+            ", ".join(p for p in (appearance, attire, expr, ctx.pose_tags(key, emotion), ctx.pose_framing(emotion)) if p))))
         model = ctx.role_model("sprite", body.get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
@@ -419,7 +530,8 @@ def register(app, ctx):
         # txt2img — identity comes from the appearance tags (the model is consistent enough that
         # img2img from the base added little). The workflow removes the background (→ transparent).
         try:
-            png = await _render(provider, prompt)
+            png = await _render(provider, prompt, out_prefix=ctx.output_prefix_for(model_id, "sprite", key),
+                                latent=ctx.pose_latent(emotion))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if png is None:
@@ -469,6 +581,7 @@ def register(app, ctx):
             return JSONResponse({"error": model_id}, status_code=400)
         appearance = (ch.fields or {}).get("appearance") or ""
         canon = m.get("expression_prompts") or {}
+        oprefix = ctx.output_prefix_for(model_id, "sprite", key)   # organized output path (once)
 
         def work(emit, cancelled):
             from concurrent.futures import ThreadPoolExecutor
@@ -479,6 +592,10 @@ def register(app, ctx):
             except Exception:  # noqa: BLE001
                 pass
             done = 0
+
+            # Collect all prompts across outfits for batch processing
+            all_jobs = []  # [(outfit, emotion, prompt_dict, out_dir)]
+
             for o in outfits:
                 if cancelled():
                     break
@@ -486,35 +603,65 @@ def register(app, ctx):
                 attire = o.get("attire_prompt") or o.get("prompt") or ""
                 odir = ctx.portrait_dir(key, create=True) / oid
                 odir.mkdir(parents=True, exist_ok=True)
-                emit({"type": "phase",
-                      "label": f"Rendering {o.get('name') or oid} — {len(EMOTION_KEYS)} emotions"})
 
-                def _one(emo, _attire=attire, _odir=odir, _o=o):
-                    if cancelled():
-                        return None
-                    expr = canon.get(emo) or (_o.get("expression_prompts") or {}).get(emo) or emo
+                for emo in EMOTION_KEYS:
+                    expr = canon.get(emo) or (o.get("expression_prompts") or {}).get(emo) or emo
                     prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
-                        ", ".join(p for p in (appearance, _attire, expr, _FULLBODY_FRAMING) if p))))
-                    try:
-                        prov2, _mid = ctx.image_provider(model)   # own workflow+seed per thread
-                        _randomize_seeds(prov2.workflow)
-                        res = prov2.generate_image(prompt=prompt)
-                        png = res.images[0] if res.images else None
-                    except Exception:  # noqa: BLE001 — one sprite failing must not sink the batch
-                        png = None
-                    if png:
-                        (_odir / f"{emo}.png").write_bytes(png)
-                        return emo
-                    return None
+                        ", ".join(p for p in (appearance, attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if p))))
 
-                # ≤3 concurrent submissions — ComfyUI queues them; don't flood the server.
-                with ThreadPoolExecutor(max_workers=3) as ex:
-                    for emo in ex.map(_one, EMOTION_KEYS):
-                        if emo:
-                            o.setdefault("expressions", {})[emo] = f"{emo}.png"
-                            done += 1
-                            emit({"type": "item", "name": emo, "text": o.get("name") or oid})
-                ctx.save_portrait_manifest(key, m)   # persist this outfit's sprites
+                    all_jobs.append({
+                        "outfit": o,
+                        "emotion": emo,
+                        "prompt": prompt,
+                        "out_dir": odir,
+                        "latent": ctx.pose_latent(emo)
+                    })
+
+            if cancelled():
+                return {"ok": True, "rendered": 0, "outfits": 0}
+
+            emit({"type": "phase", "label": f"Rendering {len(all_jobs)} sprites across {len(outfits)} outfits"})
+
+            # Prepare batch prompts
+            batch_prompts = [{"prompt": j["prompt"], "latent": j["latent"]} for j in all_jobs]
+
+            # Use batch generation (handles RunPod scaling automatically)
+            try:
+                import asyncio
+                import copy
+
+                loop = asyncio.get_event_loop()
+                results = loop.run_until_complete(batch_generate_image(
+                    provider=provider,
+                    workflow=copy.deepcopy(provider.workflow),
+                    prompts=batch_prompts,
+                    ctx=ctx,
+                    out_prefix_template=oprefix,
+                ))
+            except Exception as e:  # noqa: BLE001
+                # Fallback: process sequentially
+                emit({"type": "phase", "label": "Batch generation failed, processing sequentially..."})
+                results = []
+                for job in all_jobs:
+                    try:
+                        _randomize_seeds(provider.workflow)
+                        res = provider.generate_image(prompt=job["prompt"], out_prefix=oprefix, latent=job["latent"])
+                        results.append(res.images[0] if res.images else None)
+                    except Exception:  # noqa: BLE001
+                        results.append(None)
+
+            # Save results and update manifests
+            for idx, job in enumerate(all_jobs):
+                if cancelled():
+                    break
+                png = results[idx] if idx < len(results) else None
+                if png:
+                    (job["out_dir"] / f"{job['emotion']}.png").write_bytes(png)
+                    job["outfit"].setdefault("expressions", {})[job["emotion"]] = f"{job['emotion']}.png"
+                    done += 1
+                    emit({"type": "item", "name": job["emotion"], "text": job["outfit"].get("name") or job["outfit"].get("id")})
+                ctx.save_portrait_manifest(key, m)   # persist each outfit's sprites
+
             return {"ok": True, "rendered": done, "outfits": len(outfits)}
 
         job = _start_stream_job("sprites", "Render emotions", ch.name,
@@ -567,7 +714,7 @@ def register(app, ctx):
             return JSONResponse({"error": "no such outfit"}, status_code=404)
         appearance = (ch.fields or {}).get("appearance") or ""
         attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, _FULLBODY_FRAMING) if p))))
+        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral")) if p))))
         model = ctx.role_model("sprite", (body or {}).get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
@@ -575,7 +722,8 @@ def register(app, ctx):
         _randomize_seeds(provider.workflow)
         # txt2img — identity from the appearance tags (the model is consistent without img2img).
         try:
-            png = await _render(provider, prompt)
+            png = await _render(provider, prompt, out_prefix=ctx.output_prefix_for(model_id, "outfit", key),
+                                latent=ctx.pose_latent("neutral"))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if png is None:
@@ -623,9 +771,11 @@ def register(app, ctx):
         cast generation, so a regenerated cast already matches this."""
         from fastapi.concurrency import run_in_threadpool
 
-        ch = ctx.base_settings.characters.get(key)
-        if ch is None:
+        if key not in ctx.base_settings.characters:
             return JSONResponse({"error": "no such character"}, status_code=404)
+        # Auto-flesh a thin seed first, so the appearance is parsed from disciplined prose (thin→rich).
+        await run_in_threadpool(ctx.ensure_fleshed, key)
+        ch = ctx.base_settings.characters.get(key)
         fields = ch.fields or {}
         out = await run_in_threadpool(lambda: ctx.compose_base_prompt(
             ch.name, ch.system or "", fields.get("appearance", ""), fields.get("role", ""),
@@ -694,7 +844,9 @@ def register(app, ctx):
             return JSONResponse({"error": model_id}, status_code=400)
         _randomize_seeds(provider.workflow)  # fresh seed each call → a batch of 4 varies
         try:
-            png = await _render(provider, prompt, init_image=style_bytes)
+            png = await _render(provider, prompt, init_image=style_bytes,
+                                out_prefix=ctx.output_prefix_for(model_id, "style" if style_bytes else "base", key),
+                                latent=ctx.pose_latent("neutral"))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if png is None:

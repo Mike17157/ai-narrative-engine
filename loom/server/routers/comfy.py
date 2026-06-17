@@ -19,14 +19,27 @@ def register(app, ctx):
     @app.get("/api/comfy/models")
     def comfy_models():
         """Signature-classified index of the entire ComfyUI model tree: every
-        file tagged with kind (checkpoint/diffusion/vae/clip/lora/…) and arch
-        (sdxl/sd15/flux/dit/…) read from its tensor header, not its folder."""
+        file tagged with kind (checkpoint/diffusion/vae/clip/lora/…), arch
+        (sdxl/sd15/flux/dit/…) read from its tensor header, and a sub-family
+        (illustrious/pony/anima/…) layering manual overrides on the folder/arch guess."""
         from ...comfy.scan import scan_models
         bd = ctx.comfy_base_dir()
         models_dir = (bd / "models") if bd else None
         if not models_dir or not models_dir.is_dir():
             return JSONResponse({"error": "ComfyUI models directory not found", "items": []}, status_code=404)
-        return scan_models(models_dir)
+        res = scan_models(models_dir)
+        # apply manual family overrides (configs/families.json) keyed by folder-relative name
+        ov = config_files.load_families(ctx.root)
+        if ov:
+            by_family: dict[str, dict] = {}
+            for it in res.get("items", []):
+                if it.get("family") and ov.get(it["rel"]):
+                    it["family"] = ov[it["rel"]]
+                if it.get("family"):
+                    fam = by_family.setdefault(it["family"], {"base": 0, "lora": 0})
+                    fam["lora" if it["kind"] == "lora" else "base"] += 1
+            res["by_family"] = by_family
+        return res
 
     @app.post("/api/comfy/models/resolve")
     def model_resolve(body: dict):
@@ -152,6 +165,18 @@ def register(app, ctx):
         # LoRA classifications drive the folder layout (<family>/<classification>/).
         classifications = {l.name.replace("\\", "/"): l.type for l in ctx.base_settings.loras.library}
         return plan_moves(md, classifications)
+
+    @app.get("/api/comfy/librarian/family")
+    def librarian_plan_family():
+        """Proposed moves to file every model into its FAMILY folder (Illustrious/, Pony/, Anima/,
+        SDXL/, …) derived from its name/folder/arch + manual overrides — the "Categorize by name"
+        action. Reviewed then run via /librarian/apply (same move + reference-rewrite path)."""
+        from ...comfy.librarian import plan_family_moves
+        bd = ctx.comfy_base_dir()
+        md = (bd / "models") if bd else None
+        if not md or not md.is_dir():
+            return JSONResponse({"error": "ComfyUI models directory not found", "moves": []}, status_code=404)
+        return plan_family_moves(md, config_files.load_families(ctx.root))
 
     @app.post("/api/comfy/librarian/apply")
     def librarian_apply(body: dict):
@@ -300,12 +325,15 @@ def register(app, ctx):
 
     @app.get("/api/loras/bases")
     def lora_bases():
-        """Each image workflow with its base model (checkpoint or UNet) and that
-        model's real architecture, classified from its tensor signature via the
-        scan. Triage picks one of these; LoRAs are filtered to the matching arch."""
+        """Each image workflow with its base model (checkpoint or UNet), that model's real
+        architecture (from its tensor signature), and the resolved sub-family
+        (illustrious/pony/anima/…). Triage picks one of these; LoRAs are filtered to the matching
+        family (soft — same-arch cross-family stays available behind a toggle)."""
         from ...comfy.scan import classify
+        from ...comfy.family import family_of
         bd = ctx.comfy_base_dir()
         models_dir = (bd / "models") if bd else None
+        ov = config_files.load_families(ctx.root)
         out = []
         for key, md in ctx.base_settings.models.items():
             if md.kind != "image":
@@ -331,11 +359,80 @@ def register(app, ctx):
                 fp = models_dir / folder / base_name.replace("\\", "/")
                 if fp.is_file():
                     arch = classify(str(fp)).get("arch") or "unknown"
+            # family: override by workflow key first, else by the base file's name/arch
+            family = family_of(base_name, arch=arch, override=ov.get(key) or (ov.get(base_name) if base_name else None))
             out.append({"key": key, "base": base_name,
                         # only a real checkpoint can drive the minimal triage render
                         "checkpoint": base_name if folder == "checkpoints" else None,
-                        "arch": arch})
+                        "arch": arch, "family": family})
         return out
+
+    @app.get("/api/families")
+    def get_families():
+        """The family registry (containers) + current manual overrides. Used to group models/LoRAs
+        and drive soft compatibility filtering in the UI."""
+        from ...comfy.family import FAMILIES
+        return {"families": [{"id": f["id"], "label": f["label"], "arch": f["arch"]} for f in FAMILIES],
+                "overrides": config_files.load_families(ctx.root)}
+
+    @app.post("/api/families")
+    def set_family(body: dict):
+        """Set or clear one manual family override. Body: {name, family}. An empty/falsey `family`
+        removes the override (back to folder/arch detection)."""
+        from ...comfy.family import FAMILY_IDS
+        body = body or {}
+        name = (body.get("name") or "").strip()
+        fam = (body.get("family") or "").strip()
+        if not name:
+            return JSONResponse({"error": "name required"}, status_code=400)
+        if fam and fam not in FAMILY_IDS:
+            return JSONResponse({"error": f"unknown family '{fam}'"}, status_code=400)
+        ov = config_files.load_families(ctx.root)
+        if fam:
+            ov[name] = fam
+        else:
+            ov.pop(name, None)
+        config_files.save_families(ctx.root, ov)
+        return {"ok": True, "overrides": ov}
+
+    @app.post("/api/families/enrich")
+    def enrich_families(body: dict):
+        """Best-effort: ask the comfyui-lora-manager plugin for each scanned LoRA/checkpoint's civitai
+        base_model and persist a family override where it sharpens a generic (sdxl/unknown) guess.
+        Body: {base_url?}. No-op when the plugin/ComfyUI is unreachable."""
+        from ...comfy.scan import scan_models
+        from ...comfy.family import family_of
+        from ...comfy.lora_manager import lm_base_model
+        bd = ctx.comfy_base_dir()
+        models_dir = (bd / "models") if bd else None
+        if not models_dir or not models_dir.is_dir():
+            return JSONResponse({"error": "ComfyUI models directory not found"}, status_code=404)
+        # talk to the same ComfyUI an image workflow points at (where lora-manager runs)
+        img = next((m for m in ctx.base_settings.models.values() if m.kind == "image"), None)
+        base_url = ((body or {}).get("base_url")
+                    or (img.options.get("base_url") if img else None)
+                    or "http://127.0.0.1:8188")
+        ov = config_files.load_families(ctx.root)
+        items = scan_models(models_dir).get("items", [])
+        added = 0
+        for it in items:
+            if it.get("kind") not in ("checkpoint", "diffusion", "lora") or it["rel"] in ov:
+                continue
+            # only spend a call when the folder/arch guess is generic (no specific lineage yet)
+            cur = it.get("family") or ""
+            if cur not in ("sdxl", "unknown", ""):
+                continue
+            kind = "loras" if it["kind"] == "lora" else "checkpoints"
+            base = lm_base_model(ctx.root, base_url, kind, it["rel"])
+            if not base:
+                continue
+            fam = family_of(it["rel"], arch=it.get("arch"), civitai_base=base)
+            if fam and fam not in ("unknown", cur):
+                ov[it["rel"]] = fam
+                added += 1
+        if added:
+            config_files.save_families(ctx.root, ov)
+        return {"ok": True, "added": added, "overrides": ov}
 
     @app.get("/api/loras/clusters")
     async def lora_clusters():

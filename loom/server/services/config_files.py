@@ -53,6 +53,44 @@ def load_image_roles(root: Path) -> dict:
     return {}
 
 
+# -- model/LoRA family overrides ---------------------------------------------
+# Manual `{ "<lora-or-checkpoint-rel-or-workflow-key>": "<family-id>" }` overrides layered on top of
+# the folder/arch family resolution (and civitai enrichment). See loom/comfy/family.py.
+def load_families(root: Path) -> dict:
+    path = root / "configs" / "families.json"
+    if path.is_file():
+        try:
+            return json.loads(path.read_text(encoding="utf-8")) or {}
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def save_families(root: Path, data: dict) -> None:
+    path = root / "configs" / "families.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data or {}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+# -- emotion shot-geometry overrides -----------------------------------------
+# `{ emotion_key: {framing?, aspect?} }` overrides merged on top of poses.geometry_default(). Body
+# language is per-character (manifest pose_prompts), so this file is geometry only. See poses.py.
+def load_poses(root: Path) -> dict:
+    path = root / "configs" / "poses.json"
+    if path.is_file():
+        try:
+            return json.loads(path.read_text(encoding="utf-8")) or {}
+        except (ValueError, OSError):
+            return {}
+    return {}
+
+
+def save_poses(root: Path, data: dict) -> None:
+    path = root / "configs" / "poses.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data or {}, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
 # -- promptgen ---------------------------------------------------------------
 PROMPTGEN_DEFAULT = {
     "enabled": True,

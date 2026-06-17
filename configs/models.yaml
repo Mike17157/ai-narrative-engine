@@ -194,3 +194,33 @@ models:
           field: text
       output_node: '201'
       timeout_s: 600
+
+  # Anima CHARACTER cutout — the anima graph + Inspyrenet background removal (node 201) so the
+  # subject is cut from anima's busy, non-uniform backgrounds (segmentation, not colour-key). Used
+  # for the base/sprite roles; the plain `anima` keeps full backgrounds for scenes/chat.
+  anima_cutout:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_cutout_api.json
+      inputs:
+        positive:
+          node: '6'
+          field: text
+      output_node: '201'      # easy imageRemBg → transparent PNG
+      timeout_s: 240
+
+  # duplicated from anima
+  anima_background:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_background_api.json
+      inputs:
+        positive:
+          node: '6'
+          field: text
+      output_node: '9'
+      timeout_s: 240

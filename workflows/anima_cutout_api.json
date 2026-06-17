@@ -1,0 +1,292 @@
+{
+  "3": {
+    "class_type": "KSampler",
+    "inputs": {
+      "seed": 42,
+      "steps": 30,
+      "cfg": 5,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1,
+      "model": [
+        "135",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "5",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "KSampler (Anima)"
+    }
+  },
+  "4": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "miaomiaoHarem_anima12.safetensors",
+      "weight_dtype": "default",
+      "ckpt_name": "Pony\\hardcoreHentai_ponyV11.safetensors"
+    },
+    "_meta": {
+      "title": "Load Diffusion Model (Anima)"
+    }
+  },
+  "5": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 920,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Empty Latent"
+    }
+  },
+  "6": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "masterpiece, best quality, score_9, safe, 1girl, solo, looking at viewer, detailed background",
+      "clip": [
+        "135",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "CLIP Text Encode (Positive)"
+    }
+  },
+  "7": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "text": "censored, worst quality, low quality, score_1, score_2, score_3, artist name, 3d, photorealistic, jpeg artifacts, watermark",
+      "clip": [
+        "135",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "CLIP Text Encode (Negative)"
+    }
+  },
+  "8": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "3",
+        0
+      ],
+      "vae": [
+        "12",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "11": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP (Qwen 0.6B)"
+    }
+  },
+  "12": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE (Qwen)"
+    }
+  },
+  "129": {
+    "class_type": "FaceDetailer",
+    "inputs": {
+      "guide_size": 384,
+      "guide_size_for": true,
+      "max_size": 768,
+      "seed": 42,
+      "steps": 30,
+      "cfg": 5,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 0.3,
+      "feather": 10,
+      "noise_mask": true,
+      "force_inpaint": true,
+      "bbox_threshold": 0.5,
+      "bbox_dilation": 10,
+      "bbox_crop_factor": 2,
+      "sam_detection_hint": "center-1",
+      "sam_dilation": 0,
+      "sam_threshold": 0.93,
+      "sam_bbox_expansion": 0,
+      "sam_mask_hint_threshold": 0.7,
+      "sam_mask_hint_use_negative": "False",
+      "drop_size": 10,
+      "wildcard": "",
+      "cycle": 1,
+      "inpaint_model": false,
+      "noise_mask_feather": 20,
+      "tiled_encode": false,
+      "tiled_decode": false,
+      "image": [
+        "8",
+        0
+      ],
+      "model": [
+        "135",
+        0
+      ],
+      "clip": [
+        "135",
+        1
+      ],
+      "vae": [
+        "12",
+        0
+      ],
+      "positive": [
+        "6",
+        0
+      ],
+      "negative": [
+        "7",
+        0
+      ],
+      "bbox_detector": [
+        "130",
+        0
+      ],
+      "sam_model_opt": [
+        "131",
+        0
+      ],
+      "segm_detector_opt": [
+        "132",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "FaceDetailer (post)"
+    }
+  },
+  "130": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "bbox/face_yolov8m.pt"
+    },
+    "_meta": {
+      "title": "BBox Detector (face)"
+    }
+  },
+  "131": {
+    "class_type": "SAMLoader",
+    "inputs": {
+      "model_name": "sam_vit_b_01ec64.pth",
+      "device_mode": "Prefer GPU"
+    },
+    "_meta": {
+      "title": "SAMLoader"
+    }
+  },
+  "132": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "segm/person_yolov8m-seg.pt"
+    },
+    "_meta": {
+      "title": "Segm Detector (person)"
+    }
+  },
+  "133": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "Futurabbitstyle_animaV1.5-000016.safetensors",
+      "strength_model": 0.4,
+      "strength_clip": 0.4,
+      "model": [
+        "4",
+        0
+      ],
+      "clip": [
+        "11",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "LoRA",
+      "bypassed": false
+    }
+  },
+  "134": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "anima_context_detailer_base10.safetensors",
+      "strength_model": 0.4,
+      "strength_clip": 0.4,
+      "model": [
+        "133",
+        0
+      ],
+      "clip": [
+        "133",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "LoRA",
+      "bypassed": false
+    }
+  },
+  "135": {
+    "class_type": "LoraLoader",
+    "inputs": {
+      "lora_name": "anima-turbo-lora-v0.2.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8,
+      "model": [
+        "134",
+        0
+      ],
+      "clip": [
+        "134",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "LoRA",
+      "bypassed": false
+    }
+  },
+  "201": {
+    "class_type": "easy imageRemBg",
+    "inputs": {
+      "images": [
+        "129",
+        0
+      ],
+      "rem_mode": "Inspyrenet",
+      "image_output": "Save",
+      "save_prefix": "anima",
+      "add_background": "none"
+    },
+    "_meta": {
+      "title": "Remove background (Inspyrenet \u2192 transparent)"
+    }
+  }
+}

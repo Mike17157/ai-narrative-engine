@@ -789,6 +789,19 @@ def register(app, ctx):
             except Exception:  # noqa: BLE001
                 canon = {}
         m["expression_prompts"] = canon
+        # Per-character body language (persona-driven), sibling of expression_prompts. Body explicit
+        # `poses` overrides/merges; else compose from the persona when the manifest has none yet.
+        poses = dict(m.get("pose_prompts") or {})
+        body_poses = body.get("poses") if isinstance(body.get("poses"), dict) else None
+        if body_poses:
+            poses.update(body_poses)
+        if not poses:
+            from ..services.prompts import _persona_text
+            try:
+                poses = ctx.compose_poses(_persona_text(c))
+            except Exception:  # noqa: BLE001
+                poses = {}
+        m["pose_prompts"] = poses
         existing = {o.get("name", "").lower() for o in m.get("outfits", [])}
         for o in body.get("outfits", []) or []:
             nm = (o.get("name") or "").strip()
@@ -814,7 +827,12 @@ def register(app, ctx):
         """DESTRUCTIVE, STREAMED: re-derive ONE cast member end-to-end, steered by an optional
         free-text `instruction`. Rewrites their persona + role + appearance (so the story overview
         updates), recomposes + saves the base-image prompt, re-renders the base image, and rebuilds
-        the wardrobe (old outfits + sprites cleared). Returns {job}; GenStream watches it live."""
+        the wardrobe (old outfits + sprites cleared). Returns {job}; GenStream watches it live.
+
+        With `text_only: true` it runs the TEXT half only — rewrite + recompose the base prompt +
+        refresh the persona-driven canonical expression prompts (and plan a wardrobe if none exists) —
+        and SKIPS every image render, leaving existing outfits and rendered sprites untouched. The
+        gated RegenModal uses this so the user can review each image stage before it renders."""
         from ...scenario import plan_wardrobe, revise_character
 
         st = ctx.base_settings.stories.get(key)
@@ -829,6 +847,7 @@ def register(app, ctx):
         if provider is None:
             return JSONResponse({"error": invention}, status_code=400)
         instruction = (body.get("instruction") or "").strip()
+        text_only = bool(body.get("text_only"))
         is_primary = any(m.character == char_key and m.primary for m in st.cast)
         story = st.model_dump()
         board = {"logline": (story.get("storyboard") or {}).get("logline", "")}
@@ -870,36 +889,56 @@ def register(app, ctx):
             if cancelled():
                 return {"cancelled": True}
             # 4. Re-render the base image from the new prompt and set it as the reference (best-effort).
-            emit({"type": "phase", "label": "Rendering the new base image"})
+            #    text_only skips every render — the gated modal renders the base later, with review.
+            if not text_only:
+                emit({"type": "phase", "label": "Rendering the new base image"})
+                try:
+                    iprov, _mid = ctx.image_provider(ctx.role_model("base"))
+                    if iprov is not None and base_prompt:
+                        from ...comfy.server import get_server
+                        get_server(iprov.base_url).ensure_up()
+                        res = iprov.generate_image(prompt=base_prompt,
+                                                   out_prefix=ctx.output_prefix_for(_mid, "base", char_key))
+                        if res.images:
+                            (ctx.char_dir() / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
+                except Exception as exc:  # noqa: BLE001 — a render failure must not sink the rewrite
+                    emit({"type": "phase", "label": f"Base image skipped ({exc})"})
+                if cancelled():
+                    return {"cancelled": True}
+            # 5. Refresh the wardrobe TEXT. Full path rebuilds (replace) — old outfits + stale sprites
+            #    cleared. text_only refreshes the persona-driven canonical expression prompts and keeps
+            #    existing outfits + rendered sprites intact (the outfit-image stage recomposes attire at
+            #    render time); it plans a wardrobe only when there is none yet, so the gated image
+            #    stages have outfits to render.
+            emit({"type": "phase", "label": "Refreshing prompts" if text_only else "Rebuilding the wardrobe"})
             try:
-                iprov, _mid = ctx.image_provider(ctx.role_model("base"))
-                if iprov is not None and base_prompt:
-                    from ...comfy.server import get_server
-                    get_server(iprov.base_url).ensure_up()
-                    res = iprov.generate_image(prompt=base_prompt)
-                    if res.images:
-                        (ctx.char_dir() / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
-            except Exception as exc:  # noqa: BLE001 — a render failure must not sink the rewrite
-                emit({"type": "phase", "label": f"Base image skipped ({exc})"})
-            if cancelled():
-                return {"cancelled": True}
-            # 5. Rebuild the wardrobe (replace) — old outfits + stale sprites cleared.
-            emit({"type": "phase", "label": "Rebuilding the wardrobe"})
-            try:
-                plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
-                                     appearance=revised["appearance"], story=story, invention=invention,
-                                     systems=systems, on_event=emit)
-                outfits = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
-                                          revised["appearance"], emit=emit)
-                # Persona changed → recompose the fixed canonical emotion set from the new persona.
-                emit({"type": "phase", "label": "Composing expression range"})
+                # Persona changed → recompose the fixed canonical emotion set + body language from the
+                # new persona (face expressions + per-character pose body-language).
+                emit({"type": "phase", "label": "Composing expression + pose range"})
                 fresh_exprs = ctx.compose_expressions(revised["persona"])
-                portraits_apply_wardrobe(char_key, {"outfits": outfits,
-                                                    "expressions": fresh_exprs, "replace": True})
+                fresh_poses = ctx.compose_poses(revised["persona"])
+                if text_only:
+                    apply = {"expressions": fresh_exprs, "poses": fresh_poses}
+                    if not (ctx.portrait_manifest(char_key).get("outfits") or []):
+                        plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
+                                             appearance=revised["appearance"], story=story, invention=invention,
+                                             systems=systems, on_event=emit)
+                        apply["outfits"] = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
+                                                              revised["appearance"], emit=emit)
+                    portraits_apply_wardrobe(char_key, apply)
+                else:
+                    plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
+                                         appearance=revised["appearance"], story=story, invention=invention,
+                                         systems=systems, on_event=emit)
+                    outfits = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
+                                              revised["appearance"], emit=emit)
+                    portraits_apply_wardrobe(char_key, {"outfits": outfits, "expressions": fresh_exprs,
+                                                        "poses": fresh_poses, "replace": True})
             except Exception as exc:  # noqa: BLE001
-                emit({"type": "phase", "label": f"Wardrobe rebuild skipped ({exc})"})
-            emit({"type": "phase", "label": f"Done — {revised['name']} regenerated"})
-            return {"ok": True, "character": char_key, "name": revised["name"], "role": revised["role"]}
+                emit({"type": "phase", "label": f"Wardrobe refresh skipped ({exc})"})
+            emit({"type": "phase", "label": f"Done — {revised['name']} {'text refreshed' if text_only else 'regenerated'}"})
+            return {"ok": True, "character": char_key, "name": revised["name"],
+                    "role": revised["role"], "text_only": text_only}
 
         job = _start_stream_job("character", "Regenerate character", ch.name,
                                 f"stories/{key}/cast", work)
@@ -975,7 +1014,7 @@ def register(app, ctx):
             return JSONResponse({"error": model_id}, status_code=400)
         _randomize_seeds(provider.workflow)
         try:
-            png = await _render(provider, prompt)
+            png = await _render(provider, prompt, out_prefix=ctx.output_prefix_for(model_id, "scene", loc))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if png is None:

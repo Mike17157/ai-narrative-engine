@@ -115,6 +115,49 @@ def run(
             typer.secho(f"image -> {path}", fg=typer.colors.CYAN)
 
 
+@app.command("generate-character")
+def generate_character(
+    key: str = typer.Argument(..., help="Character key (configs/characters/<key>.yaml)."),
+    root: Path = typer.Option(Path("."), "--root"),
+):
+    """Generate a full character end-to-end, headless: flesh → base prompt → base image → one outfit
+    → expressions + poses → the full emotion sprite set. Saves to configs/characters/<key>.ref.png and
+    configs/characters/portraits/<key>/. Needs ComfyUI + a text model reachable."""
+    from .server import build_context
+    from .server.services.full_gen import generate_full_character
+
+    # Windows consoles default to cp1252, which can't encode phase glyphs (arrows/em dashes) — force
+    # UTF-8 so live progress never crashes the run.
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:  # noqa: BLE001
+        pass
+
+    _setup_comfy(root)                       # register the ComfyUI backend (connect/launch)
+    try:
+        ctx = build_context(root)
+    except Exception as exc:  # noqa: BLE001
+        typer.secho(f"context error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    if key not in ctx.base_settings.characters:
+        typer.secho(f"unknown character '{key}' (have: {sorted(ctx.base_settings.characters)})",
+                    fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+
+    def emit(ev):
+        if ev.get("type") == "phase":
+            typer.secho(f"  > {ev['label']}", fg=typer.colors.CYAN)
+        elif ev.get("type") == "item":
+            typer.echo(f"    {ev.get('name')}: {(ev.get('text') or '')[:80]}")
+    try:
+        out = generate_full_character(ctx, key, emit)
+    except Exception as exc:  # noqa: BLE001
+        typer.secho(f"generation failed: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(1)
+    typer.secho(f"OK — {out.get('name')}: base + 1 outfit + {out.get('sprites', 0)} sprites", fg=typer.colors.GREEN)
+
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),

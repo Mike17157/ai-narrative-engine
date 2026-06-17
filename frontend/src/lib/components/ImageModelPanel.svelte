@@ -5,7 +5,8 @@
 
   // Pick which image model / workflow renders pictures in chat. The selection is
   // what `send()` passes to /run as image_model, and it persists across sessions.
-  let items = $derived((app.models.image || []).map((m) => ({ value: m.key, label: m.key })));
+  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : 'Other');
+  let items = $derived((app.models.image || []).map((m) => ({ value: m.key, label: m.key, group: famCap(m.family) })));
 
   onMount(() => { if (!app.models.image?.length) refreshModels(); });
 </script>

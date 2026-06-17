@@ -15,6 +15,8 @@ import os
 import struct
 from pathlib import Path
 
+from .family import family_of
+
 # subfolder -> the kind we trust when the header is ambiguous (CLIP/VAE/etc.
 # files don't always have decisive keys, but their folder is authoritative).
 _FOLDERS = {
@@ -134,6 +136,10 @@ def scan_models(models_dir: str | Path) -> dict:
             if info["kind"] in ("unknown", "weights", "clip") and folder_kind in (
                     "vae", "clip", "clip_vision", "controlnet", "upscale", "embedding"):
                 info["kind"] = folder_kind
+            # Sub-architecture FAMILY (illustrious/pony/anima/…) layered on arch, for generatable
+            # weights + loras. Folder + arch here; overrides/civitai applied at the API boundary.
+            if info["kind"] in ("checkpoint", "diffusion", "lora"):
+                info["family"] = family_of(info["rel"], arch=info.get("arch") or None)
             items.append(info)
 
     by_kind: dict[str, list[dict]] = {}
@@ -147,5 +153,13 @@ def scan_models(models_dir: str | Path) -> dict:
         a = by_arch.setdefault(it["arch"] or "unknown", {"checkpoint": [], "diffusion": []})
         a[it["kind"]].append(it["rel"])
 
+    # sub-family containers: how many generatable bases + loras fall in each family
+    by_family: dict[str, dict] = {}
+    for it in items:
+        if it.get("family"):
+            fam = by_family.setdefault(it["family"], {"base": 0, "lora": 0})
+            fam["lora" if it["kind"] == "lora" else "base"] += 1
+
     return {"items": items, "by_kind": {k: v for k, v in by_kind.items()},
-            "by_arch": by_arch, "counts": {k: len(v) for k, v in by_kind.items()}}
+            "by_arch": by_arch, "by_family": by_family,
+            "counts": {k: len(v) for k, v in by_kind.items()}}

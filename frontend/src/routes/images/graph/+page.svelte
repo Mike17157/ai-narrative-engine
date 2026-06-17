@@ -3,7 +3,7 @@
   import { SvelteFlow, SvelteFlowProvider, Background, Controls } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { app, refreshModels } from '$lib/app.svelte.js';
-  import { img, saveWorkflow, loadObjectInfo, connectLink, deleteNode, deleteLink, addNode, selectWorkflow, openTest, chainLora } from '$lib/images.svelte.js';
+  import { img, saveWorkflow, loadObjectInfo, connectLink, deleteNode, deleteLink, addNode, selectWorkflow, openTest, chainLora, loadGraphFamilies } from '$lib/images.svelte.js';
   import { post } from '$lib/api.js';
   import { toGraph, layoutGraph } from '$lib/workflow_graph.js';
   import ComfyNode from '$lib/workflow/ComfyNode.svelte';
@@ -44,7 +44,20 @@
   }
 
   // Node schema arrives async; rebuild once it lands so slot names/widgets apply.
-  onMount(async () => { await loadObjectInfo(); rebuild(); });
+  // Family data scopes each workflow's model dropdowns to its own family (strict).
+  onMount(async () => { await loadObjectInfo(); loadGraphFamilies(); rebuild(); });
+
+  // Workflow picker grouped into family "systems" (Illustrious / Pony / Anima …).
+  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : 'Other');
+  let wfGroups = $derived.by(() => {
+    const order = [], by = {};
+    for (const m of app.models.image || []) {
+      const g = famCap(m.family);
+      if (!(g in by)) { by[g] = []; order.push(g); }
+      by[g].push(m);
+    }
+    return order.map((g) => ({ label: g, models: by[g] }));
+  });
 
   // Drop a ComfyUI API-format workflow JSON → load it + check its models.
   let dropCheck = $state(null);   // { refs, missing }
@@ -250,8 +263,12 @@
 </div>
 
 <div class="gbar">
-  <select class="wfsel" value={app.activeImage} onchange={(e) => selectWorkflow(e.currentTarget.value)} title="Image model / workflow — the one used in chat">
-    {#each app.models.image as m (m.key)}<option value={m.key}>{m.key}</option>{/each}
+  <select class="wfsel" value={app.activeImage} onchange={(e) => selectWorkflow(e.currentTarget.value)} title="Image model / workflow, grouped by family — the one used in chat">
+    {#each wfGroups as g (g.label)}
+      <optgroup label={g.label}>
+        {#each g.models as m (m.key)}<option value={m.key}>{m.key}</option>{/each}
+      </optgroup>
+    {/each}
   </select>
   {#if img.workflow}
     <div class="seg" role="tablist">

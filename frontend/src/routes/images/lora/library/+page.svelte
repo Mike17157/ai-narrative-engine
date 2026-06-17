@@ -25,23 +25,35 @@
   let showAll = $state(false);    // override the architecture filter
   let triageRunning = $state(false);
   let scan = $state({ items: [] });  // signature-classified model index
+  let families = $state([]);         // [{id,label,arch}] registry — for family→arch + labels
 
-  // Real architecture from the scan (tensor signatures), not folder names.
+  // Sub-family (illustrious/pony/anima/…) from the scan, layered on the tensor arch. Folder name is
+  // the fallback when a file isn't in the scan yet.
   const normRel = (n) => (n || '').replace(/\\/g, '/');
-  let loraArchMap = $derived(Object.fromEntries((scan.items || []).filter((i) => i.kind === 'lora').map((i) => [i.rel, i.arch || 'unknown'])));
-  let baseArchMap = $derived(Object.fromEntries((scan.items || []).filter((i) => i.kind === 'checkpoint' || i.kind === 'diffusion').map((i) => [i.rel, i.arch || 'unknown'])));
-  const folderArch = (name) => { const p = name.split(/[\\/]/); return p.length > 1 ? p[0] : '(root)'; };
-  const archOf = (name) => loraArchMap[normRel(name)] || folderArch(name);
-  // which LoRA archs a workflow arch can use (sd = SD-family, ambiguous 15/XL)
-  const FAM = { sdxl: ['sdxl', 'sd'], sd15: ['sd15', 'sd'], sd: ['sd', 'sdxl', 'sd15'], dit: ['dit'], flux: ['flux'] };
-  const compatible = (la, wa) => { const a = (wa || '').toLowerCase(); if (!a || a === 'unknown') return true; return (FAM[a] || [a]).includes((la || '').toLowerCase()); };
+  let loraFamMap = $derived(Object.fromEntries((scan.items || []).filter((i) => i.kind === 'lora').map((i) => [i.rel, i.family || 'unknown'])));
+  let baseFamMap = $derived(Object.fromEntries((scan.items || []).filter((i) => i.kind === 'checkpoint' || i.kind === 'diffusion').map((i) => [i.rel, i.family || 'unknown'])));
+  let famArch = $derived(Object.fromEntries((families || []).map((f) => [f.id, (f.arch || '').toLowerCase()])));
+  let famLabel = $derived(Object.fromEntries((families || []).map((f) => [f.id, f.label])));
+  const folderFam = (name) => { const p = name.split(/[\\/]/); return (p.length > 1 ? p[0] : 'unknown').toLowerCase(); };
+  const famOf = (name) => loraFamMap[normRel(name)] || folderFam(name);
+  // Soft compatibility: 'native' (same family), 'cross' (same arch, different sub-family — usually
+  // works), or 'incompatible' (different arch). Default shows native; "show all compatible" adds cross.
+  function compat(lf, mf) {
+    if (!lf || !mf || lf === 'unknown' || mf === 'unknown') return 'cross';
+    if (lf === mf) return 'native';
+    return (famArch[lf] && famArch[lf] === famArch[mf]) ? 'cross' : 'incompatible';
+  }
 
   let selBase = $derived(bases.find((b) => b.key === baseModel) || null);
-  let wfArch = $derived((selBase?.arch || '').toLowerCase());
-  function archMatch(a) { return showAll || compatible(a, wfArch); }
-  let baseItems = $derived(bases.map((b) => ({ value: b.key, label: `${b.key}  ·  ${b.arch}` })));
-  let visibleTriage = $derived(triageItems.filter((t) => archMatch(t.arch)));
+  let wfFam = $derived(selBase?.family || 'unknown');
+  function famMatch(f) { const c = compat(f, wfFam); return showAll ? c !== 'incompatible' : c === 'native'; }
+  let baseItems = $derived(bases.map((b) => ({ value: b.key, label: `${b.key}  ·  ${famLabel[b.family] || b.family || b.arch}` })));
+  let visibleTriage = $derived(triageItems.filter((t) => famMatch(t.fam)));
   let triageDone = $derived(visibleTriage.filter((t) => t.img).length);
+  // group the visible triage items into family containers (ordered by the registry)
+  let triageGroups = $derived((families || []).map((f) => ({
+    id: f.id, label: f.label, items: visibleTriage.filter((t) => t.fam === f.id),
+  })).filter((g) => g.items.length));
 
   // test panel
   let testStack = $state('');
@@ -58,7 +70,8 @@
 
   let loraItems = $derived((choices.loras || []).map((c) => ({ value: c, label: c })));
   let ckItems = $derived([{ value: '', label: '— workflow default —' }, ...(choices.checkpoints || []).map((c) => ({ value: c, label: c }))]);
-  let imgModelItems = $derived((app.models?.image || []).map((m) => ({ value: m.key, label: m.key })));
+  let baseFamByKey = $derived(Object.fromEntries(bases.map((b) => [b.key, b.family])));
+  let imgModelItems = $derived((app.models?.image || []).map((m) => ({ value: m.key, label: m.key, group: famLabel[baseFamByKey[m.key]] || 'Other' })));
   let stackItems = $derived(cfg.stacks.filter((s) => s.name).map((s) => ({ value: s.name, label: s.name })));
   let themeItems = $derived([{ value: '', label: '— none —' }, ...cfg.library.filter((l) => l.type === 'theme' && l.name).map((l) => ({ value: l.name, label: l.name }))]);
 
@@ -77,6 +90,7 @@
     try { choices = await get('/comfy/choices'); } catch { /* comfy off */ }
     try { bases = await get('/loras/bases'); } catch { /* none */ }
     try { scan = await get('/comfy/models'); } catch { /* scan unavailable */ }
+    try { families = (await get('/families')).families || []; } catch { /* registry unavailable */ }
     baseModel = bases.find((b) => b.key === app.activeImage)?.key || bases[0]?.key || '';
     buildTriage();
   });
@@ -84,7 +98,7 @@
   function buildTriage() {
     triageItems = (choices.loras || []).map((n) => {
       const lib = cfg.library.find((l) => l.name === n);
-      return { name: n, arch: archOf(n), img: null, status: 'idle', pct: null, type: lib?.type || null };
+      return { name: n, fam: famOf(n), img: null, status: 'idle', pct: null, type: lib?.type || null };
     });
   }
 
@@ -138,7 +152,7 @@
     if (!item.type || item.type === 'skip') { if (i >= 0) cfg.library.splice(i, 1); return; }
     const w = item.type === 'detail' ? 0.5 : item.type === 'theme' ? 0.8 : 0.7;
     if (i >= 0) cfg.library[i].type = item.type;
-    else cfg.library.push({ name: item.name, type: item.type, weight: w, enabled: true, comment: archOf(item.name) });
+    else cfg.library.push({ name: item.name, type: item.type, weight: w, enabled: true, comment: famOf(item.name) });
   }
 
   async function deleteLora(item) {
@@ -164,11 +178,11 @@
   let stackOpts = $derived([{ value: 'new', label: '＋ New stack' },
     ...cfg.stacks.map((s, i) => ({ value: String(i), label: s.name || `stack ${i + 1}` }))]);
 
-  let allLoras = $derived((choices.loras || []).map((n) => ({ name: n, arch: archOf(n) })));
-  let stackArch = $derived((baseArchMap[normRel(current?.checkpoint)] || '').toLowerCase());
-  function archCompat(a) { return compatible(a, stackArch); }
+  let allLoras = $derived((choices.loras || []).map((n) => ({ name: n, fam: famOf(n) })));
+  let stackFam = $derived(baseFamMap[normRel(current?.checkpoint)] || 'unknown');
+  function famCompat(f) { const c = compat(f, stackFam); return showAll ? c !== 'incompatible' : c === 'native'; }
   let leftFiltered = $derived(allLoras.filter((l) =>
-    (!stackSearch.trim() || l.name.toLowerCase().includes(stackSearch.toLowerCase())) && archCompat(l.arch)));
+    (!stackSearch.trim() || l.name.toLowerCase().includes(stackSearch.toLowerCase())) && famCompat(l.fam)));
 
   const baseName = (n) => n.split(/[\\/]/).pop();
   const inCurrent = (name) => current?.loras.some((m) => m.name === name);
@@ -258,7 +272,7 @@
 
 <!-- CLASSIFY (triage) -->
 <section class="card">
-  <h3>Classify <span class="sub">— pick a workflow; only its architecture's LoRAs show. Render, then tag each type.</span></h3>
+  <h3>Classify <span class="sub">— pick a workflow; only its family's LoRAs show (toggle for all compatible). Grouped by family; render, then tag each.</span></h3>
 
   <div class="trow" style="grid-template-columns: 1.4fr 3fr 90px;">
     <div><label>Workflow</label><Combobox items={baseItems} value={baseModel} placeholder="workflow…" onpick={(v) => (baseModel = v)} /></div>
@@ -268,30 +282,33 @@
   <div class="trow2">
     <button onclick={startTriage}>{triageRunning ? '■ Stop' : (triageDone ? 'Resume' : 'Render all')}</button>
     <span class="m">{triageDone}/{visibleTriage.length} rendered{triageRunning ? ' — generating…' : ''}</span>
-    {#if selBase}<span class="warnsm">{selBase.arch} · {visibleTriage.length} of {triageItems.length} LoRAs{triageItems.length - visibleTriage.length ? ` (${triageItems.length - visibleTriage.length} hidden as other architectures)` : ''}</span>{/if}
-    <label class="allchk"><input type="checkbox" bind:checked={showAll} /> show all</label>
+    {#if selBase}<span class="warnsm">{famLabel[selBase.family] || selBase.family || selBase.arch} · {visibleTriage.length} of {triageItems.length} LoRAs{triageItems.length - visibleTriage.length ? ` (${triageItems.length - visibleTriage.length} hidden)` : ''}</span>{/if}
+    <label class="allchk"><input type="checkbox" bind:checked={showAll} /> show all compatible</label>
   </div>
 
-  <div class="grid">
-    {#each visibleTriage as it (it.name)}
-      <div class="cell" class:classified={it.type && it.type !== 'skip'}>
-        <div class="thumb">
-          {#if it.img}<button class="imgbtn" onclick={() => openLightbox(it.img, it.name)} title="click to enlarge"><img src={it.img} alt={it.name} /></button>
-          {:else if it.status === 'gen'}<div class="ph">{it.pct !== null ? it.pct + '%' : '…'}</div>
-          {:else if it.status === 'err'}<div class="ph err" title={it.err || ''}>failed</div>
-          {:else if it.status === 'nockpt' || !selBase}<div class="ph err" title="pick a workflow above">no base</div>
-          {:else}<button class="ph go" onclick={() => renderOne(it)} title="render this one">▶</button>{/if}
+  {#each triageGroups as g (g.id)}
+    <div class="famhead">{g.label} <span class="famn">{g.items.length}</span>{#if g.id !== wfFam}<span class="famx">cross-family</span>{/if}</div>
+    <div class="grid">
+      {#each g.items as it (it.name)}
+        <div class="cell" class:classified={it.type && it.type !== 'skip'}>
+          <div class="thumb">
+            {#if it.img}<button class="imgbtn" onclick={() => openLightbox(it.img, it.name)} title="click to enlarge"><img src={it.img} alt={it.name} /></button>
+            {:else if it.status === 'gen'}<div class="ph">{it.pct !== null ? it.pct + '%' : '…'}</div>
+            {:else if it.status === 'err'}<div class="ph err" title={it.err || ''}>failed</div>
+            {:else if it.status === 'nockpt' || !selBase}<div class="ph err" title="pick a workflow above">no base</div>
+            {:else}<button class="ph go" onclick={() => renderOne(it)} title="render this one">▶</button>{/if}
+          </div>
+          <div class="cap" title={it.name}><span class="ach">{famLabel[it.fam] || it.fam}</span><span class="fn">{it.name.split(/[\\/]/).pop()}</span></div>
+          <div class="types">
+            {#each ['detail', 'theme', 'character', 'skip'] as t}
+              <button class="tbtn {t}" class:on={it.type === t} onclick={() => classify(it, t)}>{t === 'character' ? 'char' : t}</button>
+            {/each}
+            <button class="tbtn del" onclick={() => deleteLora(it)} title="delete file" aria-label="Delete">🗑</button>
+          </div>
         </div>
-        <div class="cap" title={it.name}><span class="ach">{it.arch}</span><span class="fn">{it.name.split(/[\\/]/).pop()}</span></div>
-        <div class="types">
-          {#each ['detail', 'theme', 'character', 'skip'] as t}
-            <button class="tbtn {t}" class:on={it.type === t} onclick={() => classify(it, t)}>{t === 'character' ? 'char' : t}</button>
-          {/each}
-          <button class="tbtn del" onclick={() => deleteLora(it)} title="delete file" aria-label="Delete">🗑</button>
-        </div>
-      </div>
-    {/each}
-  </div>
+      {/each}
+    </div>
+  {/each}
   <p class="hint" style="margin-top:10px">Classifications fill the Library below — <strong>Save</strong> to persist.</p>
 </section>
 
@@ -318,15 +335,15 @@
   <div class="builder">
     <div class="bleft">
       <input class="search" bind:value={stackSearch} placeholder="search loras…" />
-      {#if stackArch}<div class="filt">showing <strong>{stackArch}</strong> LoRAs (match the checkpoint)</div>{/if}
+      {#if stackFam && stackFam !== 'unknown'}<div class="filt">showing <strong>{famLabel[stackFam] || stackFam}</strong> LoRAs (match the checkpoint){showAll ? ' + compatible' : ''}</div>{/if}
       <div class="loralist">
         {#each leftFiltered as l (l.name)}
           <button class="loraitem" class:used={inCurrent(l.name)} draggable="true"
             ondragstart={() => (dragName = l.name)} onclick={() => addToActive(l.name)} title={l.name}>
-            <span class="ach">{l.arch}</span><span class="ln">{baseName(l.name)}</span><span class="plus">＋</span>
+            <span class="ach">{famLabel[l.fam] || l.fam}</span><span class="ln">{baseName(l.name)}</span><span class="plus">＋</span>
           </button>
         {/each}
-        {#if !leftFiltered.length}<div class="filt">no LoRAs match{stackArch ? ` ${stackArch}` : ''}.</div>{/if}
+        {#if !leftFiltered.length}<div class="filt">no LoRAs match{stackFam !== 'unknown' ? ` ${famLabel[stackFam] || stackFam}` : ''}.</div>{/if}
       </div>
     </div>
 
@@ -428,6 +445,10 @@
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
 
   .warnsm { font-size: 11.5px; color: var(--muted); }
+  .famhead { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--text);
+             margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft); }
+  .famhead .famn { font-size: 10.5px; font-weight: 600; color: var(--faint); background: var(--elev); border-radius: 999px; padding: 1px 8px; }
+  .famhead .famx { font-size: 10px; font-weight: 600; color: #c9a6ff; background: rgba(124,109,255,.12); border-radius: 999px; padding: 1px 8px; text-transform: uppercase; letter-spacing: .3px; }
   .allchk { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); margin-left: auto; }
   .allchk input { width: auto; }
   .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 14px; }

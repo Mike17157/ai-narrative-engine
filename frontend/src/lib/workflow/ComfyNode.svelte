@@ -1,6 +1,6 @@
 <script>
   import { Handle, Position } from '@xyflow/svelte';
-  import { img, dropModelOnNode, nodeTakesModel, clipCompatWarning, toggleBypass, deleteNode, toggleEmbedding, hasEmbedding } from '$lib/images.svelte.js';
+  import { img, dropModelOnNode, nodeTakesModel, clipCompatWarning, toggleBypass, deleteNode, toggleEmbedding, hasEmbedding, familyFilteredOptions } from '$lib/images.svelte.js';
   import { dims, slotTop, typeColor } from '$lib/workflow_graph.js';
   import ScrubInput from '$lib/components/ScrubInput.svelte';
 
@@ -111,11 +111,12 @@
           <div class="wrow" style="height:{w.h}px">
             <span class="k" title={w.name}>{w.name}</span>
             {#if w.options}
+              {@const opts = familyFilteredOptions(w.name, w.options)}
               <select class="nodrag nopan f" bind:value={node.inputs[w.name]}>
-                {#if node.inputs[w.name] != null && node.inputs[w.name] !== '' && !w.options.includes(node.inputs[w.name])}
+                {#if node.inputs[w.name] != null && node.inputs[w.name] !== '' && !opts.includes(node.inputs[w.name])}
                   <option value={node.inputs[w.name]}>{node.inputs[w.name]} (added)</option>
                 {/if}
-                {#each w.options as opt}<option value={opt}>{opt}</option>{/each}
+                {#each opts as opt}<option value={opt}>{opt}</option>{/each}
               </select>
             {:else if typeof w.value === 'boolean'}
               <input class="nodrag nopan chk" type="checkbox" bind:checked={node.inputs[w.name]} />

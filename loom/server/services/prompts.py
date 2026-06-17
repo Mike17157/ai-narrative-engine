@@ -40,11 +40,14 @@ _EXPRESSION_SYSTEM = (
     "nose blush, wavy mouth, etc.). Do NOT restate hair, clothing, body, background, framing or the "
     "character's name. No sentences, no trailing period."
 )
-# Appended to every portrait render so sprites are consistent, chat-friendly busts.
-_PORTRAIT_FRAMING = "upper body, looking at viewer, simple background"
-# Outfit images are FULL BODY (whole-look reference), unlike the face-focused emotion sprites.
-_FULLBODY_FRAMING = ("solo, full body, standing, full body shot, head to toe, feet visible, "
-                     "looking at viewer, simple background, grey background")
+# Appended to every portrait render so sprites are consistent, chat-friendly busts. Front-facing,
+# straight-on anchors keep the camera steady (esp. for low-cfg/turbo models that ignore negatives).
+_PORTRAIT_FRAMING = "upper body, front view, facing viewer, straight-on, looking at viewer, simple background"
+# Outfit images are FULL BODY (whole-look reference), unlike the face-focused emotion sprites. This is
+# CAMERA only — front-view / straight-on anchors lock the angle; stance + limbs come from the per-emotion
+# pose library (ctx.pose_tags), so pose and framing never fight over arm position.
+_FULLBODY_FRAMING = ("solo, full body, front view, facing viewer, straight-on, looking at viewer, "
+                     "full body shot, head to toe, feet visible, simple background, grey background")
 
 
 def _persona_text(c) -> str:
@@ -448,11 +451,57 @@ _EXCLUSIVE_GROUPS = [
 ]
 
 
+def _categorize_appearance_tags(tags: list) -> dict:
+    """Categorize raw appearance tags into logical groups for better prompt organization.
+    Returns {hair, eyes, proportions, skin, other} lists. Helps assemble prompts with
+    coherent tag ordering."""
+    hair_keywords = {
+        "hair", "bangs", "sidelocks", "ahoge", "ponytail", "braid", "twintails", "bun",
+        "hime", "bob", "undercut", "drill", "spiked", "dreadlocks", "afro", "cornrows",
+        "parted", "blunt", "swept", "over one eye", "intakes", "streaked", "gradient",
+        "two-tone", "multicolored"
+    }
+    eye_keywords = {"eye", "iris", "pupil", "heterochromia", "eyelash", "brow"}
+    proportion_keywords = {
+        "collarbone", "navel", "waist", "hips", "thigh", "thighs", "legs", "long legs",
+        "abs", "shoulders", "neck", "cleavage", "butt"
+    }
+    skin_keywords = {"skin", "freckles", "mole", "scar", "tattoo", "mark"}
+    accessory_keywords = {"glasses", "earring", "necklace", "ring", "bracelet", "piercing"}
+
+    categories = {"hair": [], "eyes": [], "proportions": [], "skin": [], "accessories": [], "other": []}
+    for tag in tags:
+        t = tag.lower().strip()
+        if not t:
+            continue
+        # Check each category
+        if any(k in t for k in hair_keywords):
+            categories["hair"].append(tag)
+        elif any(k in t for k in eye_keywords):
+            categories["eyes"].append(tag)
+        elif any(k in t for k in proportion_keywords):
+            categories["proportions"].append(tag)
+        elif any(k in t for k in skin_keywords):
+            categories["skin"].append(tag)
+        elif any(k in t for k in accessory_keywords):
+            categories["accessories"].append(tag)
+        else:
+            categories["other"].append(tag)
+    return categories
+
+
 def _assemble_base_prompt(f: dict) -> str:
     """Assemble the base-image prompt from the model's free-form `appearance` tag list plus the
     fixed neutral / full-body / swimwear / grey framing. The model writes rich descriptors
     freely; this only enforces the guardrails it gets wrong: a strong CANONICAL sex anchor by
-    age, transient/scene/clothing leakage filtered, and contradictory tags reduced to one."""
+    age, transient/scene/clothing leakage filtered, and contradictory tags reduced to one.
+
+    IMPROVED ASSEMBLY: Tags are organized into weighted groups for better model comprehension:
+    1. IDENTITY (count, skin, distinguishing features) - highest weight for distinctiveness
+    2. FACE (expression, gaze, eye features) - early placement for facial identity
+    3. BODY (build, bust, proportions) - core silhouette
+    4. APPEARANCE DETAILS (hair, remaining appearance tags) - refinement
+    5. FRAMING (pose, camera, background, attire) - scene context"""
     count = (f.get("count") or "1girl").strip().lower()
     male = re.search(r"\b1\s*(boy|man|male)\b", count) is not None
 
@@ -500,9 +549,8 @@ def _assemble_base_prompt(f: dict) -> str:
     # `appearance` is a LIST of ATOMIC descriptors — filter leakage/count tags; the closing
     # _snap_prompt grounds each item to a real booru tag (and decomposes any compound that slips in).
     app = _clean_tags(f.get("appearance"))
-    # DISTINCTIVE FACE HOOKS (mole/freckles/heterochromia/glasses/makeup/…) — placed EARLY so
-    # they carry prompt weight and break Illustrious's "house face" prior that otherwise renders
-    # every character with the same default anime face.
+    # DISTINCTIVE FACE HOOKS (mole/freckles/heterochromia/glasses/makeup/…) — placed FIRST for
+    # maximum distinctiveness weight, breaking Illustrious's "house face" prior.
     face_hooks = _clean_tags(f.get("distinguishing_feature"))
     # Skin TONE is a guaranteed brightness tag (the model used to give only 'shiny skin', a
     # texture, and never a tone). Validate against the gradient; default to a mid 'light skin'.
@@ -542,26 +590,47 @@ def _assemble_base_prompt(f: dict) -> str:
                         "large breasts", "huge breasts"):
             bust = "medium breasts"
         body_anchor.append(bust)
-    parts = [*gender, skin, hair, *body_anchor, *face_hooks, *app]
+
     # Persistent RESTING expression by personality (NOT 'neutral expression' — a near-dead tag
     # that renders a cold resting-bitch-face). Fall back to a warm 'light smile'; never let a
     # neutral/expressionless value through. Sprites still vary emotion on top of this base.
     expr = (f.get("expression") or "").strip().lower()
     if not expr or "neutral" in expr or "expressionless" in expr:
         expr = "light smile"
-    # Subtle STANDING reference pose by personality (template-safe; default 'arms at sides').
-    pose = (f.get("pose") or "").strip().lower()
-    if pose not in ("arms at sides", "hand on hip", "crossed arms", "arms behind back",
-                    "hands in pockets", "contrapposto"):
-        pose = "arms at sides"
     # GAZE — default 'looking at viewer' (eye contact); the model picks 'looking away'/'to the side'
     # only for shy/aloof personas. A reference must never stare blankly at nothing.
     gaze = (f.get("gaze") or "").strip().lower()
     if gaze not in ("looking at viewer", "looking to the side", "looking away"):
         gaze = "looking at viewer"
-    # full-body swimwear template framing, on neutral grey (RMBG/Inspyrenet mattes it).
-    parts += [expr, gaze, "solo", "full body", "standing", pose, "facing viewer", attire,
-              "grey background", "simple background", "full body shot", "head to toe", "feet visible"]
+    # Subtle STANDING reference pose by personality (template-safe; default 'arms at sides').
+    pose = (f.get("pose") or "").strip().lower()
+    if pose not in ("arms at sides", "hand on hip", "crossed arms", "arms behind back",
+                    "hands in pockets", "contrapposto"):
+        pose = "arms at sides"
+
+    # IMPROVED ASSEMBLY: Organize tags into weighted groups for better model comprehension.
+    # Group 1: IDENTITY — highest weight for distinctiveness (count, skin, face hooks FIRST)
+    identity = [*gender, skin, *face_hooks]
+
+    # Group 2: FACE — expression, gaze for facial identity
+    face_tags = [expr, gaze]
+
+    # Group 3: BODY — build, bust, proportions for core silhouette
+    body_tags = body_anchor.copy()
+
+    # Group 4: APPEARANCE — hair, categorized appearance details for better coherence
+    categorized = _categorize_appearance_tags(app)
+    # Order: hair color (already set) → hair style/details → eyes → proportions → skin → accessories → other
+    appearance = [hair, *categorized["hair"], *categorized["eyes"], *categorized["proportions"],
+                  *categorized["skin"], *categorized["accessories"], *categorized["other"]]
+
+    # Group 5: FRAMING — pose, camera, background, attire for scene context
+    framing = ["solo", "full body", "standing", pose, "facing viewer", attire,
+               "grey background", "simple background", "full body shot", "head to toe", "feet visible"]
+
+    # Combine in order: identity → face → body → appearance → framing
+    parts = identity + face_tags + body_tags + appearance + framing
+
     # normalise underscores → spaces; drop blanks; de-dup; resolve contradictions (keep first).
     seen, used_groups, out = set(), set(), []
     for p in parts:

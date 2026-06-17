@@ -116,20 +116,27 @@ def _mount_spa(app: FastAPI, root: Path) -> None:
             return INDEX_HTML
 
 
-def create_app(root: str | Path = ".") -> FastAPI:
+def build_context(root: str | Path = ".") -> AppContext:
+    """Construct the AppContext (config + connections + comfy) without a web server — so the CLI and
+    headless jobs can drive the same generation logic the routes use."""
     root = Path(root)
     _load_dotenv(root)
     # Split any bundled character cards into clean Character + default Scenario
     # before loading (idempotent — no-op once everything is migrated).
     split_cards_to_scenarios(root)
     user = load_user(root)
-    ctx = AppContext(
+    return AppContext(
         root=root,
         store=ConnectionStore(root),
         base_settings=load_settings(root),
         user=user,
         comfy_url=_register_comfy(user, root),
     )
+
+
+def create_app(root: str | Path = ".") -> FastAPI:
+    root = Path(root)
+    ctx = build_context(root)
 
     app = FastAPI(title="Loom")
     for mod in _ROUTERS:

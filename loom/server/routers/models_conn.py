@@ -30,9 +30,11 @@ def register(app, ctx):
     @app.get("/api/models")
     def models() -> dict:
         s = ctx.effective_settings()
+        fams = ctx.image_families()
         text = [{"key": k, "provider": m.provider, "model": m.options.get("model")}
                 for k, m in s.models.items() if m.kind == "text"]
-        image = [{"key": k, "provider": m.provider} for k, m in s.models.items() if m.kind == "image"]
+        image = [{"key": k, "provider": m.provider, "family": fams.get(k, "unknown")}
+                 for k, m in s.models.items() if m.kind == "image"]
         return {"text": text, "image": image}
 
     @app.get("/api/text-models")
@@ -73,6 +75,7 @@ def register(app, ctx):
             "effective": {r: ctx.role_model(r) for r in IMAGE_ROLES},   # what runs today
             "default": {r: ctx.role_default(r) for r in IMAGE_ROLES},   # fallback when unset
             "models": [k for k, m in ctx.base_settings.models.items() if m.kind == "image"],
+            "families": ctx.image_families(),   # {workflow: family} so pickers group by container
         }
 
     @app.post("/api/image-roles")

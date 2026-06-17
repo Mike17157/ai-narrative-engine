@@ -1,7 +1,7 @@
 {
-  "base": "illustrious_v3",
+  "base": "anima_cutout",
   "style": "sdxl_img2img",
-  "sprite": "illustrious_v3",
-  "scene": "illustrious_v3",
-  "chat": "illustrious_v3"
+  "sprite": "anima_cutout",
+  "scene": "anima",
+  "chat": "anima"
 }

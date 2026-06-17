@@ -23,10 +23,13 @@ from pathlib import Path
 
 import yaml
 
+from .family import family_folder, family_of
 from .scan import scan_models
 
 _ORGANIZABLE = ("lora", "checkpoint", "diffusion")
 _ROLES = ("detail", "theme", "character")
+# which top folder each organizable kind lives under
+_KIND_TOP = {"lora": "loras", "checkpoint": "checkpoints", "diffusion": "diffusion_models"}
 
 
 def _parse_family_role(rel: str) -> tuple[str, str | None, str]:
@@ -82,6 +85,39 @@ def plan_moves(models_dir: str | Path, classifications: dict[str, str] | None = 
 
     moves.sort(key=lambda m: (m["family"], m["cls"], m["name"]))
     return {"moves": moves, "warnings": warnings, "counts": scan["counts"]}
+
+
+def plan_family_moves(models_dir: str | Path, overrides: dict | None = None) -> dict:
+    """Propose filing every organizable model into its FAMILY folder (Illustrious/, Pony/, Anima/,
+    SDXL/, …) derived from its name/folder/arch (+ manual overrides). LoRAs keep any role subfolder
+    (`<Family>/<role>/<file>`). Skips files whose family is unknown or already correctly filed.
+    Emits the same `{top, src, dst, …}` shape `apply_moves` consumes (so moves + reference rewrites are
+    reused). Returns {moves, counts}."""
+    overrides = overrides or {}
+    scan = scan_models(models_dir)
+    moves = []
+    for it in scan["items"]:
+        kind = it["kind"]
+        top = _KIND_TOP.get(kind)
+        if not top:
+            continue
+        rel = it["rel"]
+        fam = family_of(rel, arch=it.get("arch") or None, override=overrides.get(rel))
+        folder = family_folder(fam)
+        if not folder:                       # unknown / un-foldered → leave it alone
+            continue
+        if kind == "lora":
+            _f, role, base = _parse_family_role(rel)
+            dst = f"{folder}/{role}/{base}" if role else f"{folder}/{base}"
+        else:
+            dst = f"{folder}/{rel.split('/')[-1]}"
+        if dst == rel:                        # already filed correctly
+            continue
+        moves.append({"top": top, "kind": kind, "arch": it.get("arch", ""), "family": fam,
+                      "cls": "", "src": rel, "dst": dst, "name": rel.split("/")[-1],
+                      "reason": f"→ {folder}"})
+    moves.sort(key=lambda m: (m["family"], m["top"], m["name"]))
+    return {"moves": moves, "counts": scan["counts"]}
 
 
 def _top_to_ref_kind(top: str) -> str:

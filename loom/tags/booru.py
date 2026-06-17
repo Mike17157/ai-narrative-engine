@@ -66,11 +66,18 @@ _STOP = frozenset((
 
 
 def _lemma(w: str) -> str:
-    """Crude stem so 'crocheted'/'crocheting' can match the tag 'crochet' (only for longer words)."""
+    """Crude stem so 'crocheted'/'crocheting' can match the tag 'crochet' (only for longer words).
+    Improved with more suffixes and double-consonant handling."""
     if len(w) > 4:
-        for suf in ("ing", "ed", "es", "s"):
+        # Handle -ing/-ed/-es/-s suffixes
+        for suf in ("ing", "ed", "es", "s", "er", "est"):
             if w.endswith(suf) and len(w) - len(suf) >= 3:
                 return w[: -len(suf)]
+        # Handle double consonants (e.g., "running" -> "running")
+        if len(w) > 6:
+            for i in range(1, len(w) - 2):
+                if w[i] == w[i + 1] and w[i] not in ("l", "s", "t"):  # keep ll/ss/tt
+                    return w[:i + 1] + w[i + 2:]
     return w
 
 
@@ -240,7 +247,9 @@ class TagIndex:
         PHRASES; within each: (1) greedy LONGEST-MATCH n-grams (exact/lemma/alias/reorder), then
         (2) pair each leftover modifier with the phrase's HEAD noun ('long wavy silver hair' →
         long hair + wavy hair + grey hair). Remaining content words are kept as free-text. Returns
-        {tags:[real…], free:[words…], coverage}. Fixes the adjective→noun loss of plain longest-match."""
+        {tags:[real…], free:[words…], coverage}. Fixes the adjective→noun loss of plain longest-match.
+
+        IMPROVED: Better handling of color + material + garment patterns like 'red silk dress'."""
         # clause boundaries = punctuation + conjunctions; a bare newline is soft (line-wrap, not a
         # boundary) so a modifier never gets split from its noun across a wrapped line.
         phrases = re.split(r"[,.;:/()]| and | with | featuring | wearing ", (text or "").replace("\n", " ").lower())
@@ -267,13 +276,27 @@ class TagIndex:
                     i += hit[1]
                 else:
                     i += 1
-            head = words[-1]                          # (2) pair leftover modifiers with the head noun
+            # (2) pair leftover modifiers with the head noun (improved: multi-pass for better coverage)
+            head = words[-1]
+            # First pass: direct modifier + head pairs
             for idx, w in enumerate(words):
                 if taken[idx] or w == head:
                     continue
                 t = self._lookup(w, head)
                 if t:
                     tags.append(t); taken[idx] = True; matched += 1
+            # Second pass: try skipping one word to handle "color material garment" patterns
+            # e.g., "red silk dress" -> if "silk dress" matched, try pairing "red" with "dress"
+            for idx, w in enumerate(words):
+                if taken[idx] or w == head:
+                    continue
+                # Try pairing with a different nearby noun (skip at most 2 words)
+                for j in range(idx + 1, min(len(words), idx + 3)):
+                    if not taken[j]:
+                        t = self._lookup(w, words[j])
+                        if t:
+                            tags.append(t); taken[idx] = True; matched += 1
+                            break
             for idx, w in enumerate(words):           # (3) leftovers → free
                 if not taken[idx] and len(w) > 2:
                     free.append(w)
@@ -287,9 +310,28 @@ class TagIndex:
         """If an unknown phrase is really several real tags crammed together ('crochet rainbow
         bikini'), split it into ([real tags], [leftover words]). Returns None unless extraction
         covers most of the phrase (so a genuine single descriptor like 'salt spray hair' is kept
-        whole rather than shredded into 'hair' + junk)."""
+        whole rather than shredded into 'hair' + junk).
+
+        IMPROVED: More flexible coverage threshold based on phrase length and tag quality.
+        Shorter phrases (2-3 words) require higher coverage; longer phrases (4+ words) can tolerate
+        lower coverage since they're more likely to be compound descriptions."""
         ex = self.extract(part)
-        if ex["tags"] and (ex["coverage"] >= 0.6 or any(" " in t for t in ex["tags"])):
+        if not ex["tags"]:
+            return None
+
+        # Dynamic threshold based on original word count
+        word_count = len([w for w in re.findall(r"[a-z0-9']+", part) if w not in _STOP])
+        if word_count <= 2:
+            threshold = 0.7  # Strict for short phrases
+        elif word_count <= 4:
+            threshold = 0.6  # Standard threshold
+        else:
+            threshold = 0.5  # More lenient for long compound phrases
+
+        # Also accept if we found any multi-word tags (good signal of quality extraction)
+        has_multi_word = any(" " in t for t in ex["tags"])
+
+        if ex["coverage"] >= threshold or has_multi_word:
             return ex["tags"], ex["free"]
         return None
 

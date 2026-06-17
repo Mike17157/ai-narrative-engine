@@ -13,8 +13,10 @@
   async function load() { data = await get('/image-roles'); }
   onMount(load);
 
+  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : 'Other');
   let items = $derived(data
-    ? [{ value: '', label: 'Auto (default)' }, ...data.models.map((m) => ({ value: m, label: m }))]
+    ? [{ value: '', label: 'Auto (default)' },
+       ...data.models.map((m) => ({ value: m, label: m, group: famCap((data.families || {})[m]) }))]
     : []);
 
   async function pick(value) {

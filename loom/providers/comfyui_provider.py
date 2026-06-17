@@ -19,15 +19,14 @@ Model `options` (from models.yaml):
 
 from __future__ import annotations
 
-import copy
 import json
-import re
 import time
 from pathlib import Path
 from typing import Any
 
 import httpx
 
+from . import _workflow
 from .base import ImageResult
 
 
@@ -42,106 +41,17 @@ class ComfyUIProvider:
         self.output_node: str | None = options.get("output_node")
         self.timeout_s: float = float(options.get("timeout_s", 180))
 
-    # The dynamic value the chat model writes each turn. Insert it into any CLIP
-    # text field as this token (the UI's ⚡ picker does this); at generation it's
-    # substituted wherever it appears. If a workflow uses no token at all, we
-    # fall back to overwriting the designated positive node (legacy behaviour).
-    IMAGE_TOKEN = "{{image}}"
-
-    def _substitute(self, graph: dict, value: str) -> bool:
-        """Replace the image token in every string input. Returns True if any
-        field contained it."""
-        found = False
-        for node in graph.values():
-            if not isinstance(node, dict):
-                continue
-            ins = node.get("inputs")
-            if not isinstance(ins, dict):
-                continue
-            for k, v in ins.items():
-                if isinstance(v, str) and self.IMAGE_TOKEN in v:
-                    ins[k] = v.replace(self.IMAGE_TOKEN, value)
-                    found = True
-        return found
-
-    def _inject(self, prompt: str, negative_prompt: str | None) -> dict:
-        graph = copy.deepcopy(self.workflow)
-        value = prompt
-
-        used_token = self._substitute(graph, value)
-
-        # Negative still targets its designated node (not tokenised).
-        if negative_prompt is not None:
-            neg = self.inputs.get("negative")
-            if neg and str(neg["node"]) in graph:
-                graph[str(neg["node"])].setdefault("inputs", {})[neg["field"]] = negative_prompt
-
-        # Legacy fallback: no {{image}} anywhere -> overwrite the positive node.
-        if not used_token:
-            pos = self.inputs.get("positive")
-            if pos:
-                node_id, field = str(pos["node"]), pos["field"]
-                if node_id not in graph:
-                    raise ValueError(f"workflow has no node '{node_id}' for input 'positive'")
-                graph[node_id].setdefault("inputs", {})[field] = value
-
-        # Honour `BREAK` region separators by splitting the positive text into separately-encoded
-        # regions chained with core ConditioningConcat (so each region conditions independently,
-        # rather than the word "BREAK" being tokenised into the image). Never fatal: any failure
-        # falls back to collapsing BREAK to commas so the render always proceeds.
-        try:
-            self._apply_breaks(graph)
-        except Exception:  # noqa: BLE001
-            self._strip_breaks(graph)
-        return graph
-
-    _BREAK_RE = re.compile(r"\bBREAK\b")
-
-    def _strip_breaks(self, graph: dict) -> None:
-        for n in graph.values():
-            ins = n.get("inputs") if isinstance(n, dict) else None
-            if isinstance(ins, dict):
-                for k, v in ins.items():
-                    if isinstance(v, str) and "BREAK" in v:
-                        ins[k] = self._BREAK_RE.sub(", ", v).strip(" ,")
-
-    def _apply_breaks(self, graph: dict) -> None:
-        """For each CLIPTextEncode whose text uses BREAK: keep region 1 on the node, add a
-        CLIPTextEncode (sharing its clip) per further region, chain them with ConditioningConcat,
-        and rewire the original encode's consumers to the final concat."""
-        targets = [nid for nid, n in graph.items()
-                   if isinstance(n, dict) and n.get("class_type") == "CLIPTextEncode"
-                   and isinstance(n.get("inputs"), dict) and "BREAK" in str(n["inputs"].get("text", ""))]
-        seq = 0
-        for pid in targets:
-            node = graph[pid]
-            segs = [s.strip(" ,") for s in self._BREAK_RE.split(node["inputs"]["text"])]
-            segs = [s for s in segs if s]
-            clip = node["inputs"].get("clip")
-            if len(segs) < 2 or clip is None:
-                node["inputs"]["text"] = ", ".join(segs)   # nothing to chain (or no clip) → collapse
-                continue
-            # original consumers of this encode's conditioning output, captured BEFORE we add nodes
-            consumers = [(nid, k) for nid, n in graph.items() if isinstance(n, dict)
-                         for k, v in (n.get("inputs") or {}).items()
-                         if isinstance(v, list) and len(v) == 2 and str(v[0]) == str(pid) and v[1] == 0]
-            node["inputs"]["text"] = segs[0]
-            prev = pid
-            for seg in segs[1:]:
-                enc, cc = f"loom_break_e{seq}", f"loom_break_c{seq}"; seq += 1
-                graph[enc] = {"class_type": "CLIPTextEncode", "inputs": {"clip": clip, "text": seg}}
-                graph[cc] = {"class_type": "ConditioningConcat",
-                             "inputs": {"conditioning_to": [prev, 0], "conditioning_from": [enc, 0]}}
-                prev = cc
-            for nid, k in consumers:
-                graph[nid]["inputs"][k] = [prev, 0]
+    def _inject(self, prompt: str, negative_prompt: str | None, out_prefix: str | None = None,
+                latent: tuple[int, int] | None = None) -> dict:
+        # Pure graph prep (prompt token, out_prefix, latent, negative, BREAK regions) is shared
+        # with the RunPod serverless provider; see loom/providers/_workflow.py.
+        return _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent)
 
     def _set_init_image(self, client: httpx.Client, graph: dict, image_bytes: bytes) -> None:
         """Upload a source image to ComfyUI and point the workflow's LoadImage node
         at it (image-to-image). No-op if the workflow has no LoadImage node — so a
         plain text-to-image workflow simply ignores the init image."""
-        node_id = next((nid for nid, n in graph.items()
-                        if isinstance(n, dict) and n.get("class_type") == "LoadImage"), None)
+        node_id = _workflow.find_load_image_node(graph)
         if node_id is None:
             return
         resp = client.post("/upload/image",
@@ -160,6 +70,8 @@ class ComfyUIProvider:
         prompt: str,
         negative_prompt: str | None = None,
         init_image: bytes | None = None,
+        out_prefix: str | None = None,
+        latent: tuple[int, int] | None = None,
     ) -> ImageResult:
         # Make sure ComfyUI is reachable — connect to a running instance, or
         # (managed mode) launch it headless. Never touches the user's UI.
@@ -167,7 +79,7 @@ class ComfyUIProvider:
 
         get_server(self.base_url).ensure_up()
 
-        graph = self._inject(prompt, negative_prompt)
+        graph = self._inject(prompt, negative_prompt, out_prefix, latent)
         with httpx.Client(base_url=self.base_url, timeout=60) as client:
             if init_image:
                 self._set_init_image(client, graph, init_image)

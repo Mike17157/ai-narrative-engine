@@ -83,14 +83,23 @@ FACET_DESC = {
     "piercing": "Piercings",
 }
 
-# Coarse macro-regions for the rendered prompt's BREAK boundaries — a few genuinely-independent
-# groups (SDXL/Illustrious conditions better on these than on 19 tiny chunks). Subject/quality tags
-# (no facet) form an implicit leading region. Order here is the region order in the prompt.
+# Coarse macro-regions for the rendered prompt's BREAK boundaries — granular 5-region model
+# for better SDXL/Illustrious conditioning. Each region groups semantically-independent concepts.
+# Order here is the region order in the prompt; identity FIRST for maximum distinctiveness weight.
 MACRO_REGIONS = [
-    ("appearance", ("hair", "eyes", "skin", "body", "anthro", "face")),
-    ("outfit", ("swimwear", "underwear", "dress", "top", "bottom", "outerwear",
-                "legwear", "footwear", "sleeves")),
-    ("details", ("headwear", "accessories", "makeup", "piercing")),
+    # Region 1: IDENTITY — the core character markers (count, skin tone, distinguishing features)
+    # Highest weight for breaking the model's "house face" prior
+    ("identity", ("skin", "face", "anthro")),
+    # Region 2: FACE — facial identity (expression, gaze, eyes, hair)
+    # All face-related features together for coherent facial conditioning
+    ("face", ("hair", "eyes")),
+    # Region 3: BODY — core silhouette (build, proportions, chest)
+    # Body shape and proportions independent of face and attire
+    ("body", ("body",)),
+    # Region 4: ATTIRE — clothing from under to outer layers
+    # All clothing and wearable accessories together
+    ("attire", ("swimwear", "underwear", "dress", "top", "bottom", "outerwear",
+                 "legwear", "footwear", "sleeves", "headwear", "accessories", "makeup", "piercing")),
 ]
 
 _FACETSETS = {"appearance": FACETS_APPEARANCE, "clothing": FACETS_CLOTHING, "all": FACETS_ALL}

@@ -71,8 +71,35 @@ export const img = $state({
   testInitImage: null, // data-URL source image for testing an img2img workflow
   testPrompt: _lsGet() || 'rio \\(blue archive\\), 1girl, safe, masterpiece, best quality, detailed background', // your subject; persisted globally, rendered from every angle
   nodeSizes: {}, // per-block size overrides: { [nodeId]: { nodeW } }
-  layoutNonce: 0 // bump to request a graph relayout (e.g. after a prompt box grew)
+  layoutNonce: 0, // bump to request a graph relayout (e.g. after a prompt box grew)
+  familyMap: {}, // { relForwardSlash: family } for ckpt/diffusion/lora — strict node-dropdown filtering
+  wfFamily: ''   // the active workflow's family (its node model pickers show only this family's files)
 });
+
+// Load the family data the graph editor needs: a file→family map (from the scan) and the active
+// workflow's own family (from /loras/bases), so node model dropdowns can be scoped to that family.
+export async function loadGraphFamilies() {
+  try {
+    const scan = await get('/comfy/models');
+    img.familyMap = Object.fromEntries((scan.items || [])
+      .filter((i) => i.family && ['lora', 'checkpoint', 'diffusion'].includes(i.kind))
+      .map((i) => [(i.rel || '').replace(/\\/g, '/'), i.family]));
+  } catch { /* scan unavailable */ }
+  try {
+    const bases = await get('/loras/bases');
+    img.wfFamily = bases.find((b) => b.key === app.activeImage)?.family || '';
+  } catch { /* none */ }
+}
+
+// Strict family filter for a node's model-picker options. Non-model widgets pass through unchanged;
+// model widgets keep only files of the active workflow's family. No-op when the family is unknown.
+const _MODEL_WIDGETS = new Set(['ckpt_name', 'unet_name', 'lora_name']);
+const _folderFam = (n) => { const p = (n || '').replace(/\\/g, '/').split('/'); return p.length > 1 ? p[0].toLowerCase() : ''; };
+const _famOfFile = (rel) => img.familyMap[(rel || '').replace(/\\/g, '/')] || _folderFam(rel);
+export function familyFilteredOptions(widgetName, options) {
+  if (!_MODEL_WIDGETS.has(widgetName) || !img.wfFamily || img.wfFamily === 'unknown' || !Array.isArray(options)) return options;
+  return options.filter((o) => _famOfFile(o) === img.wfFamily);
+}
 
 export async function loadObjectInfo() {
   try { img.objectInfo = await get('/comfy/object_info'); } catch { img.objectInfo = {}; }
@@ -117,8 +144,12 @@ export async function loadWorkflow() {
 
 export async function loadChoices() { img.choices = await get('/comfy/choices'); }
 
-// Set + persist the selection; routes/images/+layout.svelte reacts and loads it.
-export function selectWorkflow(v) { setActiveImage(v); }
+// Set + persist the selection; routes/images/+layout.svelte reacts and loads it. Refresh the active
+// workflow's family so node model dropdowns re-scope to it.
+export function selectWorkflow(v) {
+  setActiveImage(v);
+  get('/loras/bases').then((bases) => { img.wfFamily = bases.find((b) => b.key === v)?.family || ''; }).catch(() => {});
+}
 
 // --- topology edits (operate on the live workflow; caller rebuilds the graph) ---
 export function connectLink(targetId, inputName, sourceId, slot = 0) {
@@ -372,6 +403,33 @@ export async function runTest() {
   if (img.test && img.test.phase === 'running') img.test.phase = _testCancelled ? 'cancelled' : 'done';
 }
 
+// Parity test: compose prompts the SAME way production does (subject + expression + pose + full-body
+// framing) so the grid mirrors real sprite/scene output — then render each through the active workflow.
+// mode 'sprite' → one full-body cell per representative emotion; 'scene' → the subject through the
+// scene framing. `src` = { subjectMode:'typed'|'char', subject, character }.
+export async function composeTestCells(mode, src) {
+  _testCancelled = false;
+  const body = { mode };
+  if (src?.subjectMode === 'char' && src.character) body.character = src.character;
+  else body.subject = (src?.subject ?? img.testPrompt ?? '').trim();
+  const r = await post('/test/prompts', body);
+  if (!r.ok) {
+    img.msg = { err: true, text: r.status === 404
+      ? 'compose route missing — restart the backend (new endpoint not loaded yet)'
+      : `compose failed (${r.status})${r.data?.error ? ': ' + r.data.error : ''}` };
+    return;
+  }
+  const cells = (r.data?.cells || []).map((c) => ({ ...c, view: c.label, pct: null, image: null, error: null }));
+  if (!cells.length) { img.msg = { err: true, text: 'no cells composed — pick a subject or character' }; return; }
+  const graph = executableWorkflow();  // bypassed nodes rerouted out
+  img.test = { phase: 'running', mode, cells };
+  for (const cell of img.test.cells) {
+    if (_testCancelled || !img.test) break;
+    await _renderCell(cell, cell.prompt, graph);
+  }
+  if (img.test && img.test.phase === 'running') img.test.phase = _testCancelled ? 'cancelled' : 'done';
+}
+
 // --- parameter sweep: render one cell per value of a chosen workflow parameter,
 // holding the prompt (and source image) fixed, so you can eyeball the best value. ---
 
@@ -435,7 +493,8 @@ async function _renderCell(cell, prompt, graph) {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: _testAbort.signal,
       body: JSON.stringify({
         model: app.activeImage, json: graph, prompt,
-        init_image: img.testInitImage || undefined  // img2img source (ignored by txt2img workflows)
+        init_image: img.testInitImage || undefined,  // img2img source (ignored by txt2img workflows)
+        width: cell.width || undefined, height: cell.height || undefined  // per-pose latent (sprite test)
       })
     });
     const reader = res.body.getReader();

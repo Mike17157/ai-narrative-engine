@@ -20,6 +20,8 @@ class WorkflowTestRequest(BaseModel):
     json: dict | None = None       # test the in-editor workflow (unsaved) if given
     prompt: str | None = None      # test positive prompt
     init_image: str | None = None  # base64/data-URL source image for img2img (LoadImage)
+    width: int | None = None       # latent canvas override (per-pose aspect, for sprite tests)
+    height: int | None = None
 
 
 def register(app, ctx):
@@ -127,7 +129,8 @@ def register(app, ctx):
             prompt = body.prompt or "masterpiece, best quality, highly detailed, 1girl, scenery, soft light"
             # Fresh seed per render, exactly like the LoRA batch pipeline — otherwise
             # every test is the same fixed seed:0 roll (usually a mediocre one).
-            graph = randomize_seeds(provider._inject(prompt, None))
+            latent = (body.width, body.height) if (body.width and body.height) else None
+            graph = randomize_seeds(provider._inject(prompt, None, latent=latent))
             # img2img: upload the source image and point the LoadImage node at it
             # (no-op if the workflow has no LoadImage node).
             if body.init_image:
@@ -150,6 +153,47 @@ def register(app, ctx):
             yield 'data: {"type": "done"}\n\n'
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    # Representative emotion spread for the Sprite test grid (neutral doubles as the base-image read).
+    _REP_EMOTIONS = ["neutral", "joy", "sadness", "anger", "fear", "surprise", "desire", "disgust"]
+
+    @app.post("/api/test/prompts")
+    def test_prompts(body: dict):
+        """Compose test-render prompts the SAME way production does, so the Test grid mirrors real
+        output. mode 'sprite' → one full-body, pose+expression cell per emotion (the framing/pose the
+        real sprite render uses); mode 'scene' → the bare subject (scene workflow carries its framing).
+        Subject is the typed `subject`, or a picked `character`'s appearance. Returns {cells}."""
+        from ..services.emotions import EMOTION_HINTS, EMOTION_LABELS
+        from ..services.prompts import _regionize_prompt, _safe_image_tags, _snap_prompt
+        body = body or {}
+        mode = body.get("mode") or "sprite"
+        # subject: a picked character's appearance wins over typed text (truest to production)
+        subject = (body.get("subject") or "").strip()
+        ck = (body.get("character") or "").strip()
+        if ck:
+            c = ctx.base_settings.characters.get(ck)
+            if c is not None:
+                subject = ((c.fields or {}).get("appearance") or (c.fields or {}).get("base_prompt") or subject)
+        subject = subject or "1girl, solo"
+
+        if mode == "scene":
+            return {"cells": [{"key": "scene", "label": "Scene",
+                               "prompt": _regionize_prompt(_snap_prompt(_safe_image_tags(subject)))}]}
+
+        # sprite: mirror production — subject + expression + pose tags + the pose's framing crop, and
+        # report the pose's latent (so the test renders at the same crop+canvas as the real sprite).
+        emos = body.get("emotions") or _REP_EMOTIONS
+        cells = []
+        for emo in emos:
+            expr = "" if emo == "neutral" else EMOTION_HINTS.get(emo, "")
+            # body language comes from the picked character's composed poses (per-character); a typed
+            # subject has no persona → framing only.
+            parts = [subject, expr, ctx.pose_tags(ck or None, emo), ctx.pose_framing(emo)]
+            prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in parts if p))))
+            w, h = ctx.pose_latent(emo)
+            cells.append({"key": emo, "label": EMOTION_LABELS.get(emo, "Neutral" if emo == "neutral" else emo),
+                          "prompt": prompt, "width": w, "height": h})
+        return {"cells": cells}
 
     @app.post("/api/workflow/check")
     def workflow_check(body: dict):

@@ -13,6 +13,7 @@
   let err = $state(null);
   let applying = $state(false);
   let result = $state(null);
+  let orgMode = $state('role');  // 'role' = classify-folder moves · 'family' = categorize-by-name moves
 
   // browser filters
   let q = $state('');
@@ -33,11 +34,25 @@
       moves = p.moves || [];
       warnings = p.warnings || [];
       sel = Object.fromEntries(moves.map((m) => [key(m), true]));
+      orgMode = 'role';
       catalog = await get('/comfy/catalog');
     } catch (e) { err = String(e); }
     loading = false;
   }
   onMount(load);
+
+  // "Categorize by name": file every model into its family folder (Illustrious/, Pony/, Anima/, SDXL/…)
+  // derived from its name/folder/arch. Loads proposals into the same review list; Apply moves + rewrites.
+  async function categorizeByName() {
+    loading = true; err = null; result = null;
+    try {
+      const r = await get('/comfy/librarian/family');
+      moves = r.moves || [];
+      sel = Object.fromEntries(moves.map((m) => [key(m), true]));
+      orgMode = 'family';
+    } catch (e) { err = String(e); }
+    loading = false;
+  }
 
   let catItems = $derived((catalog.entries || []).filter((e) =>
     (catType === 'all' || e.type === catType) &&
@@ -70,11 +85,13 @@
 
   const key = (m) => m.src + '|' + m.top;
   const KINDS = ['all', 'checkpoint', 'diffusion', 'lora', 'vae', 'clip', 'controlnet', 'upscale'];
-  let families = $derived(['all', ...[...new Set((scan.items || []).map((i) => i.arch_dir).filter(Boolean))].sort()]);
+  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : f);
+  // Real sub-family containers (illustrious/pony/anima/…) from the scan, not folder names.
+  let families = $derived(['all', ...[...new Set((scan.items || []).map((i) => i.family).filter(Boolean))].sort()]);
   let items = $derived((scan.items || []).filter((i) =>
     (kindFilter === 'all' || i.kind === kindFilter) &&
-    (familyFilter === 'all' || i.arch_dir === familyFilter) &&
-    (!q.trim() || (i.folder + '/' + i.rel + ' ' + i.arch).toLowerCase().includes(q.toLowerCase()))
+    (familyFilter === 'all' || i.family === familyFilter) &&
+    (!q.trim() || (i.folder + '/' + i.rel + ' ' + i.arch + ' ' + (i.family || '')).toLowerCase().includes(q.toLowerCase()))
   ));
   let chosen = $derived(moves.filter((m) => sel[key(m)]));
   function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? Math.round(b / 1e6) + ' MB' : Math.round(b / 1e3) + ' KB'; }
@@ -99,22 +116,33 @@
   <!-- ORGANIZE -->
   <section class="card">
     <div class="chead">
-      <h3>Organize <span class="sub">— {moves.length ? `${moves.length} misfiled / loose` : 'all filed correctly ✓'}</span></h3>
+      <h3>Organize <span class="sub">— {moves.length ? `${moves.length} ${orgMode === 'family' ? 'to file by family' : 'misfiled / loose'}` : 'all filed correctly ✓'}</span></h3>
       <div class="row">
+        <button class="ghost sm" onclick={categorizeByName} disabled={loading} title="File every model into its family folder (Illustrious/, Pony/, Anima/, SDXL/…) by name">⊞ Categorize by name</button>
         <button onclick={apply} disabled={applying || !chosen.length}>{applying ? 'Moving…' : `File ${chosen.length}`}</button>
         <button class="ghost sm" onclick={load} disabled={loading}>↻ Re-scan</button>
       </div>
     </div>
     {#if moves.length}
-      <div class="hint2">Filing classified LoRAs into <code>&lt;family&gt;/&lt;classification&gt;/</code>. Family (model type) is preserved; classification comes from your tagging in LoRA → Classify.</div>
+      {#if orgMode === 'family'}
+        <div class="hint2">Filing each model into its <code>&lt;Family&gt;/</code> folder (one folder per type); LoRA role subfolders are kept.</div>
+      {:else}
+        <div class="hint2">Filing classified LoRAs into <code>&lt;family&gt;/&lt;classification&gt;/</code>. Family (model type) is preserved; classification comes from your tagging in LoRA → Classify.</div>
+      {/if}
       <div class="warn">⚠ Moves files on disk and won't rewrite ComfyUI's own saved workflows — re-point those there.</div>
       <div class="moves">
         {#each moves as m (key(m))}
           <label class="mrow">
             <input type="checkbox" checked={sel[key(m)]} onchange={(e) => (sel[key(m)] = e.target.checked)} />
-            <span class="cls {m.cls}">{m.cls}</span>
-            <span class="mname" title={m.src}>{m.name}</span>
-            <span class="path"><code class="top">loras/</code>{m.family} <span class="arr">→</span> {m.family}/<strong>{m.cls}</strong></span>
+            {#if orgMode === 'family'}
+              <span class="cls {m.family}">{m.family}</span>
+              <span class="mname" title={m.src}>{m.name}</span>
+              <span class="path"><code class="top">{m.top}/</code>{m.src} <span class="arr">→</span> <strong>{m.dst}</strong></span>
+            {:else}
+              <span class="cls {m.cls}">{m.cls}</span>
+              <span class="mname" title={m.src}>{m.name}</span>
+              <span class="path"><code class="top">loras/</code>{m.family} <span class="arr">→</span> {m.family}/<strong>{m.cls}</strong></span>
+            {/if}
           </label>
         {/each}
       </div>
@@ -139,7 +167,7 @@
     <div class="chead">
       <h3>Library <span class="sub">{Object.entries(scan.counts).map(([k, v]) => `${v} ${k}`).join(' · ')}</span></h3>
       <div class="row">
-        <select bind:value={familyFilter} title="model type">{#each families as f}<option value={f}>{f === 'all' ? 'all types' : f}</option>{/each}</select>
+        <select bind:value={familyFilter} title="model family">{#each families as f}<option value={f}>{f === 'all' ? 'all families' : famCap(f)}</option>{/each}</select>
         <select bind:value={kindFilter}>{#each KINDS as k}<option value={k}>{k}</option>{/each}</select>
         <input class="search" bind:value={q} placeholder="filter…" />
       </div>
