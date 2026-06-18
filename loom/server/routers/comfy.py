@@ -434,18 +434,32 @@ def register(app, ctx):
             config_files.save_families(ctx.root, ov)
         return {"ok": True, "added": added, "overrides": ov}
 
-    @app.get("/api/loras/clusters")
-    async def lora_clusters():
-        """Installed LoRAs as a similarity-ordered list (variants folded, nearest
-        neighbours per entry), for the Network pane."""
-        from fastapi.concurrency import run_in_threadpool
-
+    @app.get("/api/loras/tags")
+    def lora_tags_index():
+        """The tags your installed LoRAs were trained on — a cheap read of each
+        .safetensors `ss_tag_frequency` header (no embeddings, no weight load).
+        Per LoRA: its top tags by frequency. Globally: the most-used tags across
+        the whole folder. Useful for picking a universal test prompt that the
+        LoRAs actually speak, and for triage."""
         from ...comfy import tags as tagmod
+
         loras_dir = str(config_files._loras_out_dir(load_trainer(), ctx.comfy_base_dir(), ctx.root))
         try:
-            return await run_in_threadpool(tagmod.similarity_list, ctx.root, loras_dir)
+            per = {}
+            import glob as _glob
+            import os as _os
+            for p in sorted(_glob.glob(_os.path.join(loras_dir, "**", "*.safetensors"), recursive=True)):
+                ts = tagmod.lora_tags(p)
+                if not ts:
+                    continue
+                rel = _os.path.relpath(p, loras_dir).replace("\\", "/")
+                top = sorted(ts, key=lambda t: -ts[t])[:20]
+                per[rel] = [{"tag": t, "count": ts[t]} for t in top]
+            vocab = tagmod.build_vocab(loras_dir)
+            global_top = sorted(vocab, key=lambda t: -vocab[t])[:60]
+            return {"per": per, "global": [{"tag": t, "count": vocab[t]} for t in global_top]}
         except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"entries": [], "error": str(exc)}, status_code=500)
+            return JSONResponse({"error": str(exc)}, status_code=500)
 
     @app.post("/api/loras/tagify")
     def tagify_scene(body: dict):

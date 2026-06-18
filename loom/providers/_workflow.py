@@ -114,6 +114,26 @@ def apply_breaks(graph: dict) -> None:
             graph[nid]["inputs"][k] = [prev, 0]
 
 
+_MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf", ".sft")
+
+
+def normalize_model_paths(graph: dict) -> None:
+    """Rewrite Windows backslashes to '/' in model-name inputs.
+
+    A workflow saved on Windows stores nested model names like
+    ``Illustrious\\TRT_style_v1.4_IL.safetensors``; a Linux ComfyUI worker (RunPod)
+    won't resolve that. Only string values that end in a model extension are
+    touched, so prompt text is never altered. Used by the serverless provider,
+    not the local one (which talks to a same-OS ComfyUI)."""
+    for node in graph.values():
+        ins = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(ins, dict):
+            continue
+        for k, v in ins.items():
+            if isinstance(v, str) and "\\" in v and v.lower().endswith(_MODEL_EXTS):
+                ins[k] = v.replace("\\", "/")
+
+
 def find_load_image_node(graph: dict) -> str | None:
     """Return the id of the first LoadImage node, or None for a text-to-image graph."""
     return next((nid for nid, n in graph.items()

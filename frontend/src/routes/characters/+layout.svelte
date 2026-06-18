@@ -1,31 +1,9 @@
 <script>
   import { onMount } from 'svelte';
-  import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
-  import { app, setSubnav } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
 
   let { children } = $props();
-
-  let path = $derived($page.url.pathname);
-  let curTab = $derived(['selected', 'search', 'import', 'personas'].find((id) => path === `/characters/${id}`) || 'selected');
-  let activeChar = $derived(chars.list.find((c) => c.key === app.activeChar) || null);
-
-  // Drive the global sub-header controller (standard nav for every section).
-  $effect(() => {
-    setSubnav({
-      title: 'Characters',
-      items: [
-        { id: 'selected', label: activeChar ? `Selected · ${activeChar.name || activeChar.key}` : 'Selected' },
-        { id: 'search', label: `Browse (${chars.list.length})` },
-        { id: 'import', label: 'Import card' },
-        { id: 'personas', label: 'Personas' }
-      ],
-      value: curTab,
-      onpick: (id) => goto(`/characters/${id}`)
-    });
-  });
-
+  // The folder tree (Selected / Browse / Import) is rendered by the root layout's TreeNav.
   onMount(loadChars);
 </script>
 

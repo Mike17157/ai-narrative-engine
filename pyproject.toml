@@ -17,6 +17,7 @@ dependencies = [
     "typer>=0.12",
     # Phase 2 (API) — kept here so the engine and server share one env:
     "fastapi>=0.110",
+    "python-multipart>=0.0.9",   # file uploads (character reference images)
     "uvicorn[standard]>=0.29",
     "psutil>=5.9",   # CPU/RAM stats for the Activity panel
     "networkx>=3",   # tag similarity graph (co-occurrence navigation for image prompts)

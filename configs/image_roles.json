@@ -1,6 +1,5 @@
 {
   "base": "anima_cutout",
-  "style": "sdxl_img2img",
   "sprite": "anima_cutout",
   "scene": "anima",
   "chat": "anima"

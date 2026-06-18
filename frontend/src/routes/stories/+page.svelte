@@ -1,17 +1,35 @@
 <script>
   import { goto } from '$app/navigation';
   import { chars } from '$lib/characters.svelte.js';
-  import { stories, deleteStory, startWizard } from '$lib/stories.svelte.js';
+  import { stories, deleteStory, startWizard, cancelWizard } from '$lib/stories.svelte.js';
 
   function newStory() {
     const c = chars.list.find((x) => !x.story) || chars.list[0];
     startWizard(c?.key || '', c?.name || '');
   }
   const open = (key) => goto(`/stories/${key}/overview`);
+
+  // An unfinished draft (auto-persisted in localStorage) surfaces here as a resume
+  // card — it is NOT a nav entry. A draft counts as in-progress once the user has
+  // generated past Setup (a board, locations, or cast exists).
+  let hasDraft = $derived(!!(stories.wizard?.board || stories.wizard?.locations || stories.wizard?.cast));
+  let draftName = $derived(stories.wizard?.name || stories.wizard?.charName || 'Untitled');
 </script>
 
 <div class="page"><div class="col wide">
   {#if stories.msg}<div class="msg" class:ok={stories.msg.ok} class:err={stories.msg.err}>{stories.msg.text}</div>{/if}
+
+  {#if hasDraft}
+    <div class="draft" onclick={() => goto('/stories/new/setup')} role="button" tabindex="0">
+      <span class="dicon">✎</span>
+      <div class="dbody">
+        <div class="dname">{draftName}</div>
+        <div class="dsub">unfinished draft — resume the story generator</div>
+      </div>
+      <span class="daction">Resume →</span>
+      <button class="ddel" title="Discard draft" onclick={(e) => { e.stopPropagation(); cancelWizard(); }}>✕</button>
+    </div>
+  {/if}
 
   {#if stories.list.length}
     <div class="libhead">
@@ -48,6 +66,20 @@
   .libhead .lo { font-size: 12px; color: var(--faint); }
   .msg { margin: 10px 0; font-size: 13px; }
   .msg.ok { color: var(--good); } .msg.err { color: var(--bad); }
+
+  .draft {
+    display: flex; align-items: center; gap: 12px; padding: 12px 14px; margin-bottom: 16px;
+    background: var(--elev); border: 1px solid var(--accent); border-radius: 12px; cursor: pointer;
+  }
+  .draft:hover { background: var(--elev-2); }
+  .dicon { width: 32px; height: 32px; flex: none; display: grid; place-items: center; border-radius: 8px;
+           background: var(--accent); color: #fff; font-size: 15px; }
+  .dbody { flex: 1; min-width: 0; }
+  .dname { font-size: 14px; font-weight: 640; }
+  .dsub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .daction { font-size: 13px; font-weight: 600; color: var(--accent); flex: none; }
+  .ddel { width: 26px; height: 26px; padding: 0; border-radius: 7px; background: none; border: 1px solid var(--border); color: var(--muted); font-size: 11px; flex: none; }
+  .ddel:hover { color: var(--bad); border-color: var(--bad); background: none; }
 
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; margin-top: 16px; }
   .card { position: relative; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 14px; cursor: pointer; }

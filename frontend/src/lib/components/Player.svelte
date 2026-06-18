@@ -1,6 +1,7 @@
 <script>
   import { get, post } from '$lib/api.js';
   import { goto } from '$app/navigation';
+  import { app } from '$lib/app.svelte.js';
 
   let { storyKey } = $props();
   const exitPlay = () => goto(`/stories/${storyKey}/overview`);
@@ -53,6 +54,10 @@
 
   async function turn(payload) {
     busy = true; err = null;
+    // Send the active persona so the director narrates to a named protagonist
+    // (who *you* are) rather than a generic "Player". Falls back server-side if absent.
+    const persona = app.personas.find((p) => p.id === app.activePersona);
+    if (persona) payload = { ...payload, player: { name: persona.name, description: persona.description || '' } };
     const r = await post(`/stories/${storyKey}/play`, payload);
     busy = false;
     if (!r.ok) { err = r.data?.error || 'director error'; return; }

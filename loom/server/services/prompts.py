@@ -1,9 +1,17 @@
-"""Pure prompt-composition helpers — free functions with no app state.
+"""Prompt-composition helpers — free functions with no app state.
 
-Bodies are copied verbatim from app.py (the former create_app closures). They use
-only their arguments, module-level constants, stdlib, and project imports that are
-performed INSIDE the functions (see _snap_prompt / co-occurrence enrichment) to
-avoid import cycles.
+The image pipeline is Anima-only (a Qwen-Image natural-language DiT). Anima reads expressive
+natural-language prose far better than a flat Danbooru tag list, so this module no longer does
+tag-snapping / literal-trap rewrites / BREAK-regionizing. The `_safe_image_tags`, `_snap_prompt` and
+`_regionize_prompt` names are kept as thin whitespace-tidying passthroughs so existing call sites
+keep compiling and prose flows to the model intact.
+
+The WD14 tagger + the vision CAPTIONER + the vocabulary INDEX are retained (separately) for the
+identity-anchor follow-up (tag a rendered/reference image → weave its canonical tags into later
+prompts). They are NOT used to *compose* prompts.
+
+Image-prompts are authored directly as prose by GLM 5.2 (see `_NL_BASE_SYSTEM` / `compose_nl_base`,
+and the stage system prompts in configs/story_builder.json + loom/scenario/builder.py).
 """
 
 from __future__ import annotations
@@ -14,34 +22,104 @@ import re
 # keys as DEFAULT_EMOTIONS so any legacy reference keeps working. See services/emotions.py.
 from .emotions import EMOTION_KEYS as DEFAULT_EMOTIONS  # noqa: F401
 
+# ---------------------------------------------------------------------------
+# Vision / tagger system prompts (image → tags). Kept for the identity-anchor
+# follow-up and the alternate-outfit / expression / persona flows. These READ
+# images into tags; they do not COMPOSE render prompts.
+# ---------------------------------------------------------------------------
 _DESCRIBE_SYSTEM = (
     "You are an expert anime character tagger. Given a reference image and the character's "
     "persona, output ONE line of lowercase, comma-separated Danbooru tags describing the "
-    "character's CANONICAL APPEARANCE so an Illustrious/SDXL model can redraw them consistently. "
-    "Include: 1girl/1boy/solo as appropriate; the character's booru name tag ONLY if they are a "
+    "character's CANONICAL APPEARANCE so a model can redraw them consistently. "
+    "Include: 1girl/1boy/solo as appropriate; the character's name tag ONLY if they are a "
     "clearly recognizable, well-known character; hair colour/length/style; eye colour; distinctive "
     "body features; and their DEFAULT outfit and accessories. Prefer what you actually see in the "
     "image; use the persona only to disambiguate. Do NOT include expression, pose, background, "
     "camera framing, art-style, medium or quality words. No sentences, no trailing period. Tags only."
 )
 _OUTFIT_SYSTEM = (
-    "You compose a Danbooru-tag prompt for an alternate OUTFIT of an established anime character. "
-    "You are given the character's canonical appearance tags, their persona, and an outfit "
-    "instruction. Output ONE line of lowercase, comma-separated booru tags: KEEP every identity tag "
+    "You compose a natural-language OUTFIT prompt for an established anime character. "
+    "You are given the character's canonical appearance, their persona, and an outfit "
+    "instruction. Output ONE line of descriptive prose: KEEP every identity cue "
     "(count, name if any, hair, eyes, face, body), and REPLACE clothing, accessories and (only if "
-    "the instruction implies it) the setting to match the instruction. Keep a neutral expression. "
-    "Do NOT add art-style, medium or quality words. No sentences, no trailing period."
+    "the instruction implies it) the setting to match the instruction, written as flowing "
+    "descriptive phrases. Keep a neutral expression. "
+    "Do NOT add art-style, medium or quality words. No trailing period."
 )
 _EXPRESSION_SYSTEM = (
-    "You choose facial-expression tags for an anime character reacting with a given EMOTION, "
+    "You choose facial-expression cues for an anime character reacting with a given EMOTION, "
     "personalized to their persona (a stoic character shows subtle expressions; an energetic one is "
-    "exaggerated). Output ONE line of 3-7 lowercase, comma-separated Danbooru EXPRESSION tags ONLY "
-    "— facial expression, eyes, eyebrows, mouth, and emotion-specific tags (blush, tears, sweatdrop, "
-    "nose blush, wavy mouth, etc.). Do NOT restate hair, clothing, body, background, framing or the "
-    "character's name. No sentences, no trailing period."
+    "exaggerated). Output ONE line of 3-7 comma-separated EXPRESSION cues — facial expression, eyes, "
+    "eyebrows, mouth, and emotion-specific cues (blush, tears, sweatdrop, wavy mouth, etc.), written "
+    "as short descriptive phrases. Do NOT restate hair, clothing, body, background, framing or the "
+    "character's name. No trailing period."
+)
+
+# Persona (the {{user}} side) generation — given the user's long-form self-description, produce BOTH
+# (1) a tight chat-ready SUMMARY (prose, for the system prompt) and (2) an APPEARANCE description a
+# full-body portrait renders from. The subject describes THEMSELVES; read it as first-person
+# self-portrayal and render them faithfully (sex, age, body, style) without inventing traits the
+# description doesn't support. Minors are always depicted clothed and non-sexualised.
+_PERSONA_SYSTEM = (
+    "You turn a user's free-form SELF-DESCRIPTION (who THEY are in the chat) into two fields:\n\n"
+    "1) `summary` — a tight 2-3 sentence persona blurb in THIRD person, written as disciplined prose "
+    "for a chat system prompt. Distil the essence (identity, personality, demeanour, distinctive "
+    "traits). NOT tags, NOT first person, NOT a full background — just the compact read a character "
+    "card would carry. Stay faithful to the description; never invent facts it doesn't state.\n\n"
+    "2) `appearance` — a vivid, specific 3-6 sentence natural-language description for a FULL-BODY "
+    "portrait of THIS person, so the image model can draw them consistently. Read the sex/age/body/"
+    "style HONESTLY from the description. Cover hair (colour/length/style), eyes (colour + shape), "
+    "skin tone, build, height, and their DEFAULT outfit/accessories. Flowing descriptive prose — "
+    "plain colour words, real garment/feature names. Do NOT include expression, pose, background, "
+    "camera framing, art-style, medium or quality words. No trailing period.\n\n"
+    "If the description is too thin to infer a trait, OMIT that trait rather than guess. Return ONLY the "
+    "two fields."
+)
+
+# Full-body framing appended to every persona portrait render (mirrors the character base image). The
+# portrait is a full-body identity reference (not a bust), so the whole look reads.
+_PERSONA_FRAMING = ("solo, full body, standing, facing viewer, looking at viewer, simple background, "
+                    "grey background, full body shot, head to toe, feet visible")
+
+# JSON schema for the single persona-describe call (structured output): summary prose + appearance description.
+PERSONA_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["summary", "appearance"],
+    "properties": {
+        "summary": {"type": "string",
+                    "description": "2-3 sentence third-person persona blurb for the chat system prompt."},
+        "appearance": {"type": "string",
+                       "description": "a vivid 3-6 sentence natural-language full-body appearance "
+                                      "description for a portrait of this person."},
+    },
+}
+
+# Tier-A of the valence translation layer: authors a character's personality-rooted EMOTIONAL
+# EXPRESSION RANGE — a curated SUBSET of the fixed 32-key taxonomy, each placed on the canonical
+# (valence, arousal) circumplex and NUDGED per persona. The runtime director then emits {v,a} per
+# turn and snaps to the nearest key in this range. NOT invention-gated (a deterministic read of the
+# persona, like the base-image features). See AppContext.compose_affect_range.
+_AFFECT_SYSTEM = (
+    "You are an acting coach mapping a character's EMOTIONAL EXPRESSION RANGE onto the valence/"
+    "arousal circumplex. Valence (-1..1) is how PLEASANT the feeling is (misery to delight); arousal "
+    "(-1..1) is how ACTIVATED the body is (calm/still to agitated/explosive). You are given a FIXED "
+    "vocabulary of 32 emotion keys, each with its CANONICAL valence/arousal position.\n\n"
+    "Two jobs, both rooted in THIS character's persona:\n"
+    "(1) SELECT a SUBSET of 8-16 keys they actually express — the emotions that genuinely live in "
+    "their personality. A cheerful optimist centers on joy/serenity/interest and barely touches rage; "
+    "a volatile temper has anger/rage/annoyance prominent; a melancholy character centers sadness/"
+    "pensiveness/grief. Do NOT just return all 32 — a range is expressive because it is CURATED. "
+    "Cover both poles (some pleasant + some unpleasant) unless the persona truly never feels one side.\n"
+    "(2) NUDGE each selected key's valence/arousal to fit how THIS character feels it, anchored near "
+    "the canonical position. Personality moves coordinates: a stoic's whole range compresses toward "
+    "low arousal (their 'rage' is quieter, lower-arousal, than the canonical rage); a volatile "
+    "character's spreads high (their 'annoyance' is higher-arousal than baseline); an anxious "
+    "character's fear/apprehension sit higher-arousal; a warm character's joy sits higher-valence. "
+    "Keep nudges MODERATE (typically ±0.2) so the canonical structure is preserved — never invert a "
+    "feeling's valence (sadness stays negative, joy stays positive).\n\n"
+    "Return ONLY the selected keys with their nudged coordinates."
 )
 # Appended to every portrait render so sprites are consistent, chat-friendly busts. Front-facing,
-# straight-on anchors keep the camera steady (esp. for low-cfg/turbo models that ignore negatives).
+# straight-on anchors keep the camera steady.
 _PORTRAIT_FRAMING = "upper body, front view, facing viewer, straight-on, looking at viewer, simple background"
 # Outfit images are FULL BODY (whole-look reference), unlike the face-focused emotion sprites. This is
 # CAMERA only — front-view / straight-on anchors lock the angle; stance + limbs come from the per-emotion
@@ -69,8 +147,8 @@ def _gen_text(provider, system: str, prompt: str, images: list[str] | None = Non
     return (res.text or "").strip().replace("\n", " ").strip(" ,.")
 
 
-# The OUTFIT counterpart of FEATURES_SCHEMA — one complete, detailed outfit. (Emotions are NO
-# longer generated here — the sprite set is a fixed canonical taxonomy; see services/emotions.py.)
+# The OUTFIT counterpart of the structured base — one complete, detailed outfit. (Emotions are a
+# fixed canonical taxonomy; see services/emotions.py.)
 OUTFIT_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["outfit"],
     "properties": {
@@ -84,8 +162,8 @@ OUTFIT_SCHEMA = {
                        "the placeholders from THIS outfit; do NOT copy them literally. NEVER cram "
                        "several attributes into one item — '<material> <colour> <garment>' is WRONG; "
                        "split into '<colour> <garment>' + '<material>'.\n"
-                       "(2) EXPLICIT, LITERAL words; no metaphor/brand poetry. Descriptive wording is "
-                       "fine (the system grounds each item to a real tag).\n"
+                       "(2) EXPLICIT, vivid words; no metaphor/brand poetry. Plain real colour words; "
+                       "descriptive wording is fine (each item becomes part of the rendered prompt).\n"
                        "(3) No 'she wears', no connectives, no sentences.\n"
                        "COVER: main garment(s); layers (jacket/cardigan/coat/vest); LEGWEAR; FOOTWEAR; "
                        "HEADWEAR; ACCESSORIES (jewellery, bag, gloves, belt — note placement: 'single "
@@ -126,151 +204,76 @@ PLAY_SCHEMA = {
         "reply": {"type": "string"},
         "location": {"type": "string"},
         "present": {"type": "array", "items": {"type": "string"}},
+        # Per present character: the valence/arousal translation layer. The director judges each
+        # character's affect as two numbers (valence = pleasure ±1, arousal = activation ±1); the
+        # server snaps them to the nearest emotion key in THAT character's personality-rooted range
+        # (services.emotions.nearest_emotion). `valence`/`arousal` are optional so an older model
+        # returning a bare `emotion` word still validates (exact-match fallback).
         "emotions": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["character", "emotion"],
-            "properties": {"character": {"type": "string"}, "emotion": {"type": "string"}}}},
+            "properties": {
+                "character": {"type": "string"},
+                "emotion": {"type": "string",
+                            "description": "one lowercase word naming the character's current emotion "
+                                           "(a back-compat anchor; the valence/arousal below drive the "
+                                           "actual sprite selection)"},
+                "valence": {"type": "number", "minimum": -1, "maximum": 1,
+                            "description": "pleasure -1..1 (misery to delight)"},
+                "arousal": {"type": "number", "minimum": -1, "maximum": 1,
+                            "description": "activation -1..1 (calm/still to agitated/explosive)"},
+            }}},
         "movement": {"type": "boolean"},
     },
 }
 
 
-# Colour-NAME words a literal SDXL model paints as the actual colour, not as the trait
-# they describe (the classic: "olive skin" -> green skin). Rewrite the worst offenders to
-# plain booru tags so existing prompts self-heal at render time (newer prompts avoid them
-# via the feature schema). Skin tones only — clothing colours aren't in the base prompt.
-_IMAGE_TAG_FIXES = [
-    (r"\bolive(?:[ -](?:skin|complexion|skin tone|toned?|colou?red))\b", "tan"),
-    (r"\bolive(?=\s+skin)", "tan"),
-    (r"\bporcelain(?:[ -]skin)?\b", "pale skin"),
-    (r"\bebony[ -]skin\b", "dark skin"),
-    # "young" biases Illustrious childlike — strip it from ADULT subjects. "young adult" /
-    # "young woman" / "young man" are grown-ups, so drop the misleading "young". (An actual
-    # young girl/boy is written as 1girl/1boy + child/teen, which we leave untouched.)
-    (r"\byoung\s+adult\b", "adult"),
-    (r"\byoung\s+(woman|man|female|male)\b", r"\1"),
-    # plain hair colours — common artistic/metaphor words the model still slips in. NOTE: 'auburn
-    # hair' IS a real booru tag and renders as a NATURAL warm reddish-brown (much gentler than the
-    # vivid anime 'red hair'), so we KEEP it; only bare 'auburn' is pinned to the hair tag.
-    (r"\bbrunette\b", "brown"),
-    (r"\braven\s+(hair|black)\b", "black hair"),
-    (r"\bauburn\b(?!\s+hair)", "auburn hair"),
-    # neutral-grey the base backdrop (RMBG-2.0 mattes it). Rewrite any other bg tag to grey.
-    (r"\b(?:plain white|plain simple|plain|white|green|magenta)\s+background\b", "grey background"),
-    # literal-model traps: figurative/shape-by-analogy phrases render as the literal object.
-    # face/chin/nose SHAPE is barely tagged on Danbooru — drop the figurative ones outright
-    # (their old "fixes" pointed chin / narrow eyes were ALSO dead tags). Eyes → real shapes.
-    (r"\bheart[- ]shaped\s+face\b", ""),
-    (r"\balmond[- ]shaped\s+eyes\b", "tsurime"),
-    (r"\balmond\s+eyes\b", "tsurime"),
-    (r"\bbutton\s+nose\b", ""),
-    (r"\bsharp\s+eyes\b", "tsurime"),
-    (r"\beyebags?\b", ""),
-    (r"\bnarrow\s+eyes\b", "tsurime"),
-    (r"\b(?:pointed|v-shaped)\s+(?:chin|jaw)\b", ""),
-    (r"\b(?:star|diamond|oval)[- ]shaped\s+face\b", ""),
-]
-
-# Tags that just never render attractively on this checkpoint — half-lidded / shut / tired
-# eye looks, etc. Stripped from every image prompt regardless of where it came from. Extend
-# this list as more bad-result tags surface.
-_AESTHETIC_BLOCK = (
-    "closed eyes", "half-closed", "half closed", "jitome", "eyebag", "bags under eyes",
-    "one eye closed", "rolling eyes", "empty eyes", "drooping eyes",
-)
-
-
-def _safe_image_tags(text: str) -> str:
-    """Rewrite literal-model-hostile phrases (olive skin, dead-tag eye shapes) to plain tags,
-    then drop blank fragments AND aesthetically-bad tags (sleepy/closed eyes …), order-keeping.
-    `BREAK` region separators are preserved (each region cleaned independently)."""
-    if text and "BREAK" in text:
-        parts = [_safe_image_tags(p) for p in re.split(r"\bBREAK\b", text)]
-        return " BREAK ".join(p for p in parts if p.strip())
+# ---------------------------------------------------------------------------
+# Composition helpers — now natural-language passthroughs.
+# Anima reads prose intact, so these are whitespace-tidying no-ops kept under their old names so
+# existing call sites compile. (Historically they snapped/regionized/rewrote booru tags for
+# Illustrious; that path is gone.)
+# ---------------------------------------------------------------------------
+def _safe_image_tags(text: str, family: str | None = None) -> str:
+    """Tidy whitespace/punctuation in a natural-language prompt. Preserves all words — Anima
+    reads expressive prose, so we never rewrite 'literal traps' or strip mood cues."""
     out = text or ""
-    for pat, repl in _IMAGE_TAG_FIXES:
-        out = re.sub(pat, repl, out, flags=re.I)
-    kept = []
-    for part in out.split(","):
-        p = part.strip()
-        if p and not any(b in p.lower() for b in _AESTHETIC_BLOCK):
-            kept.append(p)
-    return ", ".join(kept)
+    return re.sub(r"\s+", " ", out).strip(" ,")
 
 
-def _snap_prompt(text: str) -> str:
-    """Snap a prompt onto the real Danbooru vocabulary (alias/typo/reorder), KEEPING any
-    unknown tags verbatim — non-destructive. A missing/unbuilt index is a silent no-op so
-    generation never depends on it. The editor surfaces unknowns; this just canonicalizes."""
-    if text and "BREAK" in text:   # snap each region independently, keep the separators
-        parts = [_snap_prompt(p) for p in re.split(r"\bBREAK\b", text)]
-        return " BREAK ".join(p for p in parts if p.strip())
-    try:
-        from ...tags import get_index
-        ix = get_index()
-        return ix.snap(text)["prompt"] if ix.ready else (text or "")
-    except Exception:  # noqa: BLE001 — vocabulary is a nicety, never a hard dependency
-        return text or ""
+def _snap_prompt(text: str, family: str | None = None) -> str:
+    """Natural-language passthrough — returns the prompt tidied, vocabulary-intact."""
+    return re.sub(r"\s+", " ", (text or "")).strip()
 
 
-# Going-forward prompt shape: every GENERATED prompt is grounded (real tags) then split into BREAK
-# regions. 'coarse' (subject · appearance · outfit · details) is the SDXL/Illustrious-friendly
-# default; the provider honours BREAK (ConditioningConcat) with a comma strip-fallback.
-_BREAK_MODE = "coarse"
-
-
-def _extract_tags(text: str) -> list:
-    """Ground a NATURAL-LANGUAGE description into real booru tags (the default generation method:
-    let the model write freely, then snap n-grams onto the canonical vocabulary). Returns a tag
-    list. Falls back to a plain comma-split when the vocabulary index is unavailable, so generation
-    never hard-depends on it."""
-    text = (text or "").strip()
-    if not text:
-        return []
-    try:
-        from ...tags import get_index
-        ix = get_index()
-        if ix.ready:
-            return list(ix.extract(text)["tags"])
-    except Exception:  # noqa: BLE001 — vocabulary is a nicety, never a hard dependency
-        pass
-    return [t.strip() for t in re.split(r"[,\n]", text) if t.strip()]
-
-
-def _regionize_prompt(text: str, mode: str | None = None) -> str:
-    """Re-order a comma/BREAK prompt into category BREAK regions (the going-forward shape). Any
-    existing BREAK tokens are dropped and re-derived. Silent no-op passthrough if facets are
-    unavailable. `mode` defaults to _BREAK_MODE ('coarse')."""
+def _regionize_prompt(text: str, mode: str | None = None, family: str | None = None) -> str:
+    """Natural-language passthrough — the author's prose ordering is meaningful, so it is returned
+    tidied, not re-sorted into BREAK regions."""
     if not text or not text.strip():
         return text or ""
-    try:
-        from ...tags.facets import regionize
-        # split on commas AND any existing BREAK token, so this is IDEMPOTENT — combining several
-        # already-regionized fragments and re-regionizing re-derives clean regions.
-        tags = [t.strip() for t in re.split(r"\bBREAK\b|,", text) if t.strip()]
-        return ", ".join(regionize(tags, mode or _BREAK_MODE))
-    except Exception:  # noqa: BLE001
-        return text
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _base_prompt(ch) -> str:
-    """The default positive prompt for a character's base image: their own physical
-    `appearance` (falls back to the persona/name — never a hard-coded gender) framed as
-    a clean FULL-BODY template in plain swimwear. Minimal clothing on purpose — a complex
-    outfit corrupts the identity capture; story outfits are layered on later (wardrobe).
-    The workflow carries its own quality/style embeddings."""
+    """The default positive prompt for a character's base image: their own physical `appearance`
+    (falls back to the persona/name — never a hard-coded gender) framed as a clean FULL-BODY
+    reference in plain swimwear. Minimal clothing on purpose — a complex outfit corrupts the
+    identity capture; story outfits are layered on later (wardrobe)."""
     appearance = ((ch.fields or {}).get("appearance")
                   or ch.system or ch.name or "solo").strip()
-    # Swimwear template by apparent gender (read the count tag in the appearance).
     male = re.search(r"\b1\s*(boy|man|male)\b", appearance.lower()) is not None
     swim = "swim trunks, bare chest" if male else "bikini"
-    return _regionize_prompt(_safe_image_tags(
+    return _regionize_prompt(
         f"{appearance}, solo, full body, standing, facing viewer, {swim}, "
-        "grey background, simple background, full body shot, head to toe, feet visible"))
+        "grey background, simple background, full body shot, head to toe, feet visible")
 
 
-# -- base-appearance feature schema + assembler ------------------------------
-
+# ---------------------------------------------------------------------------
+# Structured base-appearance feature schema (the deterministic fallback).
+# The primary path is `compose_nl_base` (one GLM 5.2 pass that derives these fields AND authors
+# prose). This schema is the fallback if the structured-prose call fails — `_assemble_base_prompt`
+# then weaves its atomic descriptors into a tidy prose-ish prompt.
+# ---------------------------------------------------------------------------
 _APPEARANCE_BLOCK = (
     "smil", "grin", "blush", "tear", "cry", "angry", "happy", " sad", "pout", "wink", "laugh",
     "open mouth", "surpris", "scream", "embarrassed",
@@ -306,15 +309,10 @@ FEATURES_SCHEMA = {
                        "'expressionless' (cold resting-bitch-face) or a big transient emotion."},
         "skin_tone": {"type": "string",
                       "enum": ["pale skin", "light skin", "tan", "dark skin", "very dark skin"],
-                      "description": "the character's skin BRIGHTNESS/tone — MATCH their heritage "
-                                     "(infer from name + persona; don't default non-white characters "
-                                     "to pale): e.g. East-Asian-coded -> light skin, Latina/"
-                                     "Mediterranean -> tan, South-Asian/African -> dark or very dark "
-                                     "skin. TONE only; texture ('shiny skin') and marks ('freckles') "
-                                     "go in the appearance list. Never 'olive'/'fair' (not real tags)."},
-        # FORCED, VARIED hair colour — without it the model collapses to black/brown every time and a
-        # cast is never blonde/red/etc. Hair colour is NOT dictated by ethnicity (any character can be
-        # any colour); pick from the persona if it states one, else VARY it across the cast.
+                      "description": "the character's skin tone — MATCH their heritage (infer from "
+                                     "name + persona; don't default non-white characters to pale). "
+                                     "TONE only; texture ('shiny skin') and marks ('freckles') go in "
+                                     "the appearance list."},
         "hair_color": {"type": "string",
                        "enum": ["black hair", "dark brown hair", "brown hair", "light brown hair",
                                 "blonde hair", "platinum blonde", "strawberry blonde", "ginger",
@@ -323,221 +321,95 @@ FEATURES_SCHEMA = {
                        "description":
                            "the character's HAIR COLOUR. If the persona states one, use it; otherwise "
                            "CHOOSE and VARY across the cast — do NOT default everyone to black/brown, "
-                           "and blonde/red/etc. are valid for ANY character (hair colour is NOT tied to "
-                           "skin tone or ethnicity). For a natural redhead prefer 'auburn hair' over the "
-                           "vivid 'red hair'. Reserve blue/pink/purple/green for deliberately stylised "
-                           "characters."},
+                           "and blonde/red/etc. are valid for ANY character. For a natural redhead "
+                           "prefer 'auburn hair' over the vivid 'red hair'."},
         "pose": {"type": "string",
                  "enum": ["arms at sides", "hand on hip", "crossed arms", "arms behind back",
                           "hands in pockets", "contrapposto"],
                  "description": "ONE subtle STANDING reference pose that suits the PERSONALITY "
-                                "(the base stays standing, full-body, facing viewer — these are "
-                                "template-safe, NOT dynamic/action poses). confident/assertive -> "
-                                "'hand on hip' or 'crossed arms'; shy/formal/reserved -> 'arms "
-                                "behind back'; casual/relaxed -> 'hands in pockets' or "
-                                "'contrapposto'; neutral default -> 'arms at sides'."},
+                                "(the base stays standing, full-body, facing viewer)."},
         "gaze": {"type": "string",
                  "enum": ["looking at viewer", "looking to the side", "looking away"],
                  "description":
                      "where the character's EYES point. DEFAULT to 'looking at viewer' — most "
-                     "characters MEET the viewer's gaze (engaged, present, making eye contact). "
-                     "Choose 'looking to the side' or 'looking away' ONLY for a genuinely shy, timid, "
-                     "demure, aloof or evasive personality. A reference face must NEVER stare blankly "
-                     "at nothing — always commit to a clear gaze."},
-        # FORCED, DERIVED body axes — the biggest anti-sameness lever. Free-text body description
-        # collapses to "slim, average height" every time; explicit DERIVED picks do not. HEIGHT and
-        # FIGURE are SEPARATE so combinations (a short + curvy 'short stack', a tall + slender model)
-        # are reachable. The model must commit and justify by the character's life, not default.
+                     "characters MEET the viewer's gaze. 'looking to the side' / 'looking away' "
+                     "ONLY for a genuinely shy, timid, aloof or evasive personality."},
         "height_cm": {"type": "integer",
                       "description":
                           "the character's height in CENTIMETRES — a REALISTIC number derived from "
-                          "sex, age, build and species, and VARIED across the cast (do NOT make "
-                          "everyone the same). Rough human ranges: adult women ~150-178, adult men "
-                          "~165-195, a petite/doll-like adult ~148-156, a tall/imposing one 180+; "
-                          "children scale by age; non-human species may exceed these. This is used to "
-                          "SCALE the sprite (compositing), NOT as an image tag — give an honest "
-                          "number, and make a cast genuinely span short to tall."},
+                          "sex, age, build and species, and VARIED across the cast. Rough human "
+                          "ranges: adult women ~150-178, adult men ~165-195. Used to SCALE the sprite "
+                          "(compositing), NOT as an image tag."},
         "build": {"type": "string",
                   "enum": ["petite", "slim", "slender", "toned", "athletic",
                            "curvy", "voluptuous", "plump", "muscular"],
                   "description":
                       "the character's FIGURE — DERIVE it from CONCRETE persona facts (age, "
-                      "profession, training, lifestyle, species/role); NEVER just default to slim. "
-                      "Aim for VARIETY across the cast — 'petite', 'curvy', 'voluptuous', 'plump', "
-                      "'slender', 'toned' should all show up. A dancer/runner -> 'toned'/'slender'; a "
-                      "noble/scholar -> 'slim'/'petite'; a hearty cook / earth-mother -> 'plump'/"
-                      "'voluptuous'; a bombshell / pin-up -> 'curvy'/'voluptuous'; a small doll-like "
-                      "character -> 'petite'. 'muscular' is ONLY for male characters or a true female "
-                      "bodybuilder — do NOT make ordinary women muscular. Combine with height for a "
-                      "'short stack' (short + curvy/voluptuous) or a 'tall and slender' look."},
+                      "profession, training, lifestyle, role); NEVER just default to slim. Aim for "
+                      "VARIETY across the cast. 'muscular' is ONLY for male characters or a true "
+                      "female bodybuilder."},
         "bust": {"type": "string",
                  "enum": ["flat chest", "small breasts", "medium breasts", "large breasts",
                           "huge breasts"],
                  "description":
                      "chest size, CONSISTENT with the figure + persona (ignored for male/child "
-                     "characters in code). Do NOT default everyone to medium — a petite / athletic / "
-                     "slender frame usually reads small or flat; a curvy / voluptuous / plump one "
-                     "large or huge. Vary it with the build."},
+                     "characters in code). Vary it with the build."},
         "distinguishing_feature": {"type": "array", "items": {"type": "string"},
             "description":
                 "1-2 DISTINCTIVE facial identity hooks that make THIS face unmistakable and "
-                "DIFFERENT from the model's default pretty-anime face — the single biggest lever "
-                "against a same-y cast, so NEVER leave it empty. Pick HIGH-SIGNAL booru tags that "
-                "render, and VARY the CATEGORY character-to-character (do NOT put the same hook on "
-                "everyone — especially don't default everyone to a mole). Draw from DIFFERENT "
-                "categories: a skin mark (a mole at some placement, freckles, a beauty mark, a "
-                "scar); an eye distinction (heterochromia, a distinctive eye shape, eyeliner or "
-                "eyeshadow); eyewear (glasses); or a feature like a fang. Choose what fits the "
-                "persona and differs from the rest of the cast. Marks/features only — NOT hair / "
-                "clothing / expression / pose."},
-        # ATOMIC QUALIFIED DESCRIPTORS — a constrained list, not prose. Each item is ONE explicit
-        # attribute (qualifier + head noun); the system grounds each to a real booru tag. Flexible
-        # wording, structured shape, single meaning per item.
+                "DIFFERENT from the model's default pretty face. Draw from DIFFERENT categories: a "
+                "skin mark (a mole, freckles, a beauty mark, a scar); an eye distinction "
+                "(heterochromia, a distinctive eye shape, eyeliner or eyeshadow); eyewear (glasses); "
+                "or a feature like a fang. Marks/features only — NOT hair / clothing / expression / pose."},
         "appearance": {"type": "array", "items": {"type": "string"},
                        "description":
                            "A LIST of ~10-20 short, EXPLICIT visual descriptors for THIS character's physical "
                            "look — specific and flattering, what makes them distinct. NOT prose, NOT "
                            "sentences. RULES:\n"
                            "(1) ONE concept per item — a head noun with its qualifier(s) for a SINGLE "
-                           "attribute, of the FORM '<length> hair', '<hairstyle>', '<bang style>', "
-                           "'<colour> eyes', '<eye shape>', '<skin texture>', '<facial mark>'. Fill the "
-                           "placeholders from THIS character; do NOT copy these literally. NEVER cram "
-                           "attributes into one item — '<length> <texture> hair' is WRONG; split into "
-                           "'<length> hair' + '<texture> hair' (separate items).\n"
-                           "(2) EXPLICIT, LITERAL words only — no metaphor/figurative phrasing (avoid "
-                           "the likes of 'raven', 'almond eyes', 'emerald', 'olive skin'; use plain "
-                           "real terms).\n"
-                           "(3) No 'she has', no connectives, no full sentences. Descriptive wording "
-                           "is fine (the system grounds each item to a real tag).\n"
-                           "COVER: hair LENGTH + ONE primary style + a detail (as SEPARATE items — the "
-                           "base COLOUR is the `hair_color` field, do NOT repeat it; only add "
-                           "highlights/streaks if any; an afro/dreadlocks/cornrows is all-over coily, "
-                           "never with bangs or straight/wavy hair); eyes (colour + shape, eyes OPEN); "
-                           "skin texture + any marks; secondary proportions. CHOOSE values that fit "
-                           "THIS persona and VARY them across the cast (don't reuse the same features). "
-                           "NOT hair base-colour / height / build / bust (separate fields), NO "
-                           "expression, clothing, pose, background or scene."},
+                           "attribute, of the FORM '<length> hair', '<hairstyle>', '<colour> eyes', "
+                           "'<eye shape>', '<skin texture>', '<facial mark>'.\n"
+                           "(2) EXPLICIT, vivid words; plain real colour words; no metaphor/figurative "
+                           "phrasing.\n"
+                           "(3) No 'she has', no connectives, no full sentences.\n"
+                           "COVER: hair LENGTH + ONE primary style + a detail; eyes (colour + shape, "
+                           "eyes OPEN); skin texture + any marks; secondary proportions. NOT hair "
+                           "base-colour / height / build / bust (separate fields), NO expression, "
+                           "clothing, pose, background or scene."},
     },
 }
 
-# Tags that cannot truthfully co-exist — the model sometimes emits several (e.g. 'large eyes'
-# AND 'small eyes'). Keep only the FIRST seen from each group, drop the rest.
-_EXCLUSIVE_GROUPS = [
-    {"small eyes", "large eyes"},
-    # ONE hair colour — the derived hair_color is injected first, so it wins over any colour the
-    # appearance list slips in (keeps a character from being two hair colours at once).
-    {"black hair", "dark brown hair", "brown hair", "light brown hair", "blonde hair", "blond hair",
-     "platinum blonde", "strawberry blonde", "ginger", "orange hair", "auburn hair", "red hair",
-     "grey hair", "gray hair", "white hair", "silver hair", "blue hair", "pink hair", "purple hair",
-     "green hair", "aqua hair", "dark blue hair"},
-    # ONE gaze — the derived `gaze` is injected first, so it wins over any framing default
-    {"looking at viewer", "looking to the side", "looking away", "looking afar",
-     "looking up", "looking down", "looking back"},
-    {"youthful face", "adult face", "mature face"},
-    {"tall", "short", "very short", "average height"},
-    # main body build — keep the FIRST the model picks (wide hips / narrow waist may co-exist)
-    {"petite", "slim", "slender", "toned", "athletic", "curvy", "voluptuous", "plump",
-     "muscular", "muscular female", "muscular male"},
-    # bust size — exactly one
-    {"flat chest", "small breasts", "medium breasts", "large breasts", "huge breasts",
-     "gigantic breasts"},
-    # ONE primary tie/updo hairstyle — stops stacking ponytail + bun + twintails (looks odd)
-    {"ponytail", "low ponytail", "high ponytail", "side ponytail", "folded ponytail",
-     "twintails", "low twintails", "hair bun", "double bun", "single hair bun", "hime cut",
-     "drill hair", "twin drills"},
-    # ONE base hair texture, and ONE "disorder" tag — avoid wavy+straight or messy+flyaway piles
-    {"straight hair", "wavy hair", "curly hair"},
-    {"messy hair", "flyaway hair", "disheveled hair", "disheveled hair"},
-]
 
+def _assemble_base_prompt(f: dict, family: str | None = None) -> str:
+    """Deterministic FALLBACK base-image prompt from the FEATURES_SCHEMA fields — woven into tidy
+    descriptive prose. The primary path is `compose_nl_base` (a single GLM 5.2 pass that authors
+    genuinely structured, personality-integrated prose); this runs only when that call fails.
 
-def _categorize_appearance_tags(tags: list) -> dict:
-    """Categorize raw appearance tags into logical groups for better prompt organization.
-    Returns {hair, eyes, proportions, skin, other} lists. Helps assemble prompts with
-    coherent tag ordering."""
-    hair_keywords = {
-        "hair", "bangs", "sidelocks", "ahoge", "ponytail", "braid", "twintails", "bun",
-        "hime", "bob", "undercut", "drill", "spiked", "dreadlocks", "afro", "cornrows",
-        "parted", "blunt", "swept", "over one eye", "intakes", "streaked", "gradient",
-        "two-tone", "multicolored"
-    }
-    eye_keywords = {"eye", "iris", "pupil", "heterochromia", "eyelash", "brow"}
-    proportion_keywords = {
-        "collarbone", "navel", "waist", "hips", "thigh", "thighs", "legs", "long legs",
-        "abs", "shoulders", "neck", "cleavage", "butt"
-    }
-    skin_keywords = {"skin", "freckles", "mole", "scar", "tattoo", "mark"}
-    accessory_keywords = {"glasses", "earring", "necklace", "ring", "bracelet", "piercing"}
-
-    categories = {"hair": [], "eyes": [], "proportions": [], "skin": [], "accessories": [], "other": []}
-    for tag in tags:
-        t = tag.lower().strip()
-        if not t:
-            continue
-        # Check each category
-        if any(k in t for k in hair_keywords):
-            categories["hair"].append(tag)
-        elif any(k in t for k in eye_keywords):
-            categories["eyes"].append(tag)
-        elif any(k in t for k in proportion_keywords):
-            categories["proportions"].append(tag)
-        elif any(k in t for k in skin_keywords):
-            categories["skin"].append(tag)
-        elif any(k in t for k in accessory_keywords):
-            categories["accessories"].append(tag)
-        else:
-            categories["other"].append(tag)
-    return categories
-
-
-def _assemble_base_prompt(f: dict) -> str:
-    """Assemble the base-image prompt from the model's free-form `appearance` tag list plus the
-    fixed neutral / full-body / swimwear / grey framing. The model writes rich descriptors
-    freely; this only enforces the guardrails it gets wrong: a strong CANONICAL sex anchor by
-    age, transient/scene/clothing leakage filtered, and contradictory tags reduced to one.
-
-    IMPROVED ASSEMBLY: Tags are organized into weighted groups for better model comprehension:
-    1. IDENTITY (count, skin, distinguishing features) - highest weight for distinctiveness
-    2. FACE (expression, gaze, eye features) - early placement for facial identity
-    3. BODY (build, bust, proportions) - core silhouette
-    4. APPEARANCE DETAILS (hair, remaining appearance tags) - refinement
-    5. FRAMING (pose, camera, background, attire) - scene context"""
+    Preserves the guardrails the structured fields enforce: minor-safety, sex-anchoring, varied
+    derived hair/build/bust, committed resting expression/gaze/pose, the full-body/swimwear/grey
+    identity-capture framing."""
     count = (f.get("count") or "1girl").strip().lower()
     male = re.search(r"\b1\s*(boy|man|male)\b", count) is not None
 
-    # Adult vs minor from the apparent age.
     age = (f.get("apparent_age") or "").lower()
-    m = re.search(r"\d+", age)
-    if m:
-        minor = int(m.group()) < 18
+    am = re.search(r"\d+", age)
+    if am:
+        minor = int(am.group()) < 18
     elif any(w in age for w in ("child", "teen", "kid")):
         minor = True
     else:
         minor = False
 
-    # SEX ANCHOR (canonical). '1man'/'1woman' are NOT real Danbooru tags (≈0 images), so a
-    # female-skewed style LoRA happily genderbends them; '1boy'/'1girl' are the real tags for
-    # ALL ages. AGE is honest, not forced: ADULTS get 'mature male'/'mature female' (the real
-    # grown-up anchors) + the minimal swimwear identity-capture template; MINORS get neither
-    # 'mature' nor adult-physique anchors, and a MODEST base outfit (never swimwear) — their
-    # real age comes through the appearance tags. 'male focus' resists the genderbend either
-    # way. (Sexualisation guards — loli/shota — stay in the workflow negatives regardless.)
     if minor:
-        gender = ["1boy", "male focus"] if male else ["1girl"]
-        attire = "t-shirt, shorts"
+        attire = "a plain t-shirt and shorts"
     elif male:
-        gender = ["1boy", "male focus", "mature male", "pectorals", "flat chest"]
         attire = "swim trunks, bare chest"
     else:
-        gender = ["1girl", "mature female"]
-        attire = "bikini"
+        attire = "a simple two-piece swimsuit"
 
-    # Free-form appearance tags: split any crammed strings, drop transient/scene/clothing/pose
-    # leakage AND any person-count tag the model slips in (e.g. '1woman', '1girl') — the sex
-    # anchor above is authoritative, so a leaked count would only duplicate/contradict it.
     count_re = re.compile(r"^\d+\s*(boy|girl|man|woman|male|female|other)s?$")
 
-    def _clean_tags(items):
+    def _clean(items):
         out = []
         for item in (items or []):
             for atom in str(item).split(","):
@@ -546,32 +418,16 @@ def _assemble_base_prompt(f: dict) -> str:
                     out.append(a)
         return out
 
-    # `appearance` is a LIST of ATOMIC descriptors — filter leakage/count tags; the closing
-    # _snap_prompt grounds each item to a real booru tag (and decomposes any compound that slips in).
-    app = _clean_tags(f.get("appearance"))
-    # DISTINCTIVE FACE HOOKS (mole/freckles/heterochromia/glasses/makeup/…) — placed FIRST for
-    # maximum distinctiveness weight, breaking Illustrious's "house face" prior.
-    face_hooks = _clean_tags(f.get("distinguishing_feature"))
-    # Skin TONE is a guaranteed brightness tag (the model used to give only 'shiny skin', a
-    # texture, and never a tone). Validate against the gradient; default to a mid 'light skin'.
-    skin = (f.get("skin_tone") or "").strip().lower()
-    if skin not in ("pale skin", "light skin", "tan", "dark skin", "very dark skin"):
-        skin = "light skin"
-    # DERIVED HAIR COLOUR (anti-collapse): forced + varied so a cast isn't always black/brown. Placed
-    # before *app so it wins the hair-colour _EXCLUSIVE_GROUP. Default 'brown hair' (NOT black) if absent.
+    app = _clean(f.get("appearance"))
+    face_hooks = _clean(f.get("distinguishing_feature"))
+
     _HAIR = ("black hair", "dark brown hair", "brown hair", "light brown hair", "blonde hair",
              "platinum blonde", "strawberry blonde", "ginger", "orange hair", "auburn hair",
              "red hair", "grey hair", "white hair", "blue hair", "pink hair", "purple hair", "green hair")
     hair = (f.get("hair_color") or "").strip().lower()
     if hair not in _HAIR:
         hair = "brown hair"
-    # DERIVED FIGURE (anti-sameness). The body description collapses to "slim" without an explicit,
-    # persona-justified pick. (Absolute HEIGHT is NOT a tag — it can't render in a solo full-body
-    # shot; it's captured as numeric `height_cm` metadata and applied by sprite scaling at composite
-    # time.) Picked before *app so it wins its _EXCLUSIVE_GROUP if the prose leaked a stray body word.
-    body_anchor = []
-    # FIGURE — default to 'athletic' (NOT 'slim') when missing, the mean we're fighting. 'muscular'
-    # is male-only per the user's aesthetic: clamp a muscular WOMAN to 'athletic'.
+
     _BUILDS = ("petite", "slim", "slender", "toned", "athletic", "muscular",
                "curvy", "voluptuous", "plump")
     build = (f.get("build") or "").strip().lower()
@@ -579,84 +435,187 @@ def _assemble_base_prompt(f: dict) -> str:
         build = "athletic"
     if build == "muscular" and not male:
         build = "athletic"
-    # MINOR SAFETY: never put an adult/sexualised frame on a child — clamp to a neutral youthful
-    # figure and inject NO bust tag (loli/shota guards also live in the workflow negatives).
     if minor and build in ("curvy", "voluptuous", "plump", "muscular"):
         build = "slim"
-    body_anchor.append(build)
-    if not male and not minor:                       # bust only for adult women (males get
-        bust = (f.get("bust") or "").strip().lower() # 'flat chest' from the sex anchor)
-        if bust not in ("flat chest", "small breasts", "medium breasts",
-                        "large breasts", "huge breasts"):
-            bust = "medium breasts"
-        body_anchor.append(bust)
 
-    # Persistent RESTING expression by personality (NOT 'neutral expression' — a near-dead tag
-    # that renders a cold resting-bitch-face). Fall back to a warm 'light smile'; never let a
-    # neutral/expressionless value through. Sprites still vary emotion on top of this base.
+    bust = ""
+    if not male and not minor:
+        b = (f.get("bust") or "").strip().lower()
+        if b in ("flat chest", "small breasts", "medium breasts", "large breasts", "huge breasts"):
+            bust = b
+
     expr = (f.get("expression") or "").strip().lower()
     if not expr or "neutral" in expr or "expressionless" in expr:
         expr = "light smile"
-    # GAZE — default 'looking at viewer' (eye contact); the model picks 'looking away'/'to the side'
-    # only for shy/aloof personas. A reference must never stare blankly at nothing.
     gaze = (f.get("gaze") or "").strip().lower()
     if gaze not in ("looking at viewer", "looking to the side", "looking away"):
         gaze = "looking at viewer"
-    # Subtle STANDING reference pose by personality (template-safe; default 'arms at sides').
     pose = (f.get("pose") or "").strip().lower()
     if pose not in ("arms at sides", "hand on hip", "crossed arms", "arms behind back",
                     "hands in pockets", "contrapposto"):
         pose = "arms at sides"
+    skin = (f.get("skin_tone") or "").strip().lower()
+    if skin not in ("pale skin", "light skin", "tan", "dark skin", "very dark skin"):
+        skin = "light skin"
 
-    # IMPROVED ASSEMBLY: Organize tags into weighted groups for better model comprehension.
-    # Group 1: IDENTITY — highest weight for distinctiveness (count, skin, face hooks FIRST)
-    identity = [*gender, skin, *face_hooks]
+    pron = "his" if male else "her"
+    noun = ("boy" if male else "girl") if minor else ("man" if male else "woman")
+    if am and minor:
+        subj = f"a {int(am.group())}-year-old {noun}"
+    else:
+        subj = f"a {noun}"
 
-    # Group 2: FACE — expression, gaze for facial identity
-    face_tags = [expr, gaze]
+    look = []
+    if hair.lower() not in " ".join(app).lower():
+        look.append(hair)
+    look.extend(app)
+    clauses = [subj]
+    if look:
+        clauses.append("with " + ", ".join(look))
+    if face_hooks:
+        clauses.append("distinctive for " + ", ".join(face_hooks))
+    if skin:
+        clauses.append(skin)
+    body_bits = [build] + ([bust] if bust else [])
+    clauses.append("a " + ", ".join(body_bits) + " figure")
+    main = ", ".join(clauses) + "."
 
-    # Group 3: BODY — build, bust, proportions for core silhouette
-    body_tags = body_anchor.copy()
+    stance = {"arms at sides": f"arms relaxed at {pron} sides",
+              "hand on hip": f"one hand on {pron} hip",
+              "crossed arms": "arms crossed",
+              "arms behind back": f"hands clasped behind {pron} back",
+              "hands in pockets": "hands in pockets",
+              "contrapposto": "a relaxed contrapposto"}.get(pose, "standing")
+    subj_pron = "He" if male else "She"
+    stance_sentence = f"{subj_pron} is standing with {stance}, {expr}, {gaze}."
 
-    # Group 4: APPEARANCE — hair, categorized appearance details for better coherence
-    categorized = _categorize_appearance_tags(app)
-    # Order: hair color (already set) → hair style/details → eyes → proportions → skin → accessories → other
-    appearance = [hair, *categorized["hair"], *categorized["eyes"], *categorized["proportions"],
-                  *categorized["skin"], *categorized["accessories"], *categorized["other"]]
+    framing = f"Dressed in {attire}. Full body, head to toe, against a plain grey background."
+    out = " ".join(s.strip() for s in (main, stance_sentence, framing) if s and s.strip())
+    return re.sub(r"\s+", " ", out).strip()
 
-    # Group 5: FRAMING — pose, camera, background, attire for scene context
-    framing = ["solo", "full body", "standing", pose, "facing viewer", attire,
-               "grey background", "simple background", "full body shot", "head to toe", "feet visible"]
 
-    # Combine in order: identity → face → body → appearance → framing
-    parts = identity + face_tags + body_tags + appearance + framing
+# ---------------------------------------------------------------------------
+# Anima / natural-language structured-prose author (single pass).
+# ---------------------------------------------------------------------------
+_NL_BASE_SYSTEM = (
+    "You are a character art director. From the character's WRITTEN DESCRIPTION (name, persona, "
+    "appearance notes, role), you do TWO things in ONE response:\n"
+    "  (A) fill the structured fields — the sex count, apparent age, skin tone, hair colour, build, "
+    "bust, height, resting expression, gaze and pose, derived honestly from the description (with "
+    "VARIETY across a cast — do not default everyone to brown hair / slim / medium);\n"
+    "  (B) WRITE the `prompt` field as a STRUCTURED, richly detailed natural-language appearance "
+    "description for a natural-language anime image model (Anima / Qwen-Image), which reads flowing "
+    "prose far better than a tag list. This prose is the whole positive prompt the image model gets "
+    "(the workflow carries its own quality/style tags), so it must be vivid, specific and complete.\n\n"
+    "WRITING THE `prompt` — seven sections in order, each 1-3 sentences, woven into CONNECTED prose "
+    "(you may use the section order as a guide but it must read as descriptive writing, not a "
+    "bulleted list):\n"
+    "  1. OVERVIEW — who they are: sex, apparent age, an overall first impression and the kind of "
+    "beauty they have (elegant, cute, sultry, wholesome, striking — VARY it across a cast, never the "
+    "same default pretty).\n"
+    "  2. HAIR — colour, length, the primary style AND how it falls, plus a telling detail. Let the "
+    "PERSONALITY shape it: a disciplined character's hair is controlled and precise; a free spirit's "
+    "is loose and unruly; a noble's is formal. Describe how it frames the face.\n"
+    "  3. FACE & EYES — the shape of the face, the eyes (colour + shape), the brows, and crucially how "
+    "the EYE SHAPE + RESTING EXPRESSION read as personality: soft tareme for warmth/gentleness, sharp "
+    "tsurime for fierce/stern/cocky. Eyes open and alert. Note any distinguishing mark (a mole, "
+    "freckles, a scar, heterochromia, glasses, makeup).\n"
+    "  4. SKIN — tone and texture (a healthy glow, a matte softness, freckles).\n"
+    "  5. BODY — the build/figure and proportions, derived from their life (a dancer is toned and "
+    "lithe; a scholar slim and slight; a hearty cook plump and warm). Be specific and flattering; do "
+    "not default to slim. For adult women note the bust in keeping with the frame. Height where notable.\n"
+    "  6. PRESENCE — a subtle standing pose that suits the personality, the resting gaze (most meet "
+    "the viewer's eyes; a shy or aloof character looks aside), and the air they carry.\n"
+    "  7. ATTIRE + FRAMING — the minimal base attire the reference uses (a simple swimsuit for an "
+    "adult, a plain t-shirt and shorts for a child), then: full body, head to toe, against a plain "
+    "grey background.\n\n"
+    "PERSONALITY IS THE THROUGH-LINE: the same personality should be visible in the hairstyle, the "
+    "eyes, the expression, the pose and the build — they must COHERE. Do not describe a shy character "
+    "with sharp angry eyes and a cocky smirk. Keep the structured fields CONSISTENT with the prose "
+    "(same hair colour, build, expression, etc.).\n\n"
+    "HONESTY: read the real age from the persona and reflect it physically; do not force every "
+    "character to be an adult. Minors are ALWAYS depicted clothed and non-sexualised — give a child a "
+    "youthful face and slighter build, and never an adult/sexualised frame.\n\n"
+    "The `prompt` is roughly 120-200 words. NO art-style or quality buzzwords (the workflow carries "
+    "those), NO scene/background beyond the plain grey reference backdrop."
+)
+_NL_BASE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["count", "apparent_age", "skin_tone", "hair_color", "build", "bust", "height_cm",
+                 "expression", "gaze", "pose", "prompt"],
+    "properties": {
+        "count": {"type": "string", "enum": ["1girl", "1boy"],
+                  "description": "the character's SEX only: 1girl (female) or 1boy (male)."},
+        "apparent_age": {"type": "string", "description":
+                         "the character's apparent age, read HONESTLY from the persona — a number "
+                         "('24 years old', '10 years old') or a band: child / teenager / young adult / "
+                         "adult / middle-aged / elderly. Do NOT force every character to be an adult."},
+        "skin_tone": {"type": "string",
+                      "enum": ["pale skin", "light skin", "tan", "dark skin", "very dark skin"],
+                      "description": "skin tone, MATCHED to the character's heritage."},
+        "hair_color": {"type": "string",
+                       "enum": ["black hair", "dark brown hair", "brown hair", "light brown hair",
+                                "blonde hair", "platinum blonde", "strawberry blonde", "ginger",
+                                "orange hair", "auburn hair", "red hair", "grey hair", "white hair",
+                                "blue hair", "pink hair", "purple hair", "green hair"],
+                       "description": "hair colour — VARY across the cast; do NOT default everyone to "
+                                      "black/brown. Blonde/red/etc. are valid for any character."},
+        "build": {"type": "string",
+                  "enum": ["petite", "slim", "slender", "toned", "athletic", "muscular",
+                           "curvy", "voluptuous", "plump"],
+                  "description": "figure DERIVED from the character's life; do NOT default to slim. "
+                                 "'muscular' is for male characters or a true female bodybuilder."},
+        "bust": {"type": "string",
+                 "enum": ["flat chest", "small breasts", "medium breasts", "large breasts", "huge breasts"],
+                 "description": "chest size consistent with the frame + persona (adult women only)."},
+        "height_cm": {"type": "integer", "description":
+                      "height in centimetres (used to scale the sprite). Adult women ~150-178, men "
+                      "~165-195; vary across the cast."},
+        "expression": {"type": "string", "description":
+                       "the RESTING expression in the prose — default warm ('a soft smile') unless the "
+                       "persona is genuinely otherwise; never a blank 'neutral' face."},
+        "gaze": {"type": "string", "description":
+                 "where the eyes rest — 'looking at viewer' by default; aside for shy/aloof."},
+        "pose": {"type": "string", "description":
+                 "a subtle standing reference pose that suits the personality."},
+        "prompt": {"type": "string", "description":
+                   "The finished structured-prose appearance prompt — 120-200 words, the seven sections "
+                   "woven into connected descriptive writing, personality visible throughout. This text "
+                   "goes STRAIGHT to the image model; it is the whole positive prompt (minus the "
+                   "workflow's own quality tags). Keep it CONSISTENT with the structured fields above."},
+    },
+}
 
-    # normalise underscores → spaces; drop blanks; de-dup; resolve contradictions (keep first).
-    seen, used_groups, out = set(), set(), []
-    for p in parts:
-        p = p.replace("_", " ").strip().strip(",").strip()
-        if not p or p.lower() in seen:
-            continue
-        grp = next((i for i, g in enumerate(_EXCLUSIVE_GROUPS) if p.lower() in g), None)
-        if grp is not None:
-            if grp in used_groups:
-                continue            # already have a tag from this exclusive group
-            used_groups.add(grp)
-        seen.add(p.lower()); out.append(p)
-    low = {t.lower() for t in out}
-    # A bun means the hair is gathered UP — a flowing-length tag alongside it ('long hair' +
-    # 'hair bun') reads as two hairstyles at once. Drop the length when an updo is present.
-    if low & {"hair bun", "double bun", "single hair bun"}:
-        out = [t for t in out if t.lower() not in
-               ("long hair", "very long hair", "absurdly long hair", "medium hair")]
-    # All-over COILY styles (afro / dreadlocks / cornrows) have no separate fringe and aren't
-    # smooth — so 'parted bangs + afro' or 'straight hair + dreadlocks' is physically impossible.
-    # When one is present, drop every bangs tag and any contradicting smooth texture. ('curly
-    # hair' is consistent with an afro, so it stays.)
-    if low & {"afro", "dreadlocks", "cornrows"}:
-        out = [t for t in out if "bangs" not in t.lower()
-               and t.lower() not in ("straight hair", "wavy hair")]
-    # (Build + bust are now DERIVED, forced enum fields injected above — no blanket default here.)
-    # literal-tag normalizer (olive->tan, …), snap to real booru tags (unknowns kept), then split
-    # into coarse BREAK regions (subject · appearance · outfit · details) — the going-forward shape.
-    return _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(out))))
+
+def compose_nl_base(provider, name: str, persona: str, appearance_notes: str = "",
+                    role: str = "") -> dict | None:
+    """The Anima/natural-language base-image author in ONE pass: reads the character's description
+    directly and returns a dict that BOTH derives the structured fields (count/age/skin/hair/build/
+    bust/height/expression/gaze/pose — the consistency/variety guardrails + metadata) AND authors the
+    `prompt` as genuinely structured, personality-integrated prose (body part by part; personality
+    driving hairstyle / eye shape / expression / pose).
+
+    The returned dict is shaped like FEATURES_SCHEMA fields plus a `prompt` key, so the caller can
+    store it as `features` and use `prompt` directly as the image prompt. Returns None on any failure
+    (no provider, empty result, provider error) — the caller then falls back to the deterministic
+    `_assemble_base_prompt`. Never raises; generation never hard-depends on it."""
+    if provider is None or not hasattr(provider, "generate_text"):
+        return None
+    context = "\n\n".join(p for p in [
+        (f"NAME: {name}" if name else ""),
+        (f"PERSONA:\n{persona}" if persona else ""),
+        (f"APPEARANCE NOTES: {appearance_notes}" if appearance_notes else ""),
+        (f"ROLE: {role}" if role else ""),
+    ] if p)
+    if not context.strip():
+        return None
+    try:
+        data = provider.generate_text(system=_NL_BASE_SYSTEM, prompt=context,
+                                      emits=_NL_BASE_SCHEMA).data or {}
+    except Exception:  # noqa: BLE001 — never block generation on the structured pass
+        return None
+    if not data or not (data.get("prompt") or "").strip():
+        return None
+    data = dict(data)
+    data["prompt"] = re.sub(r"\s+", " ", str(data["prompt"]).strip())
+    return data

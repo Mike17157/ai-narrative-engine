@@ -109,71 +109,65 @@ WARDROBE_SCHEMA = {
     },
 }
 
-# Shared, NON-NEGOTIABLE format rule for any field that becomes an image-model
-# prompt. Illustrious / SDXL anime checkpoints are trained on Danbooru tags and
-# choke on prose — natural-language sentences come out as garbled text or get
-# ignored. So every image prompt MUST be a comma-separated tag list.
+# Shared, NON-NEGOTIABLE format rule for any field that becomes an image-model prompt. Anima /
+# Qwen-Image is a NATURAL-LANGUAGE anime model — it reads flowing descriptive sentences far better
+# than a tag dump, and rewards mood, phrasing and evocative detail. So every image prompt is a
+# short piece of well-written descriptive PROSE (connectives and short clauses welcome), not a
+# flat comma-separated tag list.
 _TAG_RULE = (
-    "OUTPUT FORMAT — CRITICAL, NON-NEGOTIABLE: this text goes straight into an "
-    "Illustrious / SDXL anime image model that is trained on DANBOORU TAGS, not prose. "
-    "Write it as a flat, comma-separated list of short lowercase booru tags. Think in SLOTS "
-    "(structure, NOT fixed values — fill each with a real canonical booru tag that fits THIS "
-    "character, and NEVER output the angle brackets): an outfit reads `<count>, <main garment>, "
-    "<layers>, <accessories>, <footwear>`; an expression reads `<count>, <eyes>, <eyebrows>, "
-    "<mouth>, <emotion>`. RULES: tags only; NO full sentences; NO articles (a/an/the); NO "
-    "connecting words (with/and/wearing/while/as); NO narration or commentary; prefer canonical "
-    "booru tags. Begin a character with a count tag by SEX — 1girl (female) / 1boy (male). "
-    "A sentence anywhere in this field is a failure."
+    "OUTPUT FORMAT — CRITICAL, NON-NEGOTIABLE: this text goes straight into a natural-language "
+    "anime image model (Anima / Qwen-Image), which reads expressive descriptive prose — NOT a "
+    "flat booru tag list. Write it as one or a few vivid, well-composed sentences (you may use "
+    "connectives and short clauses). Concrete sensory words — colours, materials, light — and a "
+    "touch of mood read strongly; generic filler does not. Think about THIS character's actual "
+    "look: an outfit reads 'a <colour> <main garment>, with <layers / accessories / footwear> in "
+    "one coherent palette'; an expression reads '<a facial expression>, <eyes>, <brows>, <mouth>, "
+    "carrying <the emotion>'. RULES: descriptive prose only; plain real colour words; real garment "
+    "/ feature names; NO art-style or quality buzzwords (the workflow carries those); prefer vivid, "
+    "specific phrasing. A flat comma-only tag list in this field is a failure."
 )
 
 # The `appearance` field is the character's PERSISTENT physical identity, reused as the
 # base for every sprite (sprites compose appearance + outfit + expression). So it must
-# be structured, non-overlapping, and contain NO clothing — clothing lives in wardrobe
+# be coherent, non-overlapping, and contain NO clothing — clothing lives in wardrobe
 # outfits; the base image itself is rendered in a neutral swimwear template (full body).
 _APPEARANCE_RULE = (
-    "Write `appearance` as a STRUCTURED, NON-OVERLAPPING physical description in this exact "
-    "order, each attribute stated ONCE and never contradicted: "
-    "(1) count tag by SEX — 1girl (female) / 1boy (male); adulthood is conveyed by 'mature female' "
-    "/ 'mature male', NOT by the count tag (1woman/1man are not real tags); (2) apparent age — "
-    "HONEST (a number, or child / teenager / young adult / adult / middle-aged / elderly); do NOT "
-    "force everyone adult. (3) hair color; (4) hair length; (5) ONE primary hairstyle (don't stack "
-    "ponytail+bun+twintails); (6) eye color; (7) eye shape if notable (tareme/tsurime); (8) skin "
-    "tone; (9) body build (vary — not always slim) and height; (10) face & distinguishing features "
-    "(freckles, mole under eye, scar, glasses, fang, makeup, etc.).\n"
-    "Describe ONLY the body and face — the persistent identity. Do NOT include clothing, "
-    "outfits, accessories, pose, expression, background, lighting or scene; those are handled "
-    "separately. The base image is rendered in plain swimwear, so any clothing here would "
-    "corrupt it.\n"
-    "PLAIN, LITERAL TAGS ONLY — translate any artistic or literary phrasing into plain booru "
-    "colours, because the image model paints words literally. Skin tone is a BRIGHTNESS tag "
-    "(pale skin / light skin / tan / dark skin / very dark skin) and must NEVER be a colour-name "
-    "like 'olive'/'fair'/'porcelain' (dead or wrong — 'olive skin' renders GREEN). Hair and eyes use a plain colour word "
-    "('black hair', 'brown eyes'), not metaphor / gem / material names (raven, auburn, chestnut, "
-    "emerald, sapphire) and no 'highlights' or 'sheen'.\n\n" + _TAG_RULE
+    "Write `appearance` as a vivid, specific, FLATTERING prose description (about 3-6 sentences) "
+    "of THIS character's persistent physical identity. Cover, in a natural reading order: who they "
+    "are (sex + HONEST age — 'a young woman', 'a man in his thirties', 'a teenage girl'; do NOT "
+    "force everyone adult); hair (colour + length + ONE primary style + a detail); eyes (colour + "
+    "shape) and where their gaze rests; skin tone and any marks/texture; build and figure (VARY it "
+    "across the cast — not always slim); height; the face and 1-2 distinguishing hooks that make "
+    "THIS face unmistakable (freckles, a mole, a scar, glasses, heterochromia…). Each attribute "
+    "stated ONCE, never contradicted.\n"
+    "Describe ONLY the body and face — the persistent identity. Do NOT include clothing, outfits, "
+    "accessories, pose, expression, background, lighting or scene; those are handled separately. "
+    "The base image is rendered in plain swimwear, so any clothing here would corrupt it.\n"
+    "Convey sex and age through the description itself ('a young woman', 'a grown man', 'a "
+    "ten-year-old girl') rather than count tags. Use plain, evocative colour words; you may use "
+    "connectives and short clauses — this is descriptive prose, not a tag list.\n\n" + _TAG_RULE
 )
 
 # Clothing counterpart of `_APPEARANCE_RULE` — an `attire_prompt` must be authored with the SAME
-# care as the base image, but for the OUTFIT (clothing) only. Structured slots, real canonical
-# Danbooru clothing tags, literal (the model paints words literally), full range of outfit types
-# INCLUDING swimwear, and strictly NO physical identity / expression / pose / background (those are
-# the base image + the expression sprite).
+# care as the base image, but for the OUTFIT (clothing) only. Natural-language prose, full range of
+# outfit types INCLUDING swimwear, and strictly NO physical identity / expression / pose / background
+# (those are the base image + the expression sprite).
 _OUTFIT_RULE = (
-    "Write `attire_prompt` as a COMPLETE outfit in CANONICAL Danbooru CLOTHING tags, with the SAME "
-    "rigor the base image gets — think in SLOTS, fill each with a REAL booru tag that fits THIS "
-    "outfit (skip a slot that doesn't apply; NEVER output the angle brackets): start with the SEX "
-    "count tag (1girl / 1boy), then (1) MAIN garment(s) — <colour> + <garment> ('white blouse', "
-    "'pleated skirt', 'black dress', 'hoodie', 'serafuku', 'one-piece swimsuit'); (2) LAYERS over/"
-    "under (jacket, cardigan, coat, vest, apron, turtleneck); (3) LEGWEAR (thighhighs, pantyhose, "
-    "socks, kneehighs — with colour); (4) FOOTWEAR (boots, sneakers, high heels, sandals, mary "
-    "janes); (5) HEADWEAR + worn ACCESSORIES (hat, beret, gloves, scarf, necktie, belt, glasses, "
-    "earrings, hair ornament). Keep ONE coherent colour palette.\n"
+    "Write `attire_prompt` as a COMPLETE outfit in vivid descriptive prose — a colour + the garment "
+    "name for each main piece, plus the layers, legwear, footwear and worn accessories that complete "
+    "the look, in one coherent palette. Cover, in a natural order: the MAIN garment(s) (a dress, a "
+    "blouse and skirt, a hoodie, a sailor uniform, a one-piece swimsuit…); LAYERS over/under "
+    "(jacket, cardigan, coat, vest, apron, turtleneck); LEGWEAR (thighhighs, pantyhose, socks, "
+    "kneehighs — with colour); FOOTWEAR (boots, sneakers, high heels, sandals, mary janes); and "
+    "HEADWEAR + worn ACCESSORIES (hat, beret, gloves, scarf, necktie, belt, glasses, earrings, hair "
+    "ornament). One coherent colour palette throughout.\n"
     "THE FULL RANGE OF OUTFITS IS WELCOME — casual, school, formal/evening, work/uniform, fantasy or "
     "armour, sleepwear, and SWIMWEAR (bikini, one-piece swimsuit, school swimsuit). Choose what "
     "genuinely fits the character and the scene; do NOT shy away from swimwear when it fits.\n"
-    "LITERAL TAGS ONLY — plain colour words ('red', 'navy blue', 'black'), real garment names, NO "
-    "brand names, NO metaphor / material poetry ('gossamer', 'liquid silk', 'flowing gown'). "
-    "CLOTHING + worn ACCESSORIES ONLY: NO body / hair / eye / skin / face tags (those are the base "
-    "identity), NO facial expression, NO pose, NO background or scene.\n\n" + _TAG_RULE
+    "Keep it concrete and grounded: plain real colour words, real garment names, the materials and "
+    "silhouettes that give the look its character. CLOTHING + worn ACCESSORIES ONLY: NO body / hair / "
+    "eye / skin / face tags (those are the base identity), NO facial expression, NO pose, NO background "
+    "or scene.\n\n" + _TAG_RULE
 )
 
 DEFAULT_SYSTEMS = {
@@ -237,14 +231,13 @@ DEFAULT_SYSTEMS = {
         "thin strip of sky) — NOT a panoramic beach. Lead with the spot's defining feature and "
         "include only the immediate surroundings that physically touch it, so every location reads "
         "as its own distinct place instead of the same broad vista.\n\n"
-        "FORMAT — CRITICAL: the `background_prompt` goes straight into an Illustrious / SDXL anime "
-        "image model trained on DANBOORU TAGS — prose comes out garbled. Write it as a flat, "
-        "comma-separated list of short lowercase booru tags, NOT sentences and NO articles/connecting "
-        "words. Start with `no humans, scenery`, then the place, then the mood/light/atmosphere tags — "
-        "as a SLOT pattern (structure, NOT fixed values; fill each with real tags for THIS place, "
-        "never output the brackets): `no humans, scenery, <place/landform>, <2-3 features that "
-        "touch it>, <time of day>, <weather/atmosphere>, <lighting>, <mood + quality tags>`. "
-        "The `description` field stays plain prose (it is for humans, not the image model).\n\n"
+        "FORMAT — CRITICAL: the `background_prompt` goes straight into a natural-language anime "
+        "model (Anima / Qwen-Image), which reads expressive descriptive sentences far better than "
+        "a tag dump. Write it as one or two vivid, well-composed sentences of prose (you may use "
+        "connectives and short clauses) that paint THIS place: lead with the defining subject and "
+        "its surfaces/textures, then the time of day, weather and light, and a touch of mood. Begin "
+        "it with 'An empty, unpopulated' (or 'no people, no figures,') so it reads as a clean "
+        "backdrop. The `description` field stays plain prose (it is for humans, not the image model).\n\n"
         "Pick the starting location (where the story opens)."
     ),
     # Step 1: distill the imported source card into ONE clean base character card — the
@@ -312,11 +305,12 @@ DEFAULT_SYSTEMS = {
         "persona/appearance notes; where sparse, INFER tasteful detail that fits their world, age "
         "and role — but never contradict anything stated. These are PERSISTENT physical traits "
         "only — NO clothing, pose, expression or background (added later). Give the `appearance` "
-        "field as a LIST of short, EXPLICIT, ATOMIC descriptors — one attribute per item ('silver "
-        "hair', 'long hair', 'wavy hair', 'violet eyes', 'pale skin', 'mole under eye'), NOT prose "
-        "and never compound ('long silver hair' -> split). The system grounds each to a real Danbooru "
-        "tag an Illustrious model understands. Use the enum values for the other fields. Stay literal "
-        "and internally consistent — never describe contradictory traits."
+        "field as a LIST of short, EXPLICIT, ATOMIC visual descriptors — one attribute per item "
+        "('silver hair', 'long hair', 'wavy hair', 'violet eyes', 'pale skin', 'mole under eye'), "
+        "NOT compound phrases ('long silver hair' -> split into 'long hair' + 'silver hair'). The "
+        "system weaves these descriptors into a coherent image prompt, so keep each one a single "
+        "clear visual attribute. Use the enum values for the other fields. Stay vivid, specific and "
+        "internally consistent — never describe contradictory traits."
     ),
 }
 

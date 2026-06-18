@@ -50,7 +50,7 @@
   <Combobox items={items} value={tm.active} placeholder="search models…" onpick={pickModel} />
   {#if modelMsg}<div class:ok={modelMsg.ok} class:err={modelMsg.err} style="font-size:13px;margin-top:8px">{modelMsg.text}</div>{/if}
 {:else}
-  <div class="hint warn">No image-prompt connection — set one up in the <b>Connection</b> tab to pick a dedicated model. Until then it falls back to your chat model.</div>
+  <div class="hint warn">No image-prompt connection — set one up in <a href="/settings/connections">Settings ▸ Connections</a> to pick a dedicated model. Until then it falls back to your chat model.</div>
 {/if}
 
 <label class="chk"><input type="checkbox" bind:checked={cfg.enabled} /> Enabled</label>

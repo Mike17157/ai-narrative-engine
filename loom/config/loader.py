@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from .schema import Character, LoraConfig, ModelDef, Pipeline, Scenario, Settings, Story, UserConfig
+from .schema import Character, LoraConfig, ModelDef, Persona, Pipeline, Scenario, Settings, Story, UserConfig
 
 
 def _read_yaml(path: Path) -> dict:
@@ -44,6 +44,13 @@ def load_settings(root: str | Path) -> Settings:
     if char_dir.is_dir():
         for path in sorted(char_dir.glob("*.yaml")):
             characters[path.stem] = Character(**_read_yaml(path))
+
+    # personas/*.yaml — who *you* are in the chat (the {{user}} side). One Persona per file.
+    personas: dict[str, Persona] = {}
+    persona_dir = configs / "personas"
+    if persona_dir.is_dir():
+        for path in sorted(persona_dir.glob("*.yaml")):
+            personas[path.stem] = Persona(**_read_yaml(path))
 
     # scenarios/*.yaml — one Scenario per file (the situational half of the split).
     scenarios: dict[str, Scenario] = {}
@@ -73,8 +80,8 @@ def load_settings(root: str | Path) -> Settings:
         loras = LoraConfig(**doc)
 
     # Settings' validators cross-check every step→model reference here.
-    return Settings(models=models, characters=characters, scenarios=scenarios,
-                    stories=stories, pipelines=pipelines, loras=loras)
+    return Settings(models=models, characters=characters, personas=personas,
+                    scenarios=scenarios, stories=stories, pipelines=pipelines, loras=loras)
 
 
 def load_user(root: str | Path) -> UserConfig:

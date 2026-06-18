@@ -28,6 +28,7 @@ from .routers import (
     jobs,
     lora,
     models_conn,
+    personas,
     run,
     scenarios,
     server,
@@ -85,6 +86,7 @@ _ROUTERS = (
     lora,
     trainer,
     comfy,
+    personas,
     jobs,
     run,
 )
@@ -149,6 +151,14 @@ def create_app(root: str | Path = ".") -> FastAPI:
     try:
         ctx.prune_orphan_characters()
     except Exception:  # noqa: BLE001 — never block startup on cleanup
+        pass
+
+    # Seed a default 'You' persona if none exist (empty configs/personas/) so the Personas
+    # page opens with a row, mirroring the pre-overhaul localStorage default.
+    try:
+        if not ctx.base_settings.personas:
+            ctx.write_persona("you", {"name": "You", "description": ""})
+    except Exception:  # noqa: BLE001 — never block startup on seeding
         pass
 
     return app

@@ -1,10 +1,9 @@
 <script>
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { goto } from '$app/navigation';
   import { img, loadWorkflow, loadChoices, runTest, cancelTest, saveTestPrompt, TEST_COUNT,
            workflowNeedsInit, sweepParams, sweepValues, runSweep, composeTestCells } from '$lib/images.svelte.js';
-  import { app, clearSubnav } from '$lib/app.svelte.js';
+  import { app } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import Combobox from '$lib/components/Combobox.svelte';
@@ -76,26 +75,9 @@
     r.readAsDataURL(blob);
   }
 
-  const tabs = [
-    { id: 'models', label: 'Models' },
-    { id: 'graph', label: 'Graph' },
-    { id: 'roles', label: 'Roles' },
-    { id: 'poses', label: 'Poses' },
-    { id: 'lora', label: 'LoRA' },
-    { id: 'connection', label: 'Connection' }
-  ];
-  const LORA_TABS = [
-    { id: 'prompts', label: 'Prompts' }, { id: 'generation', label: 'Generation' },
-    { id: 'dataset', label: 'Dataset' }, { id: 'train', label: 'Train' },
-    { id: 'library', label: 'Library' }, { id: 'network', label: 'Network' }
-  ];
   let path = $derived($page.url.pathname);
-  const active = (id) => path === `/images/${id}` || path.startsWith(`/images/${id}/`);
-  let curTab = $derived(tabs.find((t) => active(t.id))?.id || 'models');
-  let curLora = $derived(LORA_TABS.find((t) => path === `/images/lora/${t.id}`)?.id || 'prompts');
-  // Images navigates via a HORIZONTAL header (below) instead of the left panel — the graph
-  // editor needs the full width. Keep the global sub-nav cleared so no left panel renders here.
-  $effect(() => { clearSubnav(); });
+  // The folder tree (Models/Graph/Roles/Poses/LoRA▸…) is rendered by the root
+  // layout's TreeNav — no in-page tab strip here. Graph still needs full width.
 
   onMount(() => { loadChoices(); loadChars(); });
   // Load the workflow when the active image model becomes available / changes
@@ -106,28 +88,10 @@
     if (key && key !== loadedFor) { loadedFor = key; loadWorkflow(); }
   });
 
-  // Honor a deep-link target (e.g. Settings → "set up trainer" lands on LoRA).
-  $effect(() => { if (app.nav?.imageTab) { const t = app.nav.imageTab; app.nav.imageTab = null; goto(`/images/${t}`); } });
-
 </script>
 
 <div class="page">
   <div class="col" class:wide={path !== '/images/graph'} class:full={path === '/images/graph'}>
-    <nav class="ihead">
-      <div class="itabs">
-        {#each tabs as t (t.id)}
-          <button class="itab" class:on={curTab === t.id}
-            onclick={() => goto(t.id === 'lora' ? '/images/lora/prompts' : `/images/${t.id}`)}>{t.label}</button>
-        {/each}
-      </div>
-      {#if curTab === 'lora'}
-        <div class="itabs sub">
-          {#each LORA_TABS as t (t.id)}
-            <button class="itab deep" class:on={curLora === t.id} onclick={() => goto(`/images/lora/${t.id}`)}>{t.label}</button>
-          {/each}
-        </div>
-      {/if}
-    </nav>
     {#if img.msg}<div class="status" class:ok={img.msg.ok} class:err={img.msg.err}>{img.msg.text}</div>{/if}
     {@render children()}
   </div>
@@ -259,18 +223,6 @@
   .col.full { max-width: none; }
   .status { font-size: 13px; margin: 0 0 12px; }
 
-  /* Horizontal section nav (Images only) — frees the left panel's width for the graph. */
-  .ihead { display: flex; flex-direction: column; gap: 4px; margin: -2px 0 16px; border-bottom: 1px solid var(--border); }
-  .itabs { display: flex; gap: 2px; flex-wrap: wrap; }
-  .itabs.sub { gap: 1px; padding-bottom: 7px; }
-  .itab { background: none; border: 0; box-shadow: none; color: var(--muted); font-size: 13.5px; font-weight: 600;
-          padding: 9px 15px; border-radius: 8px 8px 0 0; border-bottom: 2px solid transparent; cursor: pointer; }
-  .itab:hover { color: var(--text); background: var(--elev); filter: none; }
-  .itab.on { color: #fff; border-bottom-color: var(--accent); }
-  .itab.deep { font-size: 12.5px; padding: 5px 11px; border-radius: 7px; border-bottom: 0; }
-  .itab.deep:hover { background: var(--elev); }
-  .itab.deep.on { color: #fff; background: var(--elev); box-shadow: inset 0 0 0 1px var(--accent); border-bottom: 0; }
-
   .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); display: grid; place-items: center; z-index: 50; padding: 24px; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
            box-shadow: var(--shadow); width: min(92vw, 760px); max-height: 88vh; overflow: auto; padding: 16px; }
@@ -286,12 +238,11 @@
     display: inline-block; cursor: pointer; font-size: 12.5px; font-weight: 600; padding: 6px 12px;
     border-radius: 8px; border: 1px solid var(--border); background: var(--accent); color: #fff;
   }
-  .upbtn:hover { filter: brightness(1.08); }
 
   .modeseg { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; margin-bottom: 14px; }
-  .modeseg button { border: 0; border-radius: 0; box-shadow: none; background: var(--elev); color: var(--muted); padding: 7px 16px; font-size: 13px; font-weight: 600; }
-  .modeseg button:hover { color: var(--text); background: var(--elev-2); filter: none; }
-  .modeseg button.on { color: #fff; background: var(--elev-2); box-shadow: inset 0 0 0 1.5px var(--accent); }
+  .modeseg button { border: 0; border-radius: 0; background: var(--elev); color: var(--muted); padding: 7px 16px; font-size: 13px; font-weight: 600; }
+  .modeseg button:hover { color: var(--text); background: var(--elev-2); }
+  .modeseg button.on { color: #fff; background: var(--elev-2); }
   .srow { display: flex; gap: 10px; margin-top: 6px; }
   .nf { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
   .nf input { width: 90px; }

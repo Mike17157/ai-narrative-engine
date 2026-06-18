@@ -27,5 +27,5 @@ steps:
 
   - id: picture
     type: image
-    model: illustrious       # overridden by the active image model
+    model: anima             # overridden by the active image model
     image_prompt: "{{ describe.data.image_prompt }}"

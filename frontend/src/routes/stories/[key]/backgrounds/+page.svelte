@@ -3,7 +3,7 @@
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import Combobox from '$lib/components/Combobox.svelte';
   import { stories } from '$lib/stories.svelte.js';
-  import { startJob } from '$lib/app.svelte.js';
+  import { startJob, limitedPost } from '$lib/app.svelte.js';
   import { rget, rensure } from '$lib/renders.svelte.js';
 
   let st = $derived(stories.current);
@@ -27,7 +27,7 @@
     job.onCancel = () => cancelBg(locId);   // stoppable from the Activity card
     for (let i = 0; i < N_BG; i++) {
       if (tok.cancelled) break;
-      const r = await post(`/stories/${sk}/locations/${locId}/background/candidate`, { image_model: bgModel });
+      const r = await limitedPost(`/stories/${sk}/locations/${locId}/background/candidate`, { image_model: bgModel }, {}, job);
       if (tok.cancelled) break;
       if (r.data?.image) { rensure(k).cands = [...rensure(k).cands, r.data.image]; job.done = i + 1; }
       else { rensure(k).err = true; job.status = 'error'; break; }

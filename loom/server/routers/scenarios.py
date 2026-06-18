@@ -59,7 +59,8 @@ def register(app, ctx):
 
     @app.delete("/api/scenarios/{key}")
     def delete_scenario(key: str):
-        p = ctx.scenario_dir() / f"{re.sub(r'[^\w\-]+', '', key)}.yaml"
+        safe = re.sub(r'[^\w\-]+', '', key)
+        p = ctx.scenario_dir() / f"{safe}.yaml"
         if not p.is_file():
             return JSONResponse({"error": "no such scenario"}, status_code=404)
         p.unlink()

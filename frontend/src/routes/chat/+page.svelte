@@ -2,11 +2,9 @@
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
   import { app } from '$lib/app.svelte.js';
-  import ChatSettings from '$lib/components/ChatSettings.svelte';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
 
   let busy = $state(false);
-  let showSettings = $state(false);
   let illustrating = $state(null); // index of the message currently being illustrated
   let chars = $state([]);
   let logEl = $state();
@@ -127,20 +125,8 @@
 
 <div class="controls">
   <button class="bar-btn" onclick={resetChat} title="Clear this conversation and start fresh">↺ New chat</button>
-  <button class="bar-btn" class:on={showSettings} onclick={() => (showSettings = !showSettings)}>⚙ Models</button>
+  <a class="bar-btn" href="/settings/models" title="Models, connections & system prompts — in Settings">⚙ Models</a>
 </div>
-
-{#if showSettings}
-  <div class="overlay" onclick={() => (showSettings = false)}>
-    <div class="cfgmodal" onclick={(e) => e.stopPropagation()}>
-      <div class="mhead">
-        <strong>Models &amp; setup</strong>
-        <button class="icon" onclick={() => (showSettings = false)} title="Close">✕</button>
-      </div>
-      <ChatSettings />
-    </div>
-  </div>
-{/if}
 
 <div class="log" bind:this={logEl}>
   {#if chat.messages.length === 0}
@@ -148,7 +134,7 @@
       {#if activeCharObj?.avatar}<img class="emimg" src={activeCharObj.avatar} alt="" />{:else}<div class="emark"></div>{/if}
       <p>Chat with {charName}</p>
       <span class="hint">
-        {#if connected}Running on <b>{activeChat}</b>.{:else}No model connected — replies are a local prototype. Set one up under <b>⚙ Models</b>.{/if}
+        {#if connected}Running on <b>{activeChat}</b>.{:else}No model connected — replies are a local prototype. Set one up in <a href="/settings/models">Settings ▸ Models</a>.{/if}
       </span>
     </div>
   {/if}
@@ -193,27 +179,10 @@
     font-size: 12.5px; font-weight: 600; padding: 5px 12px;
     border-radius: 999px; box-shadow: none; border: 1px solid var(--border);
     background: var(--elev); color: var(--muted);
+    text-decoration: none; display: inline-flex; align-items: center; cursor: pointer;
   }
   .bar-btn:hover { color: var(--text); filter: none; background: var(--elev-2); }
   .bar-btn.on { color: #fff; background: var(--elev-2); box-shadow: inset 0 0 0 1px var(--accent); }
-
-  /* Stretch to fill the viewport, leaving a significant gap on every edge. */
-  .overlay {
-    position: fixed; inset: 0; background: rgba(0, 0, 0, .6); z-index: 50;
-    display: grid; place-items: stretch; padding: max(28px, 5vh) max(28px, 6vw);
-  }
-  .cfgmodal {
-    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
-    box-shadow: var(--shadow); width: 100%; height: 100%; padding: 22px;
-    display: flex; flex-direction: column; min-height: 0;
-  }
-  .mhead { flex: none; }
-  .mhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
-  .icon {
-    width: 30px; height: 30px; padding: 0; border-radius: 8px; box-shadow: none;
-    border: 1px solid var(--border); background: var(--elev); color: var(--muted); font-size: 14px;
-  }
-  .icon:hover { color: var(--text); filter: none; background: var(--elev-2); }
 
   .log { flex: 1; overflow: auto; padding: 22px; display: flex; flex-direction: column; gap: 16px; }
   .msg { display: flex; gap: 10px; max-width: 760px; }

@@ -26,6 +26,6 @@
   async function reload() { await Promise.all([loadStory(st.key), loadChars()]); }
 </script>
 
-<div class="page"><div class="col wide">
+<div class="page"><div class="col full">
   <CastDashboard storyKey={st.key} {cast} selectKey={selKey} onChanged={reload} />
 </div></div>

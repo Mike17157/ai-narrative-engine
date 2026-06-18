@@ -428,8 +428,7 @@ def register(app, ctx):
     @app.post("/api/characters/{key}/portraits/outfit/{oid}/expression-prompt")
     def portrait_set_expression_prompt(key: str, oid: str, body: dict):
         """Add or edit ONE expression (emotion + optional face prompt) for THIS outfit only — each
-        outfit carries its own expression range (the runtime picks the closest by emotion vector
-        similarity). Returns the portrait payload."""
+        outfit carries its own expression range. Returns the portrait payload."""
         m = ctx.portrait_manifest(key)
         outfit = ctx.portrait_outfit(m, oid)
         if outfit is None:
@@ -439,6 +438,58 @@ def register(app, ctx):
         if not emo:
             return JSONResponse({"error": "emotion required"}, status_code=400)
         outfit.setdefault("expression_prompts", {})[emo] = (body.get("prompt") or "").strip()
+        ctx.save_portrait_manifest(key, m)
+        return ctx.portrait_payload(key)
+
+    @app.post("/api/characters/{key}/portraits/affect")
+    def portrait_compose_affect(key: str, body: dict):
+        """Author or re-author the character's PERSONALITY-ROOTED EMOTIONAL EXPRESSION RANGE (Tier-A of
+        the valence translation layer): the curated subset of the 32 emotion keys THIS character
+        expresses, each placed on the canonical (valence, arousal) circumplex and nudged to fit their
+        persona. ONE cheap 'emotion'-stage call (DeepSeek 3.2 by default). Cached on the manifest; this
+        drives the carousel's X axis and the runtime sprite snap.
+
+        Body:
+          {compose: true}      → (re)compose the range from the character's persona (the default).
+          {range: [...]}       → set the range explicitly (each {emotion, valence, arousal}), bypassing
+                                 the model — for manual art-direction edits.
+        Returns the portrait payload (with the new `affect.range`)."""
+        c = ctx.base_settings.characters.get(key)
+        if c is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        body = body or {}
+        m = ctx.portrait_manifest(key)
+        explicit = body.get("range") if isinstance(body.get("range"), list) else None
+        if explicit:
+            # Manual override: ground to real keys, clamp ±1, dedupe, circumplex-sort.
+            from ..services.emotions import EMOTION_COORDS, canonical_range
+            import math
+            seen, cleaned = set(), []
+            for e in explicit:
+                if not isinstance(e, dict) or e.get("emotion") not in EMOTION_COORDS or e["emotion"] in seen:
+                    continue
+                try:
+                    v = max(-1.0, min(1.0, float(e.get("valence", 0.0))))
+                    a = max(-1.0, min(1.0, float(e.get("arousal", 0.0))))
+                except (TypeError, ValueError):
+                    v, a = EMOTION_COORDS[e["emotion"]]
+                seen.add(e["emotion"])
+                cleaned.append({"emotion": e["emotion"], "valence": v, "arousal": a})
+            cleaned.sort(key=lambda x: math.atan2(x["arousal"], x["valence"]))
+            if not cleaned:
+                return JSONResponse({"error": "no valid emotion keys in range"}, status_code=400)
+            affect = {"dimensions": ["valence", "arousal"], "range": cleaned}
+        else:
+            ctx.ensure_fleshed(key)   # thin seed → disciplined prose first, so the range is persona-rooted
+            c = ctx.base_settings.characters.get(key)
+            from ..services.prompts import _persona_text
+            affect = ctx.compose_affect_range(_persona_text(c), (body.get("model")))
+            if not (isinstance(affect, dict) and affect.get("range")):
+                return JSONResponse({"error": "could not compose affect range "
+                                              "(emotion model may not support structured output)"},
+                                    status_code=500)
+            affect["dimensions"] = ["valence", "arousal"]
+        m["affect"] = affect
         ctx.save_portrait_manifest(key, m)
         return ctx.portrait_payload(key)
 
@@ -520,12 +571,12 @@ def register(app, ctx):
         expr = ((outfit.get("expression_prompts") or {}).get(emotion)
                 or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
         # Every outfit picture is FULL BODY (the expression sprite shows the whole look + the face).
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
-            ", ".join(p for p in (appearance, attire, expr, ctx.pose_tags(key, emotion), ctx.pose_framing(emotion)) if p))))
         model = ctx.role_model("sprite", body.get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
+        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
+            ", ".join(p for p in (appearance, attire, expr, ctx.pose_tags(key, emotion), ctx.pose_framing(emotion)) if p))))
         _randomize_seeds(provider.workflow)
         # txt2img — identity comes from the appearance tags (the model is consistent enough that
         # img2img from the base added little). The workflow removes the background (→ transparent).
@@ -714,11 +765,11 @@ def register(app, ctx):
             return JSONResponse({"error": "no such outfit"}, status_code=404)
         appearance = (ch.fields or {}).get("appearance") or ""
         attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral")) if p))))
         model = ctx.role_model("sprite", (body or {}).get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
+        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral")) if p))))
         _randomize_seeds(provider.workflow)
         # txt2img — identity from the appearance tags (the model is consistent without img2img).
         try:
@@ -804,55 +855,31 @@ def register(app, ctx):
     @app.post("/api/characters/{key}/base-candidate")
     async def base_candidate(key: str, body: dict):
         """Generate ONE candidate base image for a character from their description.
-        If a style source (another character's reference, e.g. the story's primary)
-        is given, render in THAT art style via the IPAdapter style flow; otherwise
-        plain txt2img. Returns a data URI (not saved) — the UI lets you pick a winner."""
+        Plain txt2img (the image pipeline is Anima-only — no IPAdapter style flow).
+        Returns a data URI (not saved) — the UI lets you pick a winner."""
         ch = ctx.base_settings.characters.get(key)
         if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        # Inject only the subject description — the chosen workflow carries its own
-        # quality/style (e.g. illustrious_style's `embedding:lazypos, {{image}}`).
-        # The UI may pass an edited `prompt` (see GET .../base-prompt); else use the
-        # character's own appearance (NOT a 1girl fallback — that mis-genders e.g. Darek).
         body = body or {}
-        prompt = _safe_image_tags((body.get("prompt") or "").strip()) or _base_prompt(ch)
-
-        # Style source: an explicit image URL (e.g. a base-card image link) wins;
-        # else another character's reference (`style_from`). The illustrious_style
-        # flow translates the LOOK, not the identity.
-        style_bytes = None
-        style_url = body.get("style_url")
-        if style_url:
-            try:
-                import httpx
-                async with httpx.AsyncClient(timeout=30, follow_redirects=True) as hc:
-                    resp = await hc.get(style_url); resp.raise_for_status()
-                    style_bytes = resp.content
-            except Exception as exc:  # noqa: BLE001
-                return JSONResponse({"error": f"could not fetch style image: {exc}"}, status_code=502)
-        elif body.get("style_from"):
-            ref = ctx.reference_path(body["style_from"])
-            if ref is not None and (not ctx.reference_path(key) or body["style_from"] != key):
-                style_bytes = ref.read_bytes()
-        # Pick the workflow by role: 'style' when a style image is in play (config-overridable
-        # via image_roles), else 'base'. An explicit image_model in the request always wins.
-        # The init image only matters to a style/img2img graph; ComfyUIProvider ignores it on a
-        # plain txt2img workflow (no LoadImage node), so passing it through is safe.
-        model = ctx.role_model("style" if style_bytes else "base", (body or {}).get("image_model"))
+        # The chosen workflow carries its own quality/style. The UI may pass an edited `prompt`
+        # (see GET .../base-prompt); else use the character's own appearance (NOT a hardcoded
+        # fallback — that mis-genders e.g. Darek).
+        prompt = (body.get("prompt") or "").strip() or _base_prompt(ch)
+        model = ctx.role_model("base", body.get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         _randomize_seeds(provider.workflow)  # fresh seed each call → a batch of 4 varies
         try:
-            png = await _render(provider, prompt, init_image=style_bytes,
-                                out_prefix=ctx.output_prefix_for(model_id, "style" if style_bytes else "base", key),
+            png = await _render(provider, prompt,
+                                out_prefix=ctx.output_prefix_for(model_id, "base", key),
                                 latent=ctx.pose_latent("neutral"))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
         if png is None:
             return JSONResponse({"error": "image model returned no image"}, status_code=500)
         return {"image": "data:image/png;base64," + base64.b64encode(png).decode(),
-                "model": model_id, "styled": style_bytes is not None}
+                "model": model_id}
 
     @app.post("/api/characters/{key}/reference/from-data")
     def set_reference_from_data(key: str, body: dict):

@@ -5,6 +5,7 @@
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import GenStream from '$lib/components/GenStream.svelte';
   import Sprites from '$lib/components/Sprites.svelte';
+  import AffectScatter from '$lib/components/AffectScatter.svelte';
   import TagInput from '$lib/components/TagInput.svelte';
   import RegenModal from '$lib/components/RegenModal.svelte';
 
@@ -46,8 +47,9 @@
   });
 
   // ---- inline "investigate" tabs for the selected character ----------------------------------
-  const TABS = [{ id: 'desc', label: 'Description' }, { id: 'base', label: 'Base image' },
-                { id: 'outfits', label: 'Outfits & expressions' }];
+  // The Outfits & expressions grid no longer lives in a tab — it outgrew the narrow detail panel and
+  // now renders full-width BELOW it (see the grid section at the bottom of the template).
+  const TABS = [{ id: 'desc', label: 'Description' }, { id: 'base', label: 'Base image' }];
   let tab = $state('desc');
   let spriteBust = $state(0);   // force the inspect grid + reference image to reload after a regen
 
@@ -203,13 +205,22 @@
             <TagInput value={s.prompt ?? ''} kind="appearance"
               placeholder={s.prompt == null ? 'loading prompt…' : 'type a booru tag…'}
               onchange={(v) => ensure(cur.character).prompt = v} />
-
-          {:else if tab === 'outfits'}
-            <Sprites charKey={cur.character} charName={cur.name} hasRef={cur.hasRef} mode="inspect"
-              refresh={spriteBust} screen={`stories/${storyKey}/cast`} />
-            <p class="hint lo">Inspect only — click any image to enlarge. Render or re-roll via <b>↻ Regenerate…</b>.</p>
           {/if}
         </div>
+      </div>
+
+      <!-- The full-width 2-D wardrobe grid — the expanding centerpiece. Lives BELOW the detail panel
+           so it gets the whole viewport width (the cast page is .col.full). Outfits = rows (Y, the
+           consistent flat list), emotions = columns (X, the personality-rooted affect.range). The
+           AffectScatter sits beside the grid header as a range legend. -->
+      <div class="grid-section">
+        <div class="grid-head">
+          <h4>Outfits &amp; expressions <span class="lo">— {cur.name}'s wardrobe × emotion range</span></h4>
+          <AffectScatter charKey={cur.character} refresh={spriteBust} compact />
+        </div>
+        <Sprites charKey={cur.character} charName={cur.name} hasRef={cur.hasRef} mode="inspect"
+          refresh={spriteBust} screen={`stories/${storyKey}/cast`} />
+        <p class="hint lo">Inspect only — click any image to enlarge. Render or re-roll via <b>↻ Regenerate…</b>.</p>
       </div>
     {/if}
   {/if}
@@ -285,6 +296,11 @@
   .curbase { width: 170px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-soft); background: var(--bg); }
   .curbase :global(img), .curbase :global(.zoom-inline) { border-radius: 10px; }
   .hint { margin: 8px 0 0; font-size: 11.5px; }
+  /* the full-width wardrobe grid section (sits below the detail panel) + its header, which carries
+     the section title and the AffectScatter as a range legend on the right */
+  .grid-section { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
+  .grid-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+  .grid-head h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
 
   @media (max-width: 640px) { .detail { grid-template-columns: 1fr; } }
 </style>

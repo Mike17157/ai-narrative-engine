@@ -1,0 +1,135 @@
+{
+  "appearance": "",
+  "outfits": [
+    {
+      "id": "base-swimwear",
+      "name": "Base (swimwear)",
+      "instruction": "",
+      "prompt": "1girl, beach, BREAK, sunglasses, BREAK, red bikini, white crop top, denim shorts, sandals, gold jewelry",
+      "attire_prompt": "1girl, beach, BREAK, sunglasses, BREAK, red bikini, white crop top, denim shorts, sandals, gold jewelry",
+      "expressions": {}
+    },
+    {
+      "id": "main-casual-outfit",
+      "name": "Main Casual Outfit",
+      "instruction": "",
+      "prompt": "1girl, halter top, gold, layered, gold bangle, BREAK, oversized sunglasses, BREAK, high waisted shorts, BREAK, pink bikini, bikini bottom, red one-piece swimsuit, white crop top, black shorts, ruffled skirt, denim jacket, oversized jacket, black sneakers, hoop earrings, necklace",
+      "attire_prompt": "1girl, halter top, gold, layered, gold bangle, BREAK, oversized sunglasses, BREAK, high waisted shorts, BREAK, pink bikini, bikini bottom, red one-piece swimsuit, white crop top, black shorts, ruffled skirt, denim jacket, oversized jacket, black sneakers, hoop earrings, necklace",
+      "expressions": {}
+    },
+    {
+      "id": "party-outfit",
+      "name": "Party Outfit",
+      "instruction": "",
+      "prompt": "1girl, layered, gold, BREAK, red bikini, dress slip, black dress, white shirt, oversized shirt, white blouse, pleated skirt, black skirt, grey sweatpants, purple hoodie, black thighhighs, strappy heels, black high heels, black loafers, white sneakers, white headband, necklace",
+      "attire_prompt": "1girl, layered, gold, BREAK, red bikini, dress slip, black dress, white shirt, oversized shirt, white blouse, pleated skirt, black skirt, grey sweatpants, purple hoodie, black thighhighs, strappy heels, black high heels, black loafers, white sneakers, white headband, necklace",
+      "expressions": {}
+    }
+  ],
+  "expression_prompts": {
+    "serenity": "soft smile, gentle smile, closed eyes, happy",
+    "joy": "big smile, closed eyes, blush, happy",
+    "ecstasy": "closed eyes, :d, blush, happy",
+    "acceptance": "closed eyes, smile, blush, peace sign",
+    "trust": "closed smile, blush, looking at viewer, warm eyes",
+    "admiration": "soft smile, blush, looking at viewer, warm smile",
+    "apprehension": "worried, concerned, sweatdrop, looking away",
+    "fear": "wide eyes, open mouth, scared, sweatdrop",
+    "terror": "screaming, crying, pale, terrified",
+    "distraction": "dazed, looking away, thinking, unfocused eyes",
+    "surprise": "wide eyes, open mouth, surprised, blush",
+    "amazement": "wide eyes, open mouth, starstruck, blush",
+    "pensiveness": "thinking, looking away, concerned, :|",
+    "sadness": "sad, looking down, :(, teary eyes",
+    "grief": "crying, tears, sad, looking down",
+    "boredom": "blank stare, bored, looking away, :|",
+    "disgust": "disgusted, :/, grimace, looking away",
+    "loathing": "scowling, angry, gritted teeth, glare",
+    "annoyance": "pouting, annoyed, pout, sidelong glance",
+    "anger": "glaring, gritted teeth, angry, annoyed",
+    "rage": "veins bulging, angry, shouting, gritted teeth",
+    "interest": "smirk, looking at viewer, one eye closed, raised eyebrow",
+    "anticipation": "smile, looking at viewer, excited, blush",
+    "vigilance": "intense stare, serious, looking at viewer, annoyed",
+    "love": "blush, heart eyes, soft smile, looking at viewer",
+    "desire": "blush, :p, seductive smile, suggestive pose",
+    "greed": "grin, heart pupils, :d, blush",
+    "optimism": "smile, determined eyes, blush, looking at viewer",
+    "remorse": "crying, tears, looking away, sad",
+    "contempt": "smirk, looking down, smug, one eye closed",
+    "awe": "wide eyes, open mouth, sparkles, starstruck",
+    "disappointment": "sigh, looking down, :|, tired eyes"
+  },
+  "pose_prompts": {
+    "serenity": "relaxing, pose, weight evenly distributed, arms, missing hand, sides, lightly, hip, a small, knowing smile, calm, controlled, composure",
+    "joy": "own hands clasped, heart, together, near, bright, smile, leaning forward, body, slightly, weight, light feet, a bubbly and effervescent posture",
+    "ecstasy": "head thrown back, laugh, own hands clasped, bird's-eye view, thrown, out, wide, arched back, body, weight, high heels, unrestrained and expansive joy",
+    "acceptance": "cocked hip, missing hand, hip, other resting casually on a nearby surface, weight, one leg, shifted, chin held high, relaxed but self-assured posture",
+    "trust": "leaning, against surface, comfortably, crossed arms, loosely, head tilt, listening, posture, relaxed shoulders, an open and assured stance",
+    "admiration": "crossed arms, loosely, head tilt, slightly, arched eyebrow, one, faint, smirk, playing, lips, weight balanced evenly, shoulders relaxed, observant stance",
+    "apprehension": "crossed arms, defensively, missing hand, gripping, opposite, arm, shoulders hunched slightly, weight, feet, shifting, from, guard, pose, wary",
+    "fear": "hugging herself tightly, wrapped arms, torso, around, shoulders hunched, chin tucked, taking a small step back, defensive, protective, curl",
+    "terror": "knees, locked, body rigid and frozen, clenched hands, tight clothes, into, sides, pull, ears up, shoulders, statue, petrification, scared, like, posture",
+    "distraction": "body angled away from conversation, gaze, fixed, elsewhere, missing hand, twirling, hair, jewelry, idly, strand, adjusting, weight unevenly distributed",
+    "surprise": "flying, cover, open mouth, hand mouth, eyebrows, shooting, upwards, body jolting upright, weight shifting back slightly, reaction image, genuine, unguarded",
+    "amazement": "mouth slightly agape, hands up, chest, level, palms open, leaning forward, slightly, weight, balls, feet, wide eyed, expression",
+    "pensiveness": "hand under chin, elbow propped on opposite arm, gaze, distant, unfocused, weight leaning on one hip, lost, thought, posture",
+    "sadness": "arms hanging limply at sides, shoulders slumped, head tilt, down, gaze, lowerkuo, floor, a weary and deflated posture, energy drain",
+    "grief": "shoulders slumped forward, wrapped arms, midriff, tightly, around, own, head bowed, low, weight, heavy, seeming, a closed-off posture of private sorrow",
+    "boredom": "slouched posture, weight, one leg, heavily, arms, hanging, limply, tongue out, side, head, one, staring blankly into middle distance, utterly disengaged",
+    "disgust": "wrinkled nose, recoil, back, head back, side, hand up, ward, something, off, body leaning away, full body, distaste",
+    "loathing": "full body, recoil, one arm, push, extended, offending, thing, away, face averted, tight clothes, shoulders, weight, fully, back, heel, shifted, onto, one, visceral rejection",
+    "annoyance": "eye roll, exaggerated, tossing, back, head back, crossed arms, tightly, over, chest, weight shifted to one hip, tapping foot, impatiently, dismissive posture",
+    "anger": "hands on hips, cocked hip, one, chin tilted up defiantly, leaning forward, weight, one leg, shifted, tense shoulders, aggressive, pose",
+    "rage": "clenched hands, sides, body leaning aggressively forward, chest puffed out, chin, thrust, forward, weight, balls, feet, balanced, explosive, tension",
+    "interest": "leaning in, head rest, back, hand, one eyebrow slightly raised, faint, smirk, weight shifted forward onto one hip, sharp attention",
+    "anticipation": "leaning forward, slightly, own hands clasped, together, near, chest, weight, toes, body angled as if ready to move, sharp attentive posture",
+    "vigilance": "posture perfectly still, head tilt, listening, slightly, eyes sharp and scanning, weight balanced lightly, a poised and watchful guard",
+    "love": "missing hand, butt, affectionate, gesture, hip, proprietorial, extended arm, other, loosely, include, someone, warm, pose, open, soft smile",
+    "desire": "leaning in with intent, missing hand, collarbone, necklace, lightly, touching, own, lips, part, slightly, weight shifted to forward foot, predatory focus",
+    "greed": "leaning forward, intense, focus, finger curl, grasping, slightly, narrowed eyes, calculating, weight forward, a covetous and acquisitive stance",
+    "optimism": "hands on hips, chest mouth, chin up, confident, smirk, weight evenly distributed, a posture that says 'bring it on, i've got this'",
+    "remorse": "hunched shoulders, wrapped arms, tightly, around, herself, head bowed, eye contact, avoiding, weight shifted inward, a shrunken posture of regret",
+    "contempt": "one eyebrow sharply arched, pursed lips, sneer, crossed arms, high, chest, cocked hip, weight, one leg, shifted, looking down, nose",
+    "awe": "own hands clasped, chin, under, leaning forward, body, slightly, wide-eyed, slightly open mouth, weight, toes, balanced, utterly captivated posture",
+    "disappointment": "heavy, sigh, shoulders slumped, missing hand, resting, gesture, exasperation, hip, weary, shaking head, slowly, defeated, butt, pose, unsurprised"
+  },
+  "affect": {
+    "dimensions": [
+      "valence",
+      "arousal"
+    ],
+    "range": [
+      {
+        "emotion": "boredom",
+        "valence": -1.0,
+        "arousal": -1.0
+      },
+      {
+        "emotion": "grief",
+        "valence": -1.0,
+        "arousal": -1.0
+      },
+      {
+        "emotion": "disappointment",
+        "valence": -1.0,
+        "arousal": -1.0
+      },
+      {
+        "emotion": "remorse",
+        "valence": -1.0,
+        "arousal": -1.0
+      },
+      {
+        "emotion": "pensiveness",
+        "valence": -1.0,
+        "arousal": -1.0
+      },
+      {
+        "emotion": "serenity",
+        "valence": 1.0,
+        "arousal": -1.0
+      }
+    ]
+  }
+}

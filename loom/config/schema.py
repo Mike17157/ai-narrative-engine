@@ -77,6 +77,26 @@ class Character(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Personas — who *you* are in the chat (the {{user}} side). A persona carries a
+# long-form self-description the user writes, an optional generated short SUMMARY
+# (the compact blurb a chat system prompt consumes), and APPEARANCE booru tags the
+# image model renders a full-body self-portrait from. Server-side (one YAML per
+# persona under configs/personas/, with a <key>.png avatar alongside), so a
+# generated picture + description persist across sessions and machines.
+# --------------------------------------------------------------------------- #
+class Persona(BaseModel):
+    name: str
+    # The user-written long-form self-description — the source for generation.
+    description: str = ""
+    # A generated SHORT blurb (2-3 sentences) intended for the chat system prompt.
+    summary: str = ""
+    # Generated booru appearance tags (full-body identity for the image model).
+    appearance: str = ""
+    # Lossless extras (e.g. the model id that produced the summary/appearance).
+    fields: dict[str, Any] = Field(default_factory=dict)
+
+
+# --------------------------------------------------------------------------- #
 # Scenarios — *the experience*: a setting a cast of characters is dropped into.
 # This is the other half of the split: character cards (effectively "book
 # experiences") conflate who-they-are with the-situation; a Scenario owns the
@@ -319,6 +339,9 @@ class Settings(BaseModel):
 
     models: dict[str, ModelDef]
     characters: dict[str, Character] = Field(default_factory=dict)
+    # Who *you* are in the chat (the {{user}} side). One YAML per persona under
+    # configs/personas/. SillyTavern-style: a picture + description used as you.
+    personas: dict[str, Persona] = Field(default_factory=dict)
     scenarios: dict[str, Scenario] = Field(default_factory=dict)
     stories: dict[str, Story] = Field(default_factory=dict)
     pipelines: dict[str, Pipeline] = Field(default_factory=dict)

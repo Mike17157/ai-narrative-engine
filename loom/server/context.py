@@ -31,11 +31,13 @@ from .services import prompts as _prompts
 # Per-role image-workflow overrides. configs/image_roles.json maps each generation role
 # (base/style/sprite/scene/chat) to a workflow key; unset roles fall back to today's
 # behavior. Read fresh per request (no restart). See GET/POST /api/image-roles.
-IMAGE_ROLES = ("base", "style", "sprite", "scene", "chat")
-_ROLE_PINNED = {"style": "illustrious_style", "sprite": "sprite", "scene": "scene"}
+# The image pipeline is Anima-only, so every role resolves to an anima* workflow
+# (see configs/image_roles.json). No role is hard-pinned to a workflow anymore —
+# image_roles.json is the single source of truth for role → workflow mapping.
+IMAGE_ROLES = ("base", "sprite", "scene", "chat")
+_ROLE_PINNED: dict[str, str] = {}
 _ROLE_LABELS = {
     "base": "Character base image",
-    "style": "Styled base (style transfer)",
     "sprite": "Outfit / emotion sprites",
     "scene": "Story location backgrounds",
     "chat": "Chat pictures",
@@ -155,6 +157,7 @@ class AppContext:
             data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
         except Exception:  # noqa: BLE001
             data = {}
+        # Pose tags join the sprite prompt at render time — tidy whitespace, prose-intact.
         out = {}
         for k in EMOTION_KEYS:
             raw = str(data.get(k) or "").strip()
@@ -389,6 +392,53 @@ class AppContext:
     def char_dir(self) -> Path:
         return self.root / "configs" / "characters"
 
+    def persona_dir(self, *, create: bool = False) -> Path:
+        """configs/personas — one YAML per persona (filename stem = key), with a
+        <key>.png avatar alongside. Created on demand."""
+        d = self.root / "configs" / "personas"
+        if create:
+            d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def persona_avatar_path(self, key: str) -> Path | None:
+        """The persona's avatar PNG (<key>.png), or None if absent."""
+        safe = re.sub(r"[^\w\-]+", "", key)
+        p = self.persona_dir() / f"{safe}.png"
+        return p if p.is_file() else None
+
+    def save_persona_avatar(self, key: str, png: bytes) -> str:
+        """Write the chosen portrait candidate's bytes to <key>.png."""
+        safe = re.sub(r"[^\w\-]+", "", key)
+        self.persona_dir(create=True)
+        (self.persona_dir() / f"{safe}.png").write_bytes(png)
+        return f"/api/personas/{key}/avatar"
+
+    def write_persona(self, key: str, data: dict) -> dict:
+        """Validate + persist a persona YAML (configs/personas/<key>.yaml), then reload.
+        `key` is the filename stem; the caller is responsible for slug/dedup."""
+        from ..config.schema import Persona
+        Persona(**{k: v for k, v in data.items() if k != "key"})  # validate (drops a stray 'key')
+        self.persona_dir(create=True)
+        payload = {k: v for k, v in data.items() if k in ("name", "description", "summary",
+                                                          "appearance", "fields") and v not in (None, "")}
+        (self.persona_dir() / f"{key}.yaml").write_text(
+            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self.reload_settings()
+        return {"ok": True, "key": key}
+
+    def delete_persona(self, key: str) -> bool:
+        """Remove a persona's YAML + avatar PNG, then reload. Returns whether anything was removed."""
+        safe = re.sub(r"[^\w\-]+", "", key)
+        removed = False
+        for fn in (f"{safe}.yaml", f"{safe}.png"):
+            p = self.persona_dir() / fn
+            if p.is_file():
+                p.unlink()
+                removed = True
+        if removed:
+            self.reload_settings()
+        return removed
+
     def scenario_dir(self) -> Path:
         return self.root / "configs" / "scenarios"
 
@@ -465,23 +515,40 @@ class AppContext:
         return out
 
     def portrait_payload(self, key: str) -> dict:
-        """The manifest enriched with served image URLs for the frontend. Every outfit exposes the
-        FULL fixed emotion taxonomy as `expression_set` (canonical order) — each entry has the
-        character-level canonical face prompt and the rendered sprite url where one exists."""
-        from .services.emotions import EMOTION_KEYS, EMOTION_LABELS
+        """The manifest enriched with served image URLs for the frontend.
+
+        - `affect.range` — the character's PERSONALITY-ROOTED emotion range (a curated subset of the
+          32 keys with persona-nudged V-A coords), in canonical circumplex order. This drives the
+          carousel's X axis. Falls back to the full 32 at canonical coords when none is authored
+          (== today's flat taxonomy), so a character without a composed range still renders fully.
+        - each outfit's `expression_set` stays the FULL fixed taxonomy (back-compat: a render can
+          target any key), but each entry now carries its (valence, arousal) so a cell can plot where
+          it sits, and `in_range` flags whether it's part of THIS character's personality range."""
+        from .services.emotions import (EMOTION_KEYS, EMOTION_LABELS, EMOTION_COORDS,
+                                        canonical_range)
         m = self.portrait_manifest(key)
         base = f"/api/characters/{key}/portraits/img"
         canon = m.get("expression_prompts") or {}   # character-level canonical {key: face_tags}
+        # The personality-rooted range (Tier-A), if authored; else the full 32 at canonical coords.
+        affect_stored = (m.get("affect") or {}).get("range") if isinstance(m.get("affect"), dict) else None
+        affect_range = affect_stored if affect_stored else canonical_range()
+        affect_keys = {e["emotion"] for e in affect_range}   # fast membership for in_range flag
+        coords = {e["emotion"]: (e.get("valence"), e.get("arousal")) for e in affect_range}
         outfits = []
         for o in m.get("outfits", []):
             oid = o["id"]
             files = o.get("expressions") or {}
             exprs = {emo: f"{base}/{oid}/{fn}" for emo, fn in files.items()}   # legacy {emo:url}
             out_prompts = o.get("expression_prompts") or {}   # legacy per-outfit overrides, if any
-            expression_set = [{"emotion": k, "label": EMOTION_LABELS[k],
-                               "prompt": out_prompts.get(k) or canon.get(k, ""),
-                               "url": f"{base}/{oid}/{files[k]}" if files.get(k) else None}
-                              for k in EMOTION_KEYS]
+            expression_set = [{
+                "emotion": k, "label": EMOTION_LABELS[k],
+                "prompt": out_prompts.get(k) or canon.get(k, ""),
+                "url": f"{base}/{oid}/{files[k]}" if files.get(k) else None,
+                # V-A from the range if present, else the canonical coord (so every cell is placeable).
+                "valence": (coords.get(k) or EMOTION_COORDS[k])[0],
+                "arousal": (coords.get(k) or EMOTION_COORDS[k])[1],
+                "in_range": k in affect_keys,
+            } for k in EMOTION_KEYS]
             outfits.append({
                 "id": oid, "name": o.get("name") or oid,
                 "instruction": o.get("instruction", ""), "prompt": o.get("prompt", ""),
@@ -492,6 +559,7 @@ class AppContext:
             })
         return {"appearance": m.get("appearance", ""),
                 "emotions": EMOTION_KEYS,
+                "affect": {"range": affect_range, "dimensions": ["valence", "arousal"]},
                 "expression_prompts": canon, "outfits": outfits}
 
     def scenario_cast(self, scn) -> list[dict]:
@@ -634,29 +702,42 @@ class AppContext:
 
     def compose_base_prompt(self, name: str, persona: str, appearance_notes: str = "",
                             role: str = "", model: str | None = None) -> dict:
-        """THE single appearance authority: a natural-language physical description (+ DERIVED build/
-        bust and the other structured controls) → `_assemble_base_prompt` (grounds prose to real tags,
-        applies safety guardrails, regionizes). Synchronous (call inside a threadpool). Used by BOTH
-        the ✨ button AND cast generation. Returns {prompt, features, companions} or {error}."""
+        """THE single appearance authority. A natural-language physical description → the image
+        prompt + structured features. ONE author call (`compose_nl_base`) authors genuinely
+        STRUCTURED, personality-integrated prose and derives the structured fields in a single
+        pass; it falls back to the deterministic atomic-descriptor → prose assembler
+        (`_assemble_base_prompt`) if the structured call fails. Synchronous (call inside a
+        threadpool). Used by BOTH the ✨ button AND cast generation.
+        Returns {prompt, features, companions} or {error}."""
         from ..scenario.builder import DEFAULT_SYSTEMS
         cfg = self.load_story_builder()
         provider = self.author_provider(config_files._stage_model(cfg, "base_image", model))
         if provider is None:
             return {"error": "no author model configured"}
+
+        # ---- ONE pass: derive structured fields AND author structured prose ----------------
+        try:
+            nl = _prompts.compose_nl_base(provider, name, persona, appearance_notes, role) \
+                or _prompts.compose_nl_base(provider, name, persona, appearance_notes, role)
+        except Exception:  # noqa: BLE001
+            nl = None
+        if nl:
+            # `features` carries the derived fields (height_cm drives sprite scaling, etc.).
+            feats = {k: v for k, v in nl.items() if k != "prompt"}
+            return {"prompt": nl["prompt"], "features": feats, "companions": []}
+
+        # ---- Fallback: atomic descriptors → deterministic prose assembly -----------------
+        system = (cfg.get("systems") or {}).get("base_image") or DEFAULT_SYSTEMS["base_image"]
         context = "\n\n".join(p for p in [
             f"NAME: {name}",
             f"PERSONA:\n{persona}" if persona else "",
             f"APPEARANCE NOTES: {appearance_notes}" if appearance_notes else "",
             f"ROLE: {role}" if role else "",
         ] if p)
-        system = (cfg.get("systems") or {}).get("base_image") or DEFAULT_SYSTEMS["base_image"]
         context = ("Fill the feature schema from this character's WRITTEN DESCRIPTION below "
                    "(persona + appearance). Give `appearance` as a LIST of short, explicit, ATOMIC "
-                   "descriptors (one attribute each) — the system grounds each to a real booru tag.\n\n"
+                   "descriptors (one attribute each) — the system weaves each into the image prompt.\n\n"
                    + context)
-        # Generate the feature schema — the model lists atomic appearance descriptors + derives build/bust/height.
-        # Retry once on an empty result (structured output occasionally returns empty/whitespace), and never
-        # let a provider/parse hiccup raise out of here — it would crash the whole cast job.
         def _gen_feats():
             return (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
         try:
@@ -666,7 +747,8 @@ class AppContext:
         if not feats:
             return {"error": "model returned no structured features "
                              "(author model may not support structured output)"}
-        return {"prompt": _prompts._assemble_base_prompt(feats), "features": feats, "companions": []}
+        return {"prompt": _prompts._assemble_base_prompt(feats),
+                "features": feats, "companions": []}
 
     def compose_expressions(self, persona: str, model: str | None = None) -> dict:
         """Face-only booru expression tags for the FIXED canonical emotion taxonomy, personalized to
@@ -692,6 +774,88 @@ class AppContext:
         except Exception:  # noqa: BLE001 — fall back to the hint cues
             data = {}
         return {k: (str(data.get(k) or "").strip() or fallback[k]) for k in EMOTION_KEYS}
+
+    def compose_affect_range(self, persona: str, model: str | None = None) -> dict:
+        """Author a character's personality-rooted EMOTIONAL EXPRESSION RANGE — the curated subset of
+        the fixed 32-key taxonomy that THIS character actually expresses, each placed on the canonical
+        (valence, arousal) circumplex and NUDGED to fit their personality. ONE structured call to the
+        cheap 'emotion'-stage model (DeepSeek 3.2 by default).
+
+        This is Tier-A of the valence translation layer: the 32 keys carry the nuance (rage ≠ terror
+        ≠ desire are distinct keys); this call (a) selects which ones a character expresses and (b)
+        displaces their canonical V-A coordinates per persona — a stoic compresses toward low arousal,
+        a volatile one spreads high, an anxious character's fear sits at higher arousal than baseline.
+        Authored ONCE per character (cached on the manifest) and reused every turn at runtime, where
+        the director's {v,a} snaps to the nearest key in this range (services.emotions.nearest_emotion).
+
+        Returns {range: [{emotion, valence, arousal}, ...]} in canonical circumplex order. On any
+        failure (no provider, bad structured output), falls back to the full 32 keys at canonical
+        coordinates — so a missing/failed cheap model never blocks sprite lookup (== today's behaviour)."""
+        from .services.emotions import (EMOTIONS, EMOTION_KEYS, EMOTION_COORDS, canonical_range)
+        fallback = {"range": canonical_range()}
+        cfg = self.load_story_builder()
+        provider = self.author_provider(config_files._stage_model(cfg, "emotion", model))
+        if provider is None:
+            return fallback
+        # The 'emotion' stage's system prompt (configs/story_builder.json systems.emotion, else the
+        # DEFAULT_AFFECT_SYSTEM in prompts). It is NOT invention-gated — a range is a deterministic
+        # read of the persona, like the base-image features.
+        from .services.prompts import _AFFECT_SYSTEM
+        systems = cfg.get("systems") or {}
+        system = systems.get("emotion") or _AFFECT_SYSTEM
+        # Strict schema: emotion must be one of the 32 keys (the model cannot invent keys); valence
+        # and arousal are numbers in [-1, 1]. `additionalProperties: False` + a closed enum is what
+        # makes OpenAI-structured-output reliably validate against the real vocabulary.
+        emo_enum = {"type": "string", "enum": EMOTION_KEYS}
+        schema = {
+            "type": "object", "additionalProperties": False, "required": ["range"],
+            "properties": {"range": {"type": "array", "minItems": 6, "maxItems": 32, "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["emotion", "valence", "arousal"],
+                "properties": {
+                    "emotion": emo_enum,
+                    "valence": {"type": "number", "minimum": -1, "maximum": 1},
+                    "arousal": {"type": "number", "minimum": -1, "maximum": 1},
+                }}}},
+        }
+        # Hand the model the full menu (key, label, canonical coords) so it selects a subset and
+        # NUDGES coords, not invents them from scratch — anchored to the real positions.
+        listing = "\n".join(f"- {e['key']} ({e['label']}): v={EMOTION_COORDS[e['key']][0]:+.2f}, "
+                            f"a={EMOTION_COORDS[e['key']][1]:+.2f} — {e['hint']}" for e in EMOTIONS)
+        prompt = (f"CHARACTER PERSONA:\n{persona}\n\n"
+                  f"THE EMOTION VOCABULARY (32 keys, with canonical valence/arousal):\n{listing}\n\n"
+                  f"Select THIS character's emotional expression range: a SUBSET of 8-16 keys they "
+                  f"genuinely express (rooted in their personality — not all 32), and nudge each key's "
+                  f"valence/arousal to fit how THEY feel it. Return the range.")
+        try:
+            data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
+        except Exception:  # noqa: BLE001 — never block on the cheap model
+            return fallback
+        raw = data.get("range") if isinstance(data, dict) else None
+        if not isinstance(raw, list) or not raw:
+            return fallback
+        # Ground: keep only real keys, clamp ±1, dedupe (first occurrence wins). A defensive parse
+        # so a slightly-off structured response still yields a usable range.
+        seen, cleaned = set(), []
+        for e in raw:
+            if not isinstance(e, dict):
+                continue
+            key = e.get("emotion")
+            if key not in EMOTION_COORDS or key in seen:
+                continue
+            try:
+                v = max(-1.0, min(1.0, float(e.get("valence", 0.0))))
+                a = max(-1.0, min(1.0, float(e.get("arousal", 0.0))))
+            except (TypeError, ValueError):
+                v, a = EMOTION_COORDS[key]
+            seen.add(key)
+            cleaned.append({"emotion": key, "valence": v, "arousal": a})
+        if not cleaned:
+            return fallback
+        # canonical circumplex order (for a stable carousel X axis)
+        import math
+        cleaned.sort(key=lambda x: math.atan2(x["arousal"], x["valence"]))
+        return {"range": cleaned}
 
     def compose_outfit_prompt(self, persona: str, base_appearance: str, outfit_name: str,
                               attire_draft: str, model: str | None = None) -> dict:
@@ -719,9 +883,7 @@ class AppContext:
             f"OUTFIT: {outfit_name}" if outfit_name else "",
             f"DRAFT / CONCEPT: {attire_draft}" if attire_draft else "",
         ] if p)
-        # ONE call: the model lists ATOMIC garment descriptors, then we GROUND each to a real booru
-        # tag (snap, which also decomposes any compound), drop subsumed dupes ('skirt' vs 'red skirt'),
-        # and split into BREAK regions (outfit · details) — the going-forward shape.
+        # ONE call: the model lists ATOMIC garment descriptors; we dedupe and tidy (prose-intact).
         feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.OUTFIT_SCHEMA).data) or {}
         items = [str(t).strip() for t in (feats.get("outfit") or []) if str(t).strip()]
         if not items:

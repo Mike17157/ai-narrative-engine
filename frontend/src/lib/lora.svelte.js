@@ -1,7 +1,7 @@
-// Shared state for the LoRA section (owned by routes/images/lora/+layout.svelte,
-// consumed by the prompts/generation pages). Lifted out of the old LoraPanel so
-// the in-progress batch + streaming grid survive navigating between sub-routes.
-import { goto } from '$app/navigation';
+// Shared state for the LoRA generation pipeline (the prompt-set builder + the
+// live batch grid). Owned by the Library page, consumed by PromptSet and
+// GenerateCard. The batch + streaming grid survive navigating away because the
+// job is server-resident and the page reattaches on mount.
 import { get, post } from './api.js';
 import { app } from './app.svelte.js';
 
@@ -42,10 +42,9 @@ export async function genImages() {
   const ps = promptList();
   if (!ps.length || !app.activeImage) return;
   const r = await post('/lora/generate', { model: app.activeImage, prompts: ps, variations: lora.variations });
-  if (r.status === 409) { lora.genMsg = { err: true, text: 'a batch is already running' }; goto('/images/lora/generation'); attach(); return; }
+  if (r.status === 409) { lora.genMsg = { err: true, text: 'a batch is already running' }; attach(); return; }
   if (r.data?.error) { lora.genMsg = { err: true, text: r.data.error }; return; }
   lora.rows = []; lora.jobStatus = null;
-  goto('/images/lora/generation');
   attach();
 }
 

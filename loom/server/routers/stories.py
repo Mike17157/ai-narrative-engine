@@ -460,7 +460,8 @@ def register(app, ctx):
                 data[f] = body[f]
         try:
             Story(**data)
-            (ctx.story_dir() / f"{re.sub(r'[^\w\-]+', '', key)}.yaml").write_text(
+            safe = re.sub(r"[^\w\-]+", "", key)
+            (ctx.story_dir() / f"{safe}.yaml").write_text(
                 yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
             ctx.reload_settings()
         except Exception as exc:  # noqa: BLE001
@@ -469,7 +470,8 @@ def register(app, ctx):
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
-        p = ctx.story_dir() / f"{re.sub(r'[^\w\-]+', '', key)}.yaml"
+        safe = re.sub(r"[^\w\-]+", "", key)
+        p = ctx.story_dir() / f"{safe}.yaml"
         if not p.is_file():
             return JSONResponse({"error": "no such story"}, status_code=404)
         p.unlink()
@@ -568,7 +570,8 @@ def register(app, ctx):
             for i, npc in enumerate(npcs):
                 nk = ctx.write_npc(npc, story_key=key, base_prompt=bps.get(str(i), ""))
                 cast.append({"character": nk, "primary": False}); created.append(nk)
-            path = ctx.story_dir() / f"{re.sub(r'[^\w\-]+', '', key)}.yaml"
+            safe = re.sub(r"[^\w\-]+", "", key)
+            path = ctx.story_dir() / f"{safe}.yaml"
             data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             data["cast"] = cast
             path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -622,11 +625,20 @@ def register(app, ctx):
         locs = "\n".join(f"- {l.id} | {l.name}: {l.description}" for l in st.locations) or "(none)"
         lore = "; ".join(e.get("comment", "") for e in (st.lorebook or {}).get("entries", []) if e.get("comment"))
         cur = body.get("location") or st.start or (st.locations[0].id if st.locations else "")
+        # The protagonist. The frontend passes the active persona (who *you* are);
+        # fall back to a generic "Player" so old callers still work. A named player
+        # with a description lets the director narrate to a real identity instead of
+        # a nameless "you", and the transcript reflects that name.
+        player = body.get("player") or {}
+        player_name = (player.get("name") or "Player").strip() or "Player"
+        player_desc = (player.get("description") or "").strip()
+        player_line = f"PLAYER: {player_name}" + (f" — {player_desc}" if player_desc else "")
         system = (
             f"You are the narrator and director of an interactive visual novel titled \"{st.name}\".\n"
             f"PREMISE: {st.premise}\nTONE: {st.tone}\n"
             + (f"WORLD: {lore}\n" if lore else "")
-            + f"CAST (use these names):\n{cast}\n"
+            + f"{player_line}\n"
+            f"CAST (use these names):\n{cast}\n"
             f"LOCATIONS (the scene is in exactly one; use the id):\n{locs}\n\n"
             "Narrate the next moment in-world and in the established tone, responding to the player. "
             "Then report the scene state in your structured output:\n"
@@ -634,7 +646,10 @@ def register(app, ctx):
             "- location: the id of the location the scene is currently in (one of the listed ids).\n"
             "- present: ALWAYS list the names of EVERY cast character physically in the scene right now "
             "(anyone who speaks, acts, or is described as present) — never leave it empty if someone is there.\n"
-            "- emotions: each present character's current emotion as ONE lowercase word.\n"
+            "- emotions: for each present character, name their current emotion as ONE lowercase "
+            "word AND give `valence` (-1..1: misery to delight) and `arousal` (-1..1: calm/still to "
+            "agitated/explosive) capturing how they feel right now. The two numbers are what select "
+            "their expression sprite — judge them honestly from the moment, not a default."
             "- movement: true ONLY when this moment invites the player to move to a different location "
             "(they suggest leaving, a path opens, the beat concludes) — otherwise false."
         )
@@ -642,7 +657,7 @@ def register(app, ctx):
         history = body.get("history") or []
         lines = []
         for m in history:
-            who = "Player" if m.get("role") == "user" else "Narrator"
+            who = player_name if m.get("role") == "user" else "Narrator"
             lines.append(f"{who}: {m.get('text', '')}")
         transcript = "\n".join(lines) or "(the story is just beginning)"
         moved = body.get("choice")
@@ -664,13 +679,42 @@ def register(app, ctx):
         name_to_key = {(ctx.base_settings.characters[m.character].name if m.character in ctx.base_settings.characters
                         else m.character).lower(): m.character for m in st.cast}
         present_keys = [name_to_key.get((n or "").lower()) for n in data.get("present", [])]
-        emotions = {name_to_key.get((e.get("character") or "").lower()): e.get("emotion")
-                    for e in data.get("emotions", [])}
+        # The valence/arousal translation layer. The director emits per-character {valence, arousal}
+        # (optional) + a back-compat `emotion` word. When coords are present, snap to the NEAREST
+        # emotion key in that character's personality-rooted range (services.emotions.nearest_emotion)
+        # — never a miss, even for an emotion word not in their range. Without coords, fall back to
+        # the bare emotion word (today's exact-match behaviour).
+        from ..services.emotions import nearest_emotion, canonical_range
+        emotions = {}
+        affect = {}   # raw {char_key: {valence, arousal, resolved}} for the UI (optional display)
+        for e in data.get("emotions", []):
+            ck = name_to_key.get((e.get("character") or "").lower())
+            if not ck:
+                continue
+            word = (e.get("emotion") or "").strip()
+            v, a = e.get("valence"), e.get("arousal")
+            resolved = word
+            if v is not None and a is not None:
+                try:
+                    v_f, a_f = float(v), float(a)
+                except (TypeError, ValueError):
+                    v_f, a_f = None, None
+                if v_f is not None:
+                    # The character's authored range, else the full 32 at canonical coords (== today).
+                    m = ctx.portrait_manifest(ck)
+                    rng = ((m.get("affect") or {}).get("range")
+                           if isinstance(m.get("affect"), dict) else None) or canonical_range()
+                    snap = nearest_emotion(v_f, a_f, rng)
+                    if snap:
+                        resolved = snap
+                    affect[ck] = {"valence": v_f, "arousal": a_f, "resolved": resolved}
+            emotions[ck] = resolved
         loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
         return {
             "reply": data.get("reply", ""), "location": loc,
             "present": [k for k in present_keys if k],
-            "emotions": {k: v for k, v in emotions.items() if k},
+            "emotions": emotions,
+            "affect": affect,
             "movement": bool(data.get("movement")),
         }
 
@@ -802,6 +846,27 @@ def register(app, ctx):
             except Exception:  # noqa: BLE001
                 poses = {}
         m["pose_prompts"] = poses
+        # Personality-rooted emotion RANGE (Tier-A of the valence translation layer) — the curated
+        # subset of the 32 keys THIS character expresses, each with persona-nudged V-A coords. An
+        # explicit `affect.range` in the body overrides; else compose ONCE from the persona when the
+        # manifest has none yet. Sibling of expression_prompts/pose_prompts.
+        affect = m.get("affect") if isinstance(m.get("affect"), dict) else None
+        body_affect = body.get("affect") if isinstance(body.get("affect"), dict) else None
+        if body_affect and isinstance(body_affect.get("range"), list):
+            affect = {"dimensions": body_affect.get("dimensions", ["valence", "arousal"]),
+                      "range": body_affect["range"]}
+        elif not (affect and affect.get("range")):
+            from ..services.prompts import _persona_text
+            try:
+                affect = ctx.compose_affect_range(_persona_text(c))
+                if not isinstance(affect, dict) or not affect.get("range"):
+                    affect = None   # compose failed → leave unset (payload falls back to full 32)
+                else:
+                    affect["dimensions"] = ["valence", "arousal"]
+            except Exception:  # noqa: BLE001
+                affect = None
+        if affect:
+            m["affect"] = affect
         existing = {o.get("name", "").lower() for o in m.get("outfits", [])}
         for o in body.get("outfits", []) or []:
             nm = (o.get("name") or "").strip()
@@ -812,8 +877,7 @@ def register(app, ctx):
             ids = {x.get("id") for x in m["outfits"]}
             while oid in ids:
                 oid, n = f"{base_oid}-{n}", n + 1
-            # Snap the attire to real Danbooru tags + split into BREAK regions — same care the base
-            # image gets (the going-forward shape; re-derived again when combined at render).
+            # Tidy the attire (prose-intact; re-derived again when combined at render).
             attire = _regionize_prompt(_snap_prompt(_safe_image_tags((o.get("attire_prompt") or "").strip())))
             m["outfits"].append({"id": oid, "name": nm, "instruction": "",
                                  "prompt": attire, "attire_prompt": attire, "expressions": {}})
@@ -917,8 +981,14 @@ def register(app, ctx):
                 emit({"type": "phase", "label": "Composing expression + pose range"})
                 fresh_exprs = ctx.compose_expressions(revised["persona"])
                 fresh_poses = ctx.compose_poses(revised["persona"])
+                # The personality-rooted emotion RANGE (Tier-A valence translation): a curated subset
+                # of the 32 keys + persona-nudged V-A coords. Re-derived from the new persona so the
+                # carousel's X axis tracks who they became.
+                emit({"type": "phase", "label": "Composing emotional expression range"})
+                fresh_affect = ctx.compose_affect_range(revised["persona"])
                 if text_only:
-                    apply = {"expressions": fresh_exprs, "poses": fresh_poses}
+                    apply = {"expressions": fresh_exprs, "poses": fresh_poses,
+                             "affect": fresh_affect if isinstance(fresh_affect, dict) and fresh_affect.get("range") else None}
                     if not (ctx.portrait_manifest(char_key).get("outfits") or []):
                         plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
                                              appearance=revised["appearance"], story=story, invention=invention,
@@ -933,7 +1003,9 @@ def register(app, ctx):
                     outfits = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
                                               revised["appearance"], emit=emit)
                     portraits_apply_wardrobe(char_key, {"outfits": outfits, "expressions": fresh_exprs,
-                                                        "poses": fresh_poses, "replace": True})
+                                                        "poses": fresh_poses,
+                                                        "affect": fresh_affect if isinstance(fresh_affect, dict) and fresh_affect.get("range") else None,
+                                                        "replace": True})
             except Exception as exc:  # noqa: BLE001
                 emit({"type": "phase", "label": f"Wardrobe refresh skipped ({exc})"})
             emit({"type": "phase", "label": f"Done — {revised['name']} {'text refreshed' if text_only else 'regenerated'}"})

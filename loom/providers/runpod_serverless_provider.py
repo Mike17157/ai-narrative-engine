@@ -90,6 +90,9 @@ class RunPodServerlessProvider:
         graph = _workflow.inject(
             self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent
         )
+        # The worker is Linux; a Windows-authored graph may carry backslash model
+        # paths (e.g. nested LoRA folders) that won't resolve there.
+        _workflow.normalize_model_paths(graph)
 
         payload: dict[str, Any] = {"input": {"workflow": graph}}
 

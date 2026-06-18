@@ -4,9 +4,14 @@
 # Images → Configure tab).
 #
 # This is where the SillyTavern decoupling becomes concrete: `opus` (the chat
-# brain, a cloud LLM) and `ponyxl` (an image workflow, a local ComfyUI graph)
+# brain, a cloud LLM) and `anima` (an image workflow, a local ComfyUI graph)
 # are independent entries. Swap either without touching the other or any
 # character.
+#
+# The image pipeline is Anima-only (Qwen-Image natural-language DiT). All
+# image workflows load the Anima UNet (node 4) + a separate Qwen CLIP
+# (node 11) + Qwen VAE (node 12). Prompts are natural-language prose (see
+# loom/server/services/prompts.py), injected at node 6.
 models:
   opus:
     provider: anthropic
@@ -26,122 +31,11 @@ models:
       max_tokens: 1024
       thinking: disabled
 
-  # Workflow: your real Illustrious graph (checkpoint + 4 LoRAs + FaceDetailer +
-  # 4k upscale). Prompts inject at nodes 6/7; the final image comes out of the
-  # PreviewImage node (133). See models/manifest.yaml for the weights it needs.
-  illustrious:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/4k_Upscale_Workflow.json
-      inputs:
-        # Only the positive prompt is model-driven (the image description). The
-        # negative prompt is edited in the workflow itself, not injected.
-        positive: { node: "6", field: "text" }
-      output_node: "201"      # easy imageRemBg — character cards come out background-removed
-      timeout_s: 600          # FaceDetailer + upscale is slow
-
-  # Workflow: SPRITE generation — forked from the illustrious graph (checkpoint +
-  # LoRA + FaceDetailer). The positive node specifies a clean plain-white
-  # background + sprite framing and ends in {{image}} (Loom injects the character's
-  # appearance + attire + expression). The "filter" is in the workflow: an
-  # easy-imageRemBg node removes the background and SaveImageWithAlpha (node 201)
-  # writes a TRANSPARENT PNG for clean compositing onto scenes. Edit in Images →
-  # Graph (pick `sprite`).
-  sprite:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/sprite_api.json
-      inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "200"
-      timeout_s: 300
-
-  # Workflow: SCENE generation for story backgrounds. The illustrious checkpoint
-  # (ntrMIX) at a landscape ratio, NO character LoRAs / FaceDetailer. ALL styling
-  # is workflow-driven: the positive node carries the aesthetic + framing + "no
-  # people" and ends in the {{image}} token, where Loom injects only the location
-  # description. Edit the look in Images → Graph (pick `scene`), not in code.
-  scene:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/scene_api.json
-      inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "9"
-      timeout_s: 180
-
-  # Workflow: minimal default text2image graph (node 6 positive, 7 negative,
-  # 9 SaveImage). Set a real checkpoint in the workflow before using.
-  ponyxl:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/sdxl_basic_api.json
-      inputs:
-        # Only the positive prompt is model-driven (the image description). The
-        # negative prompt is edited in the workflow itself, not injected.
-        positive: { node: "6", field: "text" }
-      output_node: "9"
-      timeout_s: 180
-
-  # Workflow: reference / character capture via IPAdapter (the "img2img" flow).
-  # txt2img (the positive prompt at node 6 fully drives pose + scene) with the
-  # character's reference image fed into IPAdapter (LoadImage node 10 → nodes
-  # 20/21) so identity/look is captured WITHOUT copying composition the way plain
-  # img2img does. FaceDetailer (129) runs on the IPAdapter-conditioned model.
-  sdxl_img2img:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/img2img_basic_api.json
-      inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "9"
-      timeout_s: 240
-
-  # Workflow: illustrious STYLE transfer via the NoobAI-trained IPAdapter. The
-  # reference image (LoadImage node 10) supplies the ART STYLE; the positive
-  # prompt (node 6) drives the subject. Uses IPAdapterTiled + CLIP-ViT-bigG +
-  # the community anti-bake stack (Mahiro → RescaleCFG 0.7 → CFG++ sampler @
-  # cfg 1.5). Mirrors the Tccybo NoobAI IPAdapter workflow on an illustrious base.
-  illustrious_style:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/illustrious_style_api.json
-      inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "201"      # easy imageRemBg — character cards come out background-removed
-      timeout_s: 240
-
-  # Workflow: SPRITE generation via img2img/IPAdapter (experiment). Same cel-shade + full-body
-  # green-screen sprite framing as `sprite`, but the character's BASE reference (LoadImage 10) is
-  # fed through IPAdapter so identity/look carries across outfits + emotions, then FaceDetailer +
-  # rembg (node 201) → transparent PNG. Toggled per-character on the Cast → Outfit images tab.
-  sprite_img2img:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/sprite_img2img_api.json
-      inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "201"
-      timeout_s: 300
-
-  # Workflow: Anima (CircleStone 2B anime DiT). NOT an SDXL checkpoint — it loads
-  # a UNet (node 4) + a separate Qwen CLIP (node 11) + Qwen VAE (node 12), per the
-  # model's reference workflow. Positive prompt injects at node 6; output node 9.
-  # Swap the unet_name (node 4) to anisnuff / hosekiLustrousmixAnima as desired.
+  # Workflow: Anima (CircleStone 2B anime DiT). Loads a UNet (node 4) + a
+  # separate Qwen CLIP (node 11) + Qwen VAE (node 12), per the model's reference
+  # workflow. Positive prompt injects at node 6; output node 9. Used for SCENES
+  # and chat pictures (full backgrounds kept). Swap the unet_name (node 4) to
+  # anisnuff / hosekiLustrousmixAnima as desired.
   anima:
     provider: comfyui
     kind: image
@@ -151,53 +45,12 @@ models:
       inputs:
         positive: { node: "6", field: "text" }
       output_node: "9"
-      timeout_s: 240
+      timeout_s: 600          # Anima DiT cold start loads ~6 GB from the volume
 
-  # duplicated from illustrious
-  illustrious_monster:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/illustrious_monster_api.json
-      inputs:
-        positive:
-          node: '6'
-          field: text
-      output_node: '201'
-      timeout_s: 600
-
-  # base-as-template: identity from the base ref (IPAdapter linear) + a fresh subject prompt
-  character_template:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/character_template_api.json
-      inputs:
-        positive:
-          node: '6'
-          field: text
-      output_node: '9'
-      timeout_s: 300
-
-  # duplicated from illustrious_monster
-  illustrious_v3:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/illustrious_v3_api.json
-      inputs:
-        positive:
-          node: '6'
-          field: text
-      output_node: '201'
-      timeout_s: 600
-
-  # Anima CHARACTER cutout — the anima graph + Inspyrenet background removal (node 201) so the
-  # subject is cut from anima's busy, non-uniform backgrounds (segmentation, not colour-key). Used
-  # for the base/sprite roles; the plain `anima` keeps full backgrounds for scenes/chat.
+  # Workflow: Anima CHARACTER cutout — the anima graph + Inspyrenet background
+  # removal (node 201) so the subject is cut from anima's busy, non-uniform
+  # backgrounds (segmentation, not colour-key). Used for the base/sprite roles
+  # so sprites composite cleanly onto scenes.
   anima_cutout:
     provider: comfyui
     kind: image
@@ -205,13 +58,12 @@ models:
       base_url: http://127.0.0.1:8188
       workflow: ./workflows/anima_cutout_api.json
       inputs:
-        positive:
-          node: '6'
-          field: text
-      output_node: '201'      # easy imageRemBg → transparent PNG
-      timeout_s: 240
+        positive: { node: "6", field: "text" }
+      output_node: "201"      # easy imageRemBg → transparent PNG
+      timeout_s: 600          # Anima DiT cold start loads ~6 GB from the volume
 
-  # duplicated from anima
+  # Workflow: Anima at a portrait ratio for standalone background plates and
+  # scene/chat renders that want a taller frame.
   anima_background:
     provider: comfyui
     kind: image
@@ -219,8 +71,6 @@ models:
       base_url: http://127.0.0.1:8188
       workflow: ./workflows/anima_background_api.json
       inputs:
-        positive:
-          node: '6'
-          field: text
-      output_node: '9'
-      timeout_s: 240
+        positive: { node: "6", field: "text" }
+      output_node: "9"
+      timeout_s: 600          # Anima DiT cold start loads ~6 GB from the volume

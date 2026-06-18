@@ -1,5 +1,6 @@
 <script>
   import { get, post, put, del } from '$lib/api.js';
+  import { limitedPost } from '$lib/app.svelte.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import GenStream from '$lib/components/GenStream.svelte';
@@ -79,7 +80,7 @@
     err = null;
     for (let i = 0; i < todo.length; i++) {
       busy = `Generating expression ${i + 1}/${todo.length}: ${todo[i]}…`;
-      const r = await post(`/characters/${charKey}/portraits/outfit/${outfit.id}/expression`,
+      const r = await limitedPost(`/characters/${charKey}/portraits/outfit/${outfit.id}/expression`,
         { emotion: todo[i], image_model: imageModel });
       if (r.ok && r.data?.url) {
         outfit.expressions = { ...outfit.expressions, [r.data.emotion]: r.data.url };
@@ -91,7 +92,7 @@
 
   async function genOneExpression(outfit, emotion) {
     busy = `Generating ${emotion}…`; err = null;
-    const r = await post(`/characters/${charKey}/portraits/outfit/${outfit.id}/expression`, { emotion, image_model: imageModel });
+    const r = await limitedPost(`/characters/${charKey}/portraits/outfit/${outfit.id}/expression`, { emotion, image_model: imageModel });
     busy = null;
     if (r.ok && r.data?.url) { outfit.expressions = { ...outfit.expressions, [r.data.emotion]: r.data.url }; bust++; }
     else err = r.data?.error || `failed on ${emotion}`;

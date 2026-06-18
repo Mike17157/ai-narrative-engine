@@ -1,6 +1,6 @@
 <script>
   import { get, post } from '$lib/api.js';
-  import { startJob } from '$lib/app.svelte.js';
+  import { startJob, limitedPost } from '$lib/app.svelte.js';
   import { rget, rensure } from '$lib/renders.svelte.js';
   import ZoomImage from '$lib/components/ZoomImage.svelte';
   import GenStream from '$lib/components/GenStream.svelte';
@@ -44,6 +44,22 @@
     else descErr = r.data?.error || 'could not start (is the backend restarted?)';
   }
 
+  // -- standalone: re-author just the personality-rooted emotion range (Tier-A, 1 cheap call) --
+  // Distinct from the Description cascade — use when you only want to re-curate which emotions this
+  // character expresses (and where each sits on the valence/arousal circumplex) without rewriting
+  // the persona. Drives the carousel's X axis + the runtime sprite snap.
+  let affectBusy = $state(false), affectErr = $state(null), affectDone = $state(false);
+  async function composeAffect() {
+    affectBusy = true; affectErr = null; affectDone = false;
+    const r = await post(`/characters/${character}/portraits/affect`, { compose: true });
+    affectBusy = false;
+    if (r.ok && r.data?.affect?.range) {
+      affectDone = true; changed = true;
+    } else {
+      affectErr = r.data?.error || 'could not compose emotion range';
+    }
+  }
+
   // -- stage 2: base image (gate) ----------------------------------------------------------------
   const baseKey = `regenbase:${character}`;
   let basePrompt = $state(null), baseBusy = $state(false), baseErr = $state(null), basePicked = $state(false);
@@ -52,7 +68,7 @@
     baseBusy = true; baseErr = null; rensure(baseKey).cands = [];
     const job = startJob('Base image render', name, `stories/${storyKey}/cast`, CANDIDATES);
     for (let i = 0; i < CANDIDATES; i++) {
-      const r = await post(`/characters/${character}/base-candidate`, {});
+      const r = await limitedPost(`/characters/${character}/base-candidate`, {}, {}, job);
       if (r.ok && r.data?.image) { rensure(baseKey).cands = [...rensure(baseKey).cands, r.data.image]; job.done = i + 1; }
       else { baseErr = r.data?.error || 'render failed'; job.status = 'error'; break; }
     }
@@ -100,6 +116,19 @@
             </button>
           {/each}
         </div>
+
+        <!-- standalone emotion-range re-author (Tier-A; doesn't enter the image cascade) -->
+        <div class="quickact">
+          <div class="qa-info">
+            <span class="el">Emotion range</span>
+            <span class="eh">re-curate which emotions this character expresses + their valence/arousal — drives the carousel X axis (1 cheap call)</span>
+          </div>
+          <button class="ghost sm" onclick={composeAffect} disabled={affectBusy}>
+            {affectBusy ? 'Composing…' : (affectDone ? '↻ Re-compose' : '✨ Compose range')}
+          </button>
+        </div>
+        {#if affectErr}<div class="err">⚠ {affectErr}</div>{/if}
+        {#if affectDone}<div class="ok">✓ emotion range updated — close to see it in the carousel</div>{/if}
 
       {:else if step === 0}
         <p class="intro">Rewriting the description, role and appearance, then re-deriving the base-image,
@@ -183,6 +212,11 @@
     border: 1px solid var(--border); color: var(--text); resize: vertical; line-height: 1.5; font-family: inherit; }
   .fld:focus { border-color: var(--accent); outline: none; }
   .entries { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+  /* standalone quick action (emotion-range re-author) — sits below the cascade entries */
+  .quickact { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+    margin-top: 12px; padding: 11px 13px; border-radius: 10px; background: var(--bg);
+    border: 1px dashed var(--border-soft); }
+  .qa-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .entry { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
     padding: 11px 13px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); box-shadow: none; }
   .entry:hover { border-color: var(--accent); background: var(--elev); filter: none; }

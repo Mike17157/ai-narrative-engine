@@ -1,6 +1,10 @@
 # Generated output
 out/
 datasets/
+runpod_test_output/
+
+# Editor / backup artifacts
+*.bak
 
 # Local model weights — large binaries. The manifest (models/manifest.yaml) is
 # tracked; the actual weights are not. They live in ComfyUI's models folder.
@@ -30,3 +34,7 @@ loom/data/
 
 # Third-party trainer clone
 trainer/
+
+# Illustrious workflows — kept locally for reference but not tracked
+workflows/illustrious_*.json
+workflows/illustrious_*.json.*

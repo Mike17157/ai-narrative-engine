@@ -33,8 +33,7 @@
     "class_type": "UNETLoader",
     "inputs": {
       "unet_name": "miaomiaoHarem_anima12.safetensors",
-      "weight_dtype": "default",
-      "ckpt_name": "Pony\\hardcoreHentai_ponyV11.safetensors"
+      "weight_dtype": "default"
     },
     "_meta": {
       "title": "Load Diffusion Model (Anima)"
