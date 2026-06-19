@@ -17,7 +17,7 @@ if "%IMAGE%"=="" (
   exit /b 1
 )
 
-if "%BASE_TAG%"=="" set BASE_TAG=3.4.0-base
+if "%BASE_TAG%"=="" set BASE_TAG=3.6.0-base
 
 echo Building %IMAGE% (BASE_TAG=%BASE_TAG%)...
 docker build --platform linux/amd64 --build-arg BASE_TAG=%BASE_TAG% -t %IMAGE% .

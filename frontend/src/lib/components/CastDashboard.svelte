@@ -94,7 +94,7 @@
     }
   });
 
-  // ---- the gated regen modal -----------------------------------------------------------------
+  // ---- modals -----------------------------------------------------------------
   let modalOpen = $state(false);
   async function onModalChanged() {
     const k = cur?.character;
@@ -122,7 +122,8 @@
     if (r.ok && r.data?.job) bulkJob = r.data.job;
     else { bulkErr = r.data?.error || 'could not start (is the backend restarted?)'; bulkTitle = ''; }
   }
-  async function onBulkDone() { bulkJob = null; bulkTitle = ''; if (!bulkFailed) await onChanged(); }
+  let triggerGen = $state(0);
+  async function onBulkDone() { bulkJob = null; bulkTitle = ''; if (!bulkFailed) { spriteBust++; triggerGen++; await onChanged(); } }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -168,10 +169,12 @@
     {#if cur}
       {@const s = cs(cur.character)}
       <div class="detail" class:primary={cur.primary}>
-        <div class="hero">
-          {#if cur.hasRef}
-            <ZoomImage src={refUrl(cur) + `?b=${spriteBust}`} caption={`${cur.name} — base image`} inline />
-          {:else}<div class="noimg big">no base image</div>{/if}
+        <div class="hero-col">
+          <div class="hero">
+            {#if cur.hasRef}
+              <ZoomImage src={refUrl(cur) + `?b=${spriteBust}`} caption={`${cur.name} — base image`} inline />
+            {:else}<div class="noimg big">no base image</div>{/if}
+          </div>
         </div>
 
         <div class="info">
@@ -209,20 +212,17 @@
         </div>
       </div>
 
-      <!-- The full-width 2-D wardrobe grid — the expanding centerpiece. Lives BELOW the detail panel
-           so it gets the whole viewport width (the cast page is .col.full). Outfits = rows (Y, the
-           consistent flat list), emotions = columns (X, the personality-rooted affect.range). The
-           AffectScatter sits beside the grid header as a range legend. -->
-      <div class="grid-section">
-        <div class="grid-head">
-          <h4>Outfits &amp; expressions <span class="lo">— {cur.name}'s wardrobe × emotion range</span></h4>
-          <AffectScatter charKey={cur.character} refresh={spriteBust} compact />
-        </div>
-        <Sprites charKey={cur.character} charName={cur.name} hasRef={cur.hasRef} mode="inspect"
-          refresh={spriteBust} screen={`stories/${storyKey}/cast`} />
-        <p class="hint lo">Inspect only — click any image to enlarge. Render or re-roll via <b>↻ Regenerate…</b>.</p>
-      </div>
     {/if}
+
+    <!-- Inline wardrobe: always visible below the detail panel for the selected character -->
+    <div class="wardrobe">
+      <div class="w-hdr">
+        <span class="w-hdr-title">Outfits &amp; expressions — {cs(cur.character).name || cur.name}</span>
+        <AffectScatter charKey={cur.character} refresh={spriteBust} compact />
+      </div>
+      <Sprites charKey={cur.character} charName={cur.name} hasRef={cur.hasRef} mode="wardrobe"
+        refresh={spriteBust} {triggerGen} screen={`stories/${storyKey}/cast`} />
+    </div>
   {/if}
 </div>
 
@@ -270,8 +270,9 @@
   .detail { display: grid; grid-template-columns: minmax(180px, 260px) 1fr; gap: 16px;
             background: var(--panel); border: 1px solid var(--border-soft); border-radius: 12px; padding: 14px; }
   .detail.primary { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent-glow); }
+  .hero-col { display: flex; flex-direction: column; gap: 8px; align-self: start; }
   .hero { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--bg);
-          aspect-ratio: 3/4; display: grid; place-items: center; align-self: start; }
+          aspect-ratio: 3/4; display: grid; place-items: center; }
   .hero :global(.zoom-inline), .hero :global(img) { border-radius: 10px; max-height: 100%; }
   .noimg.big { width: 100%; height: 100%; display: grid; place-items: center; font-size: 12px; color: var(--faint); }
   .info { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
@@ -296,11 +297,15 @@
   .curbase { width: 170px; border-radius: 10px; overflow: hidden; border: 1px solid var(--border-soft); background: var(--bg); }
   .curbase :global(img), .curbase :global(.zoom-inline) { border-radius: 10px; }
   .hint { margin: 8px 0 0; font-size: 11.5px; }
-  /* the full-width wardrobe grid section (sits below the detail panel) + its header, which carries
-     the section title and the AffectScatter as a range legend on the right */
-  .grid-section { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; }
-  .grid-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
-  .grid-head h4 { margin: 0; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+
+  /* ---- inline wardrobe ---- */
+  .wardrobe { display: flex; flex-direction: column; min-height: 520px; height: 64vh;
+    background: var(--panel); border: 1px solid var(--border-soft); border-radius: 12px;
+    overflow: hidden; }
+  .w-hdr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px;
+    border-bottom: 1px solid var(--border-soft); flex-shrink: 0; background: var(--bg); }
+  .w-hdr-title { font-size: 13px; font-weight: 680; color: var(--text); flex: 1; }
+  .wardrobe :global(.wv) { flex: 1; min-height: 0; }
 
   @media (max-width: 640px) { .detail { grid-template-columns: 1fr; } }
 </style>

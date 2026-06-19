@@ -16,7 +16,7 @@ defaults:
   pipeline: chat            # plain streaming chat; works with any connected model
   character: aria
   chat_model: opus          # overridden by your active Connection
-  image_model: illustrious
+  image_model: anima        # overridden by your active Connection
 
 comfyui:
   base_url: http://127.0.0.1:8188

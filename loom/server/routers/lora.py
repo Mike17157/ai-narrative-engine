@@ -418,7 +418,7 @@ def register(app, ctx):
     @app.post("/api/lora/sample")
     async def lora_sample(body: dict):
         """Generate a sample by hooking a checkpoint + LoRA stack into a real
-        image workflow (default: the illustrious graph) — its checkpoint and LoRA
+        image workflow (default: the anima graph) — its checkpoint and LoRA
         chain are swapped for the tested set, the prompt is injected at the
         workflow's configured positive node, and it's rendered from its output
         node. Same inject-models mechanism a pipeline uses to apply a character's
@@ -436,7 +436,7 @@ def register(app, ctx):
         if loras is None and body.get("lora"):  # single-lora shorthand
             loras = [{"name": body["lora"], "weight": float(body.get("weight", 1.0))}]
         loras = [l for l in (loras or []) if l.get("name")]
-        model_key = body.get("model") or "illustrious"
+        model_key = body.get("model") or "anima"
         prompt = body.get("prompt") or "masterpiece, best quality, 1girl, portrait, detailed"
         negative = body.get("negative")
 

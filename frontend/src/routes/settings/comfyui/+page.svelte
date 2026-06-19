@@ -26,7 +26,7 @@
       <div class="kv"><span>Mode</span><b class="muted">{comfy.managed ? 'managed (auto-launch)' : 'connect-only'}</b></div>
     </div>
 
-    <p class="hint flat">Edit <code>comfyui.base_url</code>, <code>comfyui.managed</code>, and launch overrides in <code>user.yaml</code>, then restart the backend (System).</p>
+    <p class="hint flat">Edit <code>comfyui.base_url</code>, <code>comfyui.managed</code>, and launch overrides in <code>user.yaml</code>, then restart the backend (<a href="/settings/system">System</a>).</p>
   </div>
 </div>
 

@@ -42,8 +42,8 @@ def register(app, ctx):
         only. Returns each emotion's effective framing/aspect + whether it overrides the default."""
         from ..services.poses import FRAMING_TAGS, ASPECT_DIMS, geometry_default, resolve_geometry
         ov = config_files.load_poses(ctx.root)
-        labels = {"neutral": "Neutral", **EMOTION_LABELS}
-        keys = ["neutral", *EMOTION_KEYS]
+        labels = EMOTION_LABELS
+        keys = EMOTION_KEYS  # neutral is now a first-class key in the taxonomy
         def row(k):
             g = resolve_geometry(k, ov)
             return {"key": k, "label": labels.get(k, k), "framing": g["framing"], "aspect": g["aspect"],
@@ -62,7 +62,7 @@ def register(app, ctx):
             updates = {body["key"]: {kk: body[kk] for kk in ("framing", "aspect") if kk in body}}
         if not isinstance(updates, dict):
             return JSONResponse({"error": "expected {key,framing,aspect} or {config:{key:entry}}"}, status_code=400)
-        valid = {"neutral", *EMOTION_KEYS}
+        valid = set(EMOTION_KEYS)  # neutral is now included in EMOTION_KEYS
         ov = config_files.load_poses(ctx.root)
         for k, v in updates.items():
             if k not in valid:
@@ -411,6 +411,25 @@ def register(app, ctx):
             shutil.rmtree(d, ignore_errors=True)
         return ctx.portrait_payload(key)
 
+    @app.patch("/api/characters/{key}/portraits/outfit/{oid}")
+    def portrait_patch_outfit(key: str, oid: str, body: dict):
+        """Update an outfit's editable fields: name, instruction, attire_prompt.
+        Returns the updated portrait payload."""
+        m = ctx.portrait_manifest(key)
+        outfit = ctx.portrait_outfit(m, oid)
+        if outfit is None:
+            return JSONResponse({"error": "no such outfit"}, status_code=404)
+        body = body or {}
+        if "name" in body:
+            outfit["name"] = (body["name"] or "").strip() or outfit.get("name", oid)
+        if "instruction" in body:
+            outfit["instruction"] = (body["instruction"] or "").strip()
+        if "attire_prompt" in body:
+            outfit["attire_prompt"] = (body["attire_prompt"] or "").strip()
+            outfit["prompt"] = outfit["attire_prompt"]
+        ctx.save_portrait_manifest(key, m)
+        return ctx.portrait_payload(key)
+
     @app.delete("/api/characters/{key}/portraits/outfit/{oid}/expression/{emo}")
     def portrait_delete_expression(key: str, oid: str, emo: str):
         m = ctx.portrait_manifest(key)
@@ -443,17 +462,17 @@ def register(app, ctx):
 
     @app.post("/api/characters/{key}/portraits/affect")
     def portrait_compose_affect(key: str, body: dict):
-        """Author or re-author the character's PERSONALITY-ROOTED EMOTIONAL EXPRESSION RANGE (Tier-A of
-        the valence translation layer): the curated subset of the 32 emotion keys THIS character
-        expresses, each placed on the canonical (valence, arousal) circumplex and nudged to fit their
-        persona. ONE cheap 'emotion'-stage call (DeepSeek 3.2 by default). Cached on the manifest; this
-        drives the carousel's X axis and the runtime sprite snap.
+        """Author or re-author the character's EMOTIONAL EXPRESSION RANGE — the set of emotion
+        keys this character can display as portrait sprites. ONE cheap 'emotion'-stage LLM call.
+
+        Stored as affect.range = [key1, key2, ...] (plain list of strings, circumplex-sorted).
+        portrait_payload enriches this to [{emotion, label, valence, arousal}] before serving it.
 
         Body:
-          {compose: true}      → (re)compose the range from the character's persona (the default).
-          {range: [...]}       → set the range explicitly (each {emotion, valence, arousal}), bypassing
-                                 the model — for manual art-direction edits.
-        Returns the portrait payload (with the new `affect.range`)."""
+          {compose: true}  → (re)compose from the character's persona (default).
+          {range: [...]}   → set the range explicitly as a list of key strings (or legacy dicts),
+                             bypassing the model — for manual art-direction.
+        Returns the full portrait payload."""
         c = ctx.base_settings.characters.get(key)
         if c is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
@@ -461,34 +480,31 @@ def register(app, ctx):
         m = ctx.portrait_manifest(key)
         explicit = body.get("range") if isinstance(body.get("range"), list) else None
         if explicit:
-            # Manual override: ground to real keys, clamp ±1, dedupe, circumplex-sort.
-            from ..services.emotions import EMOTION_COORDS, canonical_range
+            from ..services.emotions import EMOTION_KEYS
             import math
-            seen, cleaned = set(), []
-            for e in explicit:
-                if not isinstance(e, dict) or e.get("emotion") not in EMOTION_COORDS or e["emotion"] in seen:
-                    continue
-                try:
-                    v = max(-1.0, min(1.0, float(e.get("valence", 0.0))))
-                    a = max(-1.0, min(1.0, float(e.get("arousal", 0.0))))
-                except (TypeError, ValueError):
-                    v, a = EMOTION_COORDS[e["emotion"]]
-                seen.add(e["emotion"])
-                cleaned.append({"emotion": e["emotion"], "valence": v, "arousal": a})
-            cleaned.sort(key=lambda x: math.atan2(x["arousal"], x["valence"]))
+            from ..services.emotions import EMOTION_COORDS
+            seen: set = set()
+            cleaned = []
+            for item in explicit:
+                # Accept both string keys and legacy {emotion, ...} dicts.
+                key_str = item if isinstance(item, str) else (item.get("emotion") if isinstance(item, dict) else None)
+                if key_str in EMOTION_KEYS and key_str not in seen:
+                    seen.add(key_str)
+                    cleaned.append(key_str)
+            cleaned.sort(key=lambda k: math.atan2(EMOTION_COORDS[k][1], EMOTION_COORDS[k][0]))
             if not cleaned:
                 return JSONResponse({"error": "no valid emotion keys in range"}, status_code=400)
-            affect = {"dimensions": ["valence", "arousal"], "range": cleaned}
+            affect = {"range": cleaned}
         else:
-            ctx.ensure_fleshed(key)   # thin seed → disciplined prose first, so the range is persona-rooted
+            ctx.ensure_fleshed(key)
             c = ctx.base_settings.characters.get(key)
             from ..services.prompts import _persona_text
-            affect = ctx.compose_affect_range(_persona_text(c), (body.get("model")))
+            nsfw = bool(body.get("nsfw"))
+            affect = ctx.compose_affect_range(_persona_text(c), body.get("model"), nsfw=nsfw)
             if not (isinstance(affect, dict) and affect.get("range")):
                 return JSONResponse({"error": "could not compose affect range "
                                               "(emotion model may not support structured output)"},
                                     status_code=500)
-            affect["dimensions"] = ["valence", "arousal"]
         m["affect"] = affect
         ctx.save_portrait_manifest(key, m)
         return ctx.portrait_payload(key)
@@ -563,7 +579,7 @@ def register(app, ctx):
         outfit = next((o for o in m.get("outfits", []) if o.get("id") == oid), None)
         if outfit is None:
             return JSONResponse({"error": "no such outfit"}, status_code=404)
-        # The sprite workflow is txt2img (illustrious fork) — identity comes from the
+        # The sprite workflow is txt2img (anima) — identity comes from the
         # prompt, so include the character's core appearance alongside attire+expression.
         appearance = (ch.fields or {}).get("appearance") or ""
         attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
@@ -652,13 +668,17 @@ def register(app, ctx):
                     break
                 oid = o.get("id")
                 attire = o.get("attire_prompt") or o.get("prompt") or ""
+                is_unified = o.get("unified", False)
                 odir = ctx.portrait_dir(key, create=True) / oid
                 odir.mkdir(parents=True, exist_ok=True)
 
                 for emo in EMOTION_KEYS:
                     expr = canon.get(emo) or (o.get("expression_prompts") or {}).get(emo) or emo
+                    # Unified outfits already embed appearance — skip the separate appearance prefix.
+                    base_parts = (attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if is_unified \
+                        else (appearance, attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo))
                     prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
-                        ", ".join(p for p in (appearance, attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if p))))
+                        ", ".join(p for p in base_parts if p))))
 
                     all_jobs.append({
                         "outfit": o,
@@ -732,21 +752,19 @@ def register(app, ctx):
         outfit = ctx.portrait_outfit(m, oid)
         if outfit is None:
             return JSONResponse({"error": "no such outfit"}, status_code=404)
+        # Use the brief concept (if stored) as the seed — not the full prose prompt.
+        brief_concept = outfit.get("concept") or ""
         r = ctx.compose_outfit_prompt(
             ch.system or "", (ch.fields or {}).get("appearance", ""), outfit.get("name", ""),
-            outfit.get("attire_prompt") or outfit.get("prompt") or "", (body or {}).get("model"))
+            brief_concept, (body or {}).get("model"))
         attire = r.get("attire") if isinstance(r, dict) else ""
         if not attire:
             return JSONResponse({"error": "could not compose outfit prompt (author model may "
                                           "not support structured output)"}, status_code=500)
         outfit["attire_prompt"] = attire
         outfit["prompt"] = attire
-        # Refresh this outfit's emotion range too (correlated to the outfit), unless it already has
-        # rendered sprites we'd orphan — only seed emotions that don't exist yet.
-        if r.get("emotions"):
-            ep = outfit.setdefault("expression_prompts", {})
-            for e in r["emotions"]:
-                ep.setdefault(e["emotion"], e["prompt"])
+        if r.get("unified"):
+            outfit["unified"] = True
         ctx.save_portrait_manifest(key, m)
         return {"ok": True, "attire_prompt": attire}
 
@@ -763,13 +781,19 @@ def register(app, ctx):
         outfit = ctx.portrait_outfit(m, oid)
         if outfit is None:
             return JSONResponse({"error": "no such outfit"}, status_code=404)
-        appearance = (ch.fields or {}).get("appearance") or ""
         attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
+        is_unified = outfit.get("unified", False)
         model = ctx.role_model("sprite", (body or {}).get("image_model"))
         provider, model_id = ctx.image_provider(model)
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in (appearance, attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral")) if p))))
+        # Unified outfits embed appearance; legacy outfits need it prepended.
+        if is_unified:
+            parts = (attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral"))
+        else:
+            appearance = (ch.fields or {}).get("appearance") or ""
+            parts = (appearance, attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral"))
+        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in parts if p))))
         _randomize_seeds(provider.workflow)
         # txt2img — identity from the appearance tags (the model is consistent without img2img).
         try:

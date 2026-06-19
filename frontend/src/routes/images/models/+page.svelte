@@ -1,24 +1,18 @@
 <script>
   import { onMount } from 'svelte';
-  import { get, post } from '$lib/api.js';
+  import { get } from '$lib/api.js';
 
-  // The model library, organized by architecture. Browse everything ComfyUI has
-  // (classified by tensor signature, not folder), and file misfiled / loose
-  // downloads into arch-correct folders — references rewritten automatically.
+  // The image-model surface, focused on the active pipeline: Anima + the support
+  // models (VAE / CLIP / upscalers / ControlNet) it depends on. The full
+  // cross-family library + organizer lives behind the Graph pane's "Model
+  // library" modal — see ModelLibraryModal.svelte.
   let scan = $state({ items: [], counts: {} });
-  let moves = $state([]);
-  let warnings = $state([]);
-  let sel = $state({});
   let loading = $state(true);
   let err = $state(null);
-  let applying = $state(false);
-  let result = $state(null);
-  let orgMode = $state('role');  // 'role' = classify-folder moves · 'family' = categorize-by-name moves
 
-  // browser filters
+  // browser filters (family is fixed to Anima + support here)
   let q = $state('');
   let kindFilter = $state('all');
-  let familyFilter = $state('all');  // model type: Anima / Illustrious / Pony …
 
   // catalog (ComfyUI Manager) — browse + download new models
   let catalog = $state({ entries: [], types: [] });
@@ -27,32 +21,14 @@
   let dl = $state({});  // rel -> pct (0-100) | 'done' | 'err: …'
 
   async function load() {
-    loading = true; err = null; result = null;
+    loading = true; err = null;
     try {
       scan = await get('/comfy/models');
-      const p = await get('/comfy/librarian');
-      moves = p.moves || [];
-      warnings = p.warnings || [];
-      sel = Object.fromEntries(moves.map((m) => [key(m), true]));
-      orgMode = 'role';
       catalog = await get('/comfy/catalog');
     } catch (e) { err = String(e); }
     loading = false;
   }
   onMount(load);
-
-  // "Categorize by name": file every model into its family folder (Illustrious/, Pony/, Anima/, SDXL/…)
-  // derived from its name/folder/arch. Loads proposals into the same review list; Apply moves + rewrites.
-  async function categorizeByName() {
-    loading = true; err = null; result = null;
-    try {
-      const r = await get('/comfy/librarian/family');
-      moves = r.moves || [];
-      sel = Object.fromEntries(moves.map((m) => [key(m), true]));
-      orgMode = 'family';
-    } catch (e) { err = String(e); }
-    loading = false;
-  }
 
   let catItems = $derived((catalog.entries || []).filter((e) =>
     (catType === 'all' || e.type === catType) &&
@@ -83,93 +59,34 @@
     } catch (ex) { dl[e.rel] = 'err: ' + ex; }
   }
 
-  const key = (m) => m.src + '|' + m.top;
   const KINDS = ['all', 'checkpoint', 'diffusion', 'lora', 'vae', 'clip', 'controlnet', 'upscale'];
-  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : f);
-  // Real sub-family containers (illustrious/pony/anima/…) from the scan, not folder names.
-  let families = $derived(['all', ...[...new Set((scan.items || []).map((i) => i.family).filter(Boolean))].sort()]);
+  // Show only the active pipeline's models: the Anima family + support models (VAE/CLIP/
+  // upscalers/ControlNet, which carry no family). Other families are managed in the
+  // Graph pane's Model library modal.
+  const inScope = (i) => i.family === 'anima' || !i.family;
   let items = $derived((scan.items || []).filter((i) =>
+    inScope(i) &&
     (kindFilter === 'all' || i.kind === kindFilter) &&
-    (familyFilter === 'all' || i.family === familyFilter) &&
     (!q.trim() || (i.folder + '/' + i.rel + ' ' + i.arch + ' ' + (i.family || '')).toLowerCase().includes(q.toLowerCase()))
   ));
-  let chosen = $derived(moves.filter((m) => sel[key(m)]));
   function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? Math.round(b / 1e6) + ' MB' : Math.round(b / 1e3) + ' KB'; }
-
-  async function apply() {
-    if (!chosen.length || applying) return;
-    applying = true; result = null;
-    const r = await post('/comfy/librarian/apply', { moves: chosen.map((m) => ({ top: m.top, src: m.src, dst: m.dst })) });
-    result = r.data || { error: 'apply failed' };
-    applying = false;
-    await load();
-  }
 </script>
 
-<div class="hint">Every model ComfyUI has, classified by tensor signature (kind + architecture) — not by folder name. Below, file misfiled or loose downloads into arch-correct folders; references in your stacks, characters and workflows are rewritten automatically.</div>
+<div class="hint">The image models for the active pipeline — <b>Anima</b> plus the support models (VAE, CLIP, upscalers, ControlNet) it depends on. Browse other families and file misfiled / loose downloads from the <b>Graph</b> pane's <b>⊞ Model library</b>.</div>
 
 {#if loading}
   <div class="center">Scanning model tree…</div>
 {:else}
   {#if err}<div class="err">{err}</div>{/if}
 
-  <!-- ORGANIZE -->
-  <section class="card">
-    <div class="chead">
-      <h3>Organize <span class="sub">— {moves.length ? `${moves.length} ${orgMode === 'family' ? 'to file by family' : 'misfiled / loose'}` : 'all filed correctly ✓'}</span></h3>
-      <div class="row">
-        <button class="ghost sm" onclick={categorizeByName} disabled={loading} title="File every model into its family folder (Illustrious/, Pony/, Anima/, SDXL/…) by name">⊞ Categorize by name</button>
-        <button onclick={apply} disabled={applying || !chosen.length}>{applying ? 'Moving…' : `File ${chosen.length}`}</button>
-        <button class="ghost sm" onclick={load} disabled={loading}>↻ Re-scan</button>
-      </div>
-    </div>
-    {#if moves.length}
-      {#if orgMode === 'family'}
-        <div class="hint2">Filing each model into its <code>&lt;Family&gt;/</code> folder (one folder per type); LoRA role subfolders are kept.</div>
-      {:else}
-        <div class="hint2">Filing classified LoRAs into <code>&lt;family&gt;/&lt;classification&gt;/</code>. Family (model type) is preserved; classification comes from your tagging in LoRA → Classify.</div>
-      {/if}
-      <div class="warn">⚠ Moves files on disk and won't rewrite ComfyUI's own saved workflows — re-point those there.</div>
-      <div class="moves">
-        {#each moves as m (key(m))}
-          <label class="mrow">
-            <input type="checkbox" checked={sel[key(m)]} onchange={(e) => (sel[key(m)] = e.target.checked)} />
-            {#if orgMode === 'family'}
-              <span class="cls {m.family}">{m.family}</span>
-              <span class="mname" title={m.src}>{m.name}</span>
-              <span class="path"><code class="top">{m.top}/</code>{m.src} <span class="arr">→</span> <strong>{m.dst}</strong></span>
-            {:else}
-              <span class="cls {m.cls}">{m.cls}</span>
-              <span class="mname" title={m.src}>{m.name}</span>
-              <span class="path"><code class="top">loras/</code>{m.family} <span class="arr">→</span> {m.family}/<strong>{m.cls}</strong></span>
-            {/if}
-          </label>
-        {/each}
-      </div>
-    {/if}
-    {#if warnings.length}
-      <div class="warnlist">
-        <div class="wlbl">⚠ Possibly misfiled by architecture — review &amp; move manually in ComfyUI</div>
-        {#each warnings as w}
-          <div class="wrow"><code>{w.family}/</code>{w.name} — detected <span class="arch {w.arch}">{w.arch}</span>, but this folder is mostly <strong>{w.dominant}</strong></div>
-        {/each}
-      </div>
-    {/if}
-    {#if result}
-      <div class="result">✓ filed {result.moved?.length || 0}{result.failed?.length ? `, ${result.failed.length} failed` : ''}{result.rewritten?.length ? ` · rewrote ${result.rewritten.join(', ')}` : ''}.
-        {#each result.failed || [] as f}<div class="err">✕ {f.src}: {f.error}</div>{/each}
-      </div>
-    {/if}
-  </section>
-
   <!-- BROWSER -->
   <section class="card">
     <div class="chead">
       <h3>Library <span class="sub">{Object.entries(scan.counts).map(([k, v]) => `${v} ${k}`).join(' · ')}</span></h3>
       <div class="row">
-        <select bind:value={familyFilter} title="model family">{#each families as f}<option value={f}>{f === 'all' ? 'all families' : famCap(f)}</option>{/each}</select>
         <select bind:value={kindFilter}>{#each KINDS as k}<option value={k}>{k}</option>{/each}</select>
         <input class="search" bind:value={q} placeholder="filter…" />
+        <button class="ghost sm" onclick={load} disabled={loading}>↻ Re-scan</button>
       </div>
     </div>
     <div class="list">
@@ -231,26 +148,11 @@
   .row { display: flex; align-items: center; gap: 8px; }
   .search { width: 200px; }
 
-  .warn { font-size: 12px; color: var(--warn, #e6b800); background: rgba(230,184,0,.07); border: 1px solid rgba(230,184,0,.25); border-radius: 8px; padding: 8px 11px; margin-bottom: 12px; }
-  .warn code { background: var(--elev); padding: 0 4px; border-radius: 4px; }
-  .result { font-size: 12.5px; color: var(--good); margin-top: 10px; }
-
-  .moves, .list { display: flex; flex-direction: column; gap: 3px; }
-  .mrow { display: grid; grid-template-columns: 24px 80px 1.4fr 2fr; gap: 10px; align-items: center; padding: 7px 8px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--elev); cursor: pointer; }
-  .mrow:hover { border-color: var(--border); }
-  .hint2 { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
-  .hint2 code { background: var(--elev); padding: 0 4px; border-radius: 4px; }
-  .cls { font-size: 11px; justify-self: start; border-radius: 999px; padding: 1px 9px; border: 1px solid var(--border-soft); color: var(--muted); }
-  .cls.detail { color: #8fcaff; } .cls.theme { color: #c9a6ff; } .cls.character { color: var(--good); }
-  .warnlist { margin-top: 12px; border: 1px solid rgba(230,184,0,.25); border-radius: 8px; padding: 8px 11px; }
-  .wlbl { font-size: 11px; color: var(--warn, #e6b800); margin-bottom: 6px; }
-  .wrow { font-size: 12px; color: var(--muted); padding: 2px 0; }
-  .wrow code { color: var(--faint); }
+  .list { display: flex; flex-direction: column; gap: 3px; }
   .lrow { display: grid; grid-template-columns: 70px 90px 1fr 80px; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
-  .mname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
   .kind { font-size: 11px; color: var(--muted); }
-  .rel, .path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
-  .rel .top, .path .top { color: var(--faint); } .arr { color: var(--accent); margin: 0 4px; }
+  .rel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
+  .rel .top { color: var(--faint); }
   .size { font-size: 11px; color: var(--faint); justify-self: end; font-family: ui-monospace, monospace; }
   .crow { display: grid; grid-template-columns: 90px 1fr 110px; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
   .cname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

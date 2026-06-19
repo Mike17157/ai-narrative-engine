@@ -12,9 +12,9 @@
 </script>
 
 {#if items.length}
-  <div class="hint">The image model / workflow used to render pictures in chat &amp; stories. {items.length} available — edit the workflow itself in the <b>Images</b> section, or connect ComfyUI in <a href="/settings/connections">Connections</a>.</div>
+  <div class="hint">The image workflow used to render pictures in chat &amp; stories. {items.length} available — edit workflows in the <b>Images</b> section.</div>
   <label>Image model</label>
   <Combobox items={items} value={app.activeImage} placeholder="workflow…" onpick={(v) => setActiveImage(v)} />
 {:else}
-  <div class="hint">No image models yet — connect ComfyUI in <a href="/settings/connections">Settings ▸ Connections</a>.</div>
+  <div class="hint">No image workflows yet — connect ComfyUI in <a href="/settings/comfyui">Settings ▸ ComfyUI</a>.</div>
 {/if}

@@ -46,8 +46,8 @@
 
   // -- standalone: re-author just the personality-rooted emotion range (Tier-A, 1 cheap call) --
   // Distinct from the Description cascade — use when you only want to re-curate which emotions this
-  // character expresses (and where each sits on the valence/arousal circumplex) without rewriting
-  // the persona. Drives the carousel's X axis + the runtime sprite snap.
+  // character expresses without rewriting the persona. Drives the carousel's X axis; the director
+  // picks keys from this list directly at runtime.
   let affectBusy = $state(false), affectErr = $state(null), affectDone = $state(false);
   async function composeAffect() {
     affectBusy = true; affectErr = null; affectDone = false;
@@ -121,7 +121,7 @@
         <div class="quickact">
           <div class="qa-info">
             <span class="el">Emotion range</span>
-            <span class="eh">re-curate which emotions this character expresses + their valence/arousal — drives the carousel X axis (1 cheap call)</span>
+            <span class="eh">re-curate which emotions this character can express — drives the carousel X axis and director key selection (1 cheap call)</span>
           </div>
           <button class="ghost sm" onclick={composeAffect} disabled={affectBusy}>
             {affectBusy ? 'Composing…' : (affectDone ? '↻ Re-compose' : '✨ Compose range')}

@@ -22,7 +22,7 @@
   ]);
 
   let allLoras = $derived((loraLib.choices.loras || []).map((n) => ({ name: n, fam: famOf(n) })));
-  let stackFam = $derived(baseFamMap[normRel(current?.checkpoint)] || 'unknown');
+  let stackFam = $derived(baseFamMap()[normRel(current?.checkpoint)] || 'unknown');
   function famCompat(f) { const c = compat(f, stackFam); return loraLib.showAll ? c !== 'incompatible' : c === 'native'; }
   let leftFiltered = $derived(allLoras.filter((l) =>
     (!stackSearch.trim() || l.name.toLowerCase().includes(stackSearch.toLowerCase())) && famCompat(l.fam)));
@@ -63,15 +63,15 @@
   <div class="builder">
     <div class="bleft">
       <input class="search" bind:value={stackSearch} placeholder="search loras…" />
-      {#if stackFam && stackFam !== 'unknown'}<div class="filt">showing <strong>{famLabel[stackFam] || stackFam}</strong> LoRAs (match the checkpoint){loraLib.showAll ? ' + compatible' : ''}</div>{/if}
+      {#if stackFam && stackFam !== 'unknown'}<div class="filt">showing <strong>{famLabel()[stackFam] || stackFam}</strong> LoRAs (match the checkpoint){loraLib.showAll ? ' + compatible' : ''}</div>{/if}
       <div class="loralist">
         {#each leftFiltered as l (l.name)}
           <button class="loraitem" class:used={inCurrent(l.name)} draggable="true"
             ondragstart={() => (dragName = l.name)} onclick={() => addToActive(l.name)} title={l.name}>
-            <span class="ach">{famLabel[l.fam] || l.fam}</span><span class="ln">{baseName(l.name)}</span><span class="plus">＋</span>
+            <span class="ach">{famLabel()[l.fam] || l.fam}</span><span class="ln">{baseName(l.name)}</span><span class="plus">＋</span>
           </button>
         {/each}
-        {#if !leftFiltered.length}<div class="filt">no LoRAs match{stackFam !== 'unknown' ? ` ${famLabel[stackFam] || stackFam}` : ''}.</div>{/if}
+        {#if !leftFiltered.length}<div class="filt">no LoRAs match{stackFam !== 'unknown' ? ` ${famLabel()[stackFam] || stackFam}` : ''}.</div>{/if}
       </div>
     </div>
 
@@ -86,7 +86,7 @@
       <div class="stackcard active">
         <div class="schead">
           <input class="sname" value={current.name} oninput={(e) => (current.name = e.target.value)} placeholder="stack name" />
-          <div class="sck"><Combobox items={ckItems} value={current.checkpoint} placeholder="checkpoint (sets compatible LoRAs)…" onpick={(v) => (current.checkpoint = v)} /></div>
+          <div class="sck"><Combobox items={ckItems()} value={current.checkpoint} placeholder="checkpoint (sets compatible LoRAs)…" onpick={(v) => (current.checkpoint = v)} /></div>
         </div>
         {#if !current.loras.length}
           <div class="drophint">drag or click LoRAs from the left to add them</div>

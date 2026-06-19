@@ -8,47 +8,32 @@ import { chars, charName } from './characters.svelte.js';
 import { stories } from './stories.svelte.js';
 import { app } from './app.svelte.js';
 
-// Models and Connections are each a folder of three sibling leaves — no in-page switcher.
+// Generation: single pane — connection, chat model, prompt gen, image workflow.
 const MODELS = [
-  { id: 'models', label: 'Models', children: [
-    { id: 'models-chat', label: 'Chat', href: '/settings/models/chat' },
-    { id: 'models-image-prompt', label: 'Image prompt', href: '/settings/models/image-prompt' },
-    { id: 'models-image', label: 'Image', href: '/settings/models/image' }
-  ]}
-];
-const CONNECTIONS = [
-  { id: 'connections', label: 'Connections', children: [
-    { id: 'conn-chat', label: 'Chat', href: '/settings/connections/chat' },
-    { id: 'conn-image-prompt', label: 'Image prompt', href: '/settings/connections/image-prompt' },
-    { id: 'conn-image', label: 'Image', href: '/settings/connections/image' }
-  ]}
+  { id: 'models', label: 'Generation', href: '/settings/models', match: 'prefix' }
 ];
 
-// Story generation config — relocated from /stories/config. Capped at 2 levels:
-// Settings → Story generation → stage. The Generation/Imaging grouping is rendered
-// as in-folder HEADERS (header: true), not a navigable third level. Global config
-// (story_builder.json + image_roles.json), not per-story.
+// Story pipeline — global config for all story-builder AI stages and image workflow
+// assignments (story_builder.json + image_roles.json), not per-story settings.
 const STORY_GEN = [
-  { id: 'story-gen', label: 'Story generation', children: [
-    { id: 'sg-gen-h', label: 'Generation', header: true },
+  { id: 'story-gen', label: 'Story pipeline', children: [
+    { id: 'sg-gen-h', label: 'Text stages', header: true },
     { id: 'sg-storyboard', label: 'Storyboard', href: '/settings/story-gen?section=storyboard' },
-    { id: 'sg-locations', label: 'Scenes', href: '/settings/story-gen?section=locations' },
     { id: 'sg-characters', label: 'Characters', href: '/settings/story-gen?section=characters' },
+    { id: 'sg-locations', label: 'Locations', href: '/settings/story-gen?section=locations' },
     { id: 'sg-wardrobe', label: 'Wardrobe', href: '/settings/story-gen?section=wardrobe' },
-    { id: 'sg-base_image', label: 'Base features', href: '/settings/story-gen?section=base_image' },
-    { id: 'sg-img-h', label: 'Imaging', header: true },
-    { id: 'sg-base', label: 'Base render', href: '/settings/story-gen?section=base' },
+    { id: 'sg-base_image', label: 'Appearance', href: '/settings/story-gen?section=base_image' },
+    { id: 'sg-img-h', label: 'Image workflows', header: true },
+    { id: 'sg-base', label: 'Portrait', href: '/settings/story-gen?section=base' },
     { id: 'sg-style', label: 'Style', href: '/settings/story-gen?section=style' },
     { id: 'sg-sprite', label: 'Sprites', href: '/settings/story-gen?section=sprite' },
-    { id: 'sg-scene', label: 'Scene render', href: '/settings/story-gen?section=scene' },
-    { id: 'sg-chat', label: 'Chat', href: '/settings/story-gen?section=chat' }
+    { id: 'sg-scene', label: 'Scene', href: '/settings/story-gen?section=scene' },
   ]}
 ];
 
 export function settingsTree() {
   return [
     ...MODELS,
-    ...CONNECTIONS,
     ...STORY_GEN,
     { id: 'comfyui', label: 'ComfyUI', href: '/settings/comfyui' },
     { id: 'trainer', label: 'Trainer', href: '/settings/trainer' },
@@ -67,7 +52,7 @@ export function charactersTree() {
   ];
 }
 
-// Roles moved to Settings ▸ Story generation ▸ Imaging. LoRA keeps its sub-leaves.
+// Roles moved to Settings ▸ Story pipeline ▸ Image workflows. LoRA keeps its sub-leaves.
 export function imagesTree() {
   return [
     { id: 'models', label: 'Models', href: '/images/models' },

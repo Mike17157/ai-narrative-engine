@@ -1,23 +1,24 @@
-"""Canonical emotion taxonomy — a FIXED, comprehensive range driving the sprite set.
+"""Canonical emotion taxonomy for the dating-sim / visual-novel pipeline.
 
-Grounded in **Plutchik's wheel of emotions**: 8 primary emotions at 3 intensities each (24
-graded states), plus the most useful dyads / social emotions (~8). A fixed vocabulary with
-STABLE keys means a character's emotion sprites are consistent across outfits and the runtime
-director can switch sprite by an exact emotion key (or snap a detected affect to the nearest
-canonical one). This replaces the old variable per-outfit `DEFAULT_EMOTIONS` set.
+Two pools, both stable-keyed so sprite filenames never orphan:
 
-Each entry: `key` (stable slug, used for filenames + lookup), `label` (display), `hint` (a few
-face cues steering the per-character expression-prompt generation — see
-AppContext.compose_expressions).
+  NORMAL_KEYS  — 29 everyday emotions suitable for any character rating.
+  NSFW_KEYS    — 15 intimacy/adult emotions added on top for mature characters.
 
---- Valence / Arousal substrate ------------------------------------------------
-Each key also carries a canonical **(valence, arousal)** coordinate on ±1 axes (Russell's
-circumplex — Plutchik's wheel IS a circumplex, so every key maps to one). These are the
-translation layer: the runtime director emits per-character {valence, arousal}; pure math
-(`nearest_emotion`) snaps those coords to the closest emotion key in a character's range. The
-32 keys carry the nuance (rage ≠ terror ≠ desire are distinct keys); V-A only SELECTS among
-them. A character's `affect.range` (see AppContext.compose_affect_range) is a personality-rooted
-SUBSET of these coords, nudged per persona — authored once and cached.
+The full EMOTIONS list is the union (44 entries). Each entry carries:
+  key   — stable slug used for filenames and runtime lookup
+  label — display name
+  hint  — concise face-cue tags that steer expression-prompt generation
+  va    — (valence, arousal) on ±1 axes (Russell circumplex).
+
+V-A IS DISPLAY METADATA ONLY. It is used to:
+  • sort the carousel X-axis in a sensible left-to-right circumplex sweep
+  • plot points in AffectScatter
+  • provide a sensible default ordering in compose_affect_range output
+
+Runtime sprite selection uses DIRECT KEY LOOKUP — the director names an
+emotion key from the character's affect.range; no coordinate snap occurs.
+nearest_emotion() is kept as a legacy fallback only.
 """
 from __future__ import annotations
 
@@ -25,97 +26,124 @@ import math
 import re
 
 EMOTIONS: list[dict] = [
-    # -- Plutchik primaries × 3 intensities (24) -----------------------------
-    # Each `va` is the canonical (valence, arousal) on ±1 axes (Russell circumplex).
-    # Intensity scales arousal (calm mild → activated extreme) and saturates valence.
-    {"key": "serenity", "label": "Serenity", "hint": "soft relaxed smile, calm eyes, gentle",
-     "va": (0.78, -0.68)},
-    {"key": "joy", "label": "Joy", "hint": "happy, smile, bright eyes",
-     "va": (0.82, 0.38)},
-    {"key": "ecstasy", "label": "Ecstasy", "hint": "wide open-mouth smile, sparkling eyes, sheer delight",
-     "va": (0.95, 0.85)},
-    {"key": "acceptance", "label": "Acceptance", "hint": "warm soft eyes, faint smile, content",
-     "va": (0.55, -0.42)},
-    {"key": "trust", "label": "Trust", "hint": "open relaxed expression, soft gaze, gentle smile",
-     "va": (0.62, -0.30)},
-    {"key": "admiration", "label": "Admiration", "hint": "wide adoring eyes, slight blush, parted lips",
-     "va": (0.58, 0.18)},
-    {"key": "apprehension", "label": "Apprehension", "hint": "slightly worried eyes, tense brow, small frown",
-     "va": (-0.42, 0.32)},
-    {"key": "fear", "label": "Fear", "hint": "wide scared eyes, raised eyebrows, open mouth, sweatdrop",
-     "va": (-0.62, 0.72)},
-    {"key": "terror", "label": "Terror", "hint": "terrified wide eyes, trembling, pale, tears, screaming",
-     "va": (-0.82, 0.95)},
-    {"key": "distraction", "label": "Distraction", "hint": "unfocused eyes, slightly raised brow, mild surprise",
-     "va": (0.05, 0.22)},
-    {"key": "surprise", "label": "Surprise", "hint": "raised eyebrows, wide eyes, open mouth, surprised",
-     "va": (0.10, 0.62)},
-    {"key": "amazement", "label": "Amazement", "hint": "shocked wide eyes, dropped jaw, surprised",
-     "va": (0.35, 0.85)},
-    {"key": "pensiveness", "label": "Pensiveness", "hint": "downcast eyes, faint frown, wistful",
-     "va": (-0.38, -0.38)},
-    {"key": "sadness", "label": "Sadness", "hint": "sad, frown, teary eyes, lowered brows",
-     "va": (-0.70, -0.28)},
-    {"key": "grief", "label": "Grief", "hint": "crying, streaming tears, anguished, clenched eyes",
-     "va": (-0.85, 0.52)},
-    {"key": "boredom", "label": "Boredom", "hint": "half-closed eyes, flat mouth, unamused, bored",
-     "va": (-0.35, -0.70)},
-    {"key": "disgust", "label": "Disgust", "hint": "wrinkled nose, narrowed eyes, grimace, sneer",
-     "va": (-0.68, 0.18)},
-    {"key": "loathing", "label": "Loathing", "hint": "deep scowl, bared teeth, intense revulsion",
-     "va": (-0.88, 0.58)},
-    {"key": "annoyance", "label": "Annoyance", "hint": "slight frown, furrowed brow, sidelong glance, pout",
-     "va": (-0.45, 0.30)},
-    {"key": "anger", "label": "Anger", "hint": "angry, furrowed brow, gritted teeth, glaring",
-     "va": (-0.75, 0.68)},
-    {"key": "rage", "label": "Rage", "hint": "furious, bared teeth, blazing eyes, shouting, veins",
+    # -- Normal / everyday emotions (29) -----------------------------------------
+    # Suitable for any character rating. These are the base dating-sim vocabulary.
+    {"key": "neutral",      "label": "Neutral",      "hint": "relaxed resting face, flat closed mouth, soft unfocused eyes",
+     "va": (0.02, 0.02)},
+    {"key": "happy",        "label": "Happy",        "hint": "bright warm smile, cheerful open eyes, content and at ease",
+     "va": (0.72, 0.22)},
+    {"key": "amused",       "label": "Amused",       "hint": "suppressed laugh, crinkled eyes, playful smirk, stifling a smile",
+     "va": (0.75, 0.28)},
+    {"key": "excited",      "label": "Excited",      "hint": "sparkling wide eyes, big open smile, flushed, lit up with energy",
+     "va": (0.72, 0.80)},
+    {"key": "proud",        "label": "Proud",        "hint": "chin lifted, direct confident gaze, satisfied dignified smile",
+     "va": (0.65, 0.12)},
+    {"key": "hopeful",      "label": "Hopeful",      "hint": "soft upward gaze, tentative smile, brows lifted, earnest longing",
+     "va": (0.65, 0.48)},
+    {"key": "intrigued",    "label": "Intrigued",    "hint": "one raised brow, slight lean forward, half-smile, quietly captivated",
+     "va": (0.45, 0.10)},
+    {"key": "curious",      "label": "Curious",      "hint": "wide bright eyes, raised brow, slight head tilt, attentive lean",
+     "va": (0.28, 0.38)},
+    {"key": "blushed",      "label": "Blushed",      "hint": "rosy flushed cheeks, slightly averted gaze, warm flustered expression",
+     "va": (0.45, -0.05)},
+    {"key": "shy",          "label": "Shy",          "hint": "downcast soft eyes, small timid smile, slightly hunched, gentle coloring",
+     "va": (0.25, -0.18)},
+    {"key": "sacred",       "label": "Sacred",       "hint": "soft closed eyes or reverent downward gaze, hushed gentle stillness, awed reverence",
+     "va": (0.55, -0.80)},
+    {"key": "longing",      "label": "Longing",      "hint": "wistful faraway gaze, aching softness in eyes, distant dreaming look",
+     "va": (-0.10, -0.20)},
+    {"key": "lustful",      "label": "Lustful",      "hint": "darkened heavy eyes, parted lips, flushed face, heated consuming look",
+     "va": (0.55, 0.62)},
+    {"key": "pleasure",     "label": "Pleasure",     "hint": "blissful closed eyes, flushed cheeks, soft open mouth, euphoric half-smile",
+     "va": (0.82, 0.65)},
+    {"key": "confused",     "label": "Confused",     "hint": "head tilted, furrowed brow, questioning squint, uncertain expression",
+     "va": (-0.12, 0.28)},
+    {"key": "shocked",      "label": "Shocked",      "hint": "jaw dropped, eyes wide as plates, hands raised, frozen in disbelief",
+     "va": (-0.15, 0.90)},
+    {"key": "begging",      "label": "Begging",      "hint": "pleading wide eyes, hands pressed together, desperate imploring look",
+     "va": (-0.28, 0.78)},
+    {"key": "embarrassed",  "label": "Embarrassed",  "hint": "bright blush, averted eyes, sheepish awkward smile",
+     "va": (-0.35, 0.50)},
+    {"key": "guilty",       "label": "Guilty",       "hint": "downcast guilty eyes, pressed lips, weighted ashamed expression",
+     "va": (-0.50, -0.25)},
+    {"key": "sad",          "label": "Sad",          "hint": "downturned eyes, small frown, damp lashes, quiet sorrow",
+     "va": (-0.62, -0.18)},
+    {"key": "tired",        "label": "Tired",        "hint": "heavy half-lidded eyes, slack relaxed expression, slow blink, worn and drained",
+     "va": (-0.18, -0.68)},
+    {"key": "exhausted",    "label": "Exhausted",    "hint": "heavy drooping eyelids, slack jaw, hollow drained stare, fully spent",
+     "va": (-0.22, -0.88)},
+    {"key": "annoyed",      "label": "Annoyed",      "hint": "flat frown, creased brow, impatient look, mild irritation",
+     "va": (-0.38, 0.18)},
+    {"key": "disappointed", "label": "Disappointed", "hint": "downcast eyes, slight frown, deflated expression, let down",
+     "va": (-0.42, -0.32)},
+    {"key": "frustrated",   "label": "Frustrated",   "hint": "jaw clenched, lips pressed, furrowed brow, pressured strained stare",
+     "va": (-0.45, 0.62)},
+    {"key": "disgusted",    "label": "Disgusted",    "hint": "wrinkled nose, curled upper lip, recoiling look of repulsion",
+     "va": (-0.60, 0.08)},
+    {"key": "scorn",        "label": "Scorn",        "hint": "curled lip, cold narrowed eyes, contemptuous head tilt, ice-cold superiority",
+     "va": (-0.65, 0.28)},
+    {"key": "angry",        "label": "Angry",        "hint": "clenched jaw, tight glare, hard pressed lips, controlled fury",
+     "va": (-0.68, 0.50)},
+    {"key": "rage",         "label": "Rage",         "hint": "furious, bared teeth, blazing eyes, shouting, veins",
      "va": (-0.92, 0.92)},
-    {"key": "interest", "label": "Interest", "hint": "curious raised brow, attentive eyes, faint smile",
-     "va": (0.35, 0.20)},
-    {"key": "anticipation", "label": "Anticipation", "hint": "eager eyes, slight smile, leaning in",
+    # -- NSFW / intimacy emotions (15) -------------------------------------------
+    # Added on top of the normal set for mature character ratings.
+    {"key": "anticipation", "label": "Anticipation", "hint": "eager eyes, slight smile, leaning in, barely containing excitement",
      "va": (0.52, 0.42)},
-    {"key": "vigilance", "label": "Vigilance", "hint": "intense focused stare, narrowed alert eyes, serious",
-     "va": (0.12, 0.62)},
-    # -- dyads / social emotions (8) -----------------------------------------
-    {"key": "love", "label": "Love", "hint": "soft loving eyes, blush, tender smile, heart",
-     "va": (0.80, 0.12)},
-    {"key": "desire", "label": "Desire (enticed)", "hint": "half-lidded seductive eyes, blush, parted lips, sultry smile",
+    {"key": "desire",       "label": "Desire",       "hint": "half-lidded seductive eyes, blush, parted lips, sultry smile",
      "va": (0.42, 0.55)},
-    {"key": "greed", "label": "Greed", "hint": "covetous grin, gleaming wide eyes, drooling, scheming",
-     "va": (0.08, 0.55)},
-    {"key": "optimism", "label": "Optimism", "hint": "hopeful bright eyes, confident smile, lifted brows",
-     "va": (0.70, 0.32)},
-    {"key": "remorse", "label": "Remorse", "hint": "downturned guilty eyes, frown, teary, looking away",
-     "va": (-0.62, -0.10)},
-    {"key": "contempt", "label": "Contempt", "hint": "smug half-lidded eyes, one raised brow, smirk, looking down",
-     "va": (-0.55, 0.08)},
-    {"key": "awe", "label": "Awe", "hint": "wide wonderstruck eyes, parted lips, sparkles",
-     "va": (0.48, 0.55)},
-    {"key": "disappointment", "label": "Disappointment", "hint": "lowered gaze, slight frown, sigh, deflated",
-     "va": (-0.48, -0.42)},
+    {"key": "teasing",      "label": "Teasing",      "hint": "sly smile, one raised brow, playful gleam, tongue-tip or biting lip",
+     "va": (0.32, 0.50)},
+    {"key": "comfort",      "label": "Comfort",      "hint": "soft relaxed face, gentle closed-mouth smile, eyes softly lidded, warmly settled",
+     "va": (0.65, -0.45)},
+    {"key": "relief",       "label": "Relief",       "hint": "exhale of relief, eyes shut or cast down, tension leaving face, small grateful smile",
+     "va": (0.72, -0.62)},
+    {"key": "ecstasy",      "label": "Ecstasy",      "hint": "wide open-mouth smile, sparkling eyes, sheer overwhelming delight",
+     "va": (0.95, 0.85)},
+    {"key": "arousal",      "label": "Arousal",      "hint": "heavy-lidded eyes, flushed cheeks, parted lips, breathless expression",
+     "va": (0.50, 0.80)},
+    {"key": "intensity",    "label": "Intensity",    "hint": "wide unwavering stare, heavy breath, fully flushed, completely consumed",
+     "va": (0.05, 0.90)},
+    {"key": "release",      "label": "Release",      "hint": "eyes closing, jaw loosening, tension draining from face, soft exhale expression",
+     "va": (0.60, -0.05)},
+    {"key": "submission",   "label": "Submission",   "hint": "soft downcast eyes, relaxed parted lips, slightly bowed head, docile yielding",
+     "va": (0.22, -0.35)},
+    {"key": "arrogant",     "label": "Arrogant",     "hint": "chin raised, smug grin, one brow arched high, dismissive tilt",
+     "va": (-0.20, 0.30)},
+    {"key": "condescension","label": "Condescension","hint": "slight smirk, lowered eyelids, head angled down, calm superiority",
+     "va": (-0.45, -0.18)},
+    {"key": "discomfort",   "label": "Discomfort",   "hint": "strained grimace, tense brow, averted gaze, lips pressed tight",
+     "va": (-0.55, 0.48)},
+    {"key": "humiliation",  "label": "Humiliation",  "hint": "burning blush, downcast eyes, trembling lip, visible shame",
+     "va": (-0.65, 0.60)},
+    {"key": "pain",         "label": "Pain",         "hint": "screwed-shut eyes or teary, bared teeth or bitten lip, furrowed brow, pained tension",
+     "va": (-0.78, 0.82)},
 ]
+
+# Stable key lists — the two pools a character's affect.range draws from.
+NORMAL_KEYS: list[str] = [e["key"] for e in EMOTIONS if e["key"] not in {
+    "anticipation", "desire", "teasing", "comfort", "relief", "ecstasy",
+    "arousal", "intensity", "release", "submission", "arrogant",
+    "condescension", "discomfort", "humiliation", "pain",
+}]
+
+NSFW_KEYS: list[str] = [e["key"] for e in EMOTIONS if e["key"] not in set(NORMAL_KEYS)]
 
 EMOTION_KEYS: list[str] = [e["key"] for e in EMOTIONS]
 EMOTION_LABELS: dict[str, str] = {e["key"]: e["label"] for e in EMOTIONS}
 EMOTION_HINTS: dict[str, str] = {e["key"]: e["hint"] for e in EMOTIONS}
-# Canonical (valence, arousal) on ±1 axes — Russell's circumplex. The translation substrate:
-# a {v,a} coordinate snaps (nearest_emotion) to the closest emotion key. The 32 keys carry the
-# nuance; V-A only SELECTS among them. See nearest_emotion / canonical_range below.
 EMOTION_COORDS: dict[str, tuple[float, float]] = {e["key"]: e["va"] for e in EMOTIONS}
 
-# The neutral / no-strong-emotion coordinate (used for the base + outfit images, and as the
-# fallback when the director emits nothing). Calm, mildly pleasant.
+# Calm, mildly pleasant — used for base/outfit images and as the no-emotion fallback.
 NEUTRAL_COORD: tuple[float, float] = (0.15, -0.50)
 
 
 def slug(name: str) -> str:
-    """Normalize an emotion name to its stable key form (matches the manifest/file convention)."""
+    """Normalize an emotion name to its stable key form."""
     return re.sub(r"[^\w\-]+", "-", str(name or "").lower()).strip("-")
 
 
 def _coord_of(item: dict) -> tuple[float, float]:
-    """Read a (valence, arousal) pair from an emotion entry — accepts either an explicit `va`
-    tuple, or separate `valence`/`arousal` floats (the persona-rooted range shape), clamped ±1."""
     if "va" in item:
         v, a = item["va"]
     else:
@@ -125,12 +153,10 @@ def _coord_of(item: dict) -> tuple[float, float]:
 
 def nearest_emotion(valence: float, arousal: float,
                     range_with_coords: list[dict]) -> str | None:
-    """Snap a {valence, arousal} coordinate to the nearest emotion key in the given range.
+    """Legacy fallback: snap a {valence, arousal} coord to the nearest key.
 
-    Pure Euclidean nearest over the provided entries (each a dict with an `emotion` key and
-    either a `va` tuple or `valence`/`arousal` floats). Returns the emotion key, or None if the
-    range is empty. This is the runtime translation step: the director's per-character {v,a} →
-    the closest sprite key in THIS character's range. No model call — just math."""
+    Only called when the director emits raw V-A instead of a direct key.
+    New code should pass emotion keys directly (see PLAY_SCHEMA)."""
     if not range_with_coords:
         return None
     v, a = float(valence), float(arousal)
@@ -147,17 +173,24 @@ def nearest_emotion(valence: float, arousal: float,
 
 
 def canonical_range(keys: list[str] | None = None) -> list[dict]:
-    """The full emotion taxonomy as a coordinate range, in canonical V-A order —
-    `[{emotion, valence, arousal}, ...]`. This is the BACK-COMPAT fallback: a character with no
-    persona-rooted `affect.range` snaps against the full 32 at canonical coords, which is
-    identical to today's exact-match-on-the-full-set behaviour, so existing sprites never orphan.
+    """Full emotion set as a display-ready range, sorted by circumplex angle.
 
-    `keys` optionally restricts to a subset (e.g. only keys a character has rendered sprites for),
-    preserving the canonical V-A sort."""
+    Returns [{emotion, valence, arousal}, ...] — the shape the frontend expects
+    for carousel ordering and AffectScatter. Used as the fallback when a character
+    has no authored affect.range."""
     ks = keys or EMOTION_KEYS
     out = [{"emotion": k, "valence": EMOTION_COORDS[k][0], "arousal": EMOTION_COORDS[k][1]}
            for k in ks if k in EMOTION_COORDS]
-    # sort by angle around the circumplex (arctan2 of arousal, valence) → a stable, pleasant
-    # left-to-right traversal of the wheel for the carousel X axis.
+    out.sort(key=lambda e: math.atan2(e["arousal"], e["valence"]))
+    return out
+
+
+def range_to_display(keys: list[str]) -> list[dict]:
+    """Convert a list of emotion keys to the display-ready [{emotion, label, valence, arousal}]
+    shape, sorted by circumplex angle. Enriches a stored list-of-strings range before sending
+    to the frontend (carousel ordering, AffectScatter)."""
+    out = [{"emotion": k, "label": EMOTION_LABELS[k],
+            "valence": EMOTION_COORDS[k][0], "arousal": EMOTION_COORDS[k][1]}
+           for k in keys if k in EMOTION_COORDS]
     out.sort(key=lambda e: math.atan2(e["arousal"], e["valence"]))
     return out

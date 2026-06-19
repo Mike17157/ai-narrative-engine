@@ -46,9 +46,9 @@
 {#if loading}
   <div class="hint">Loading models…</div>
 {:else if !data.connected}
-  <div class="hint">No chat connection yet — set one up in <a href="/settings/connections">Settings ▸ Connections</a>.{#if data.error} <span class="err">({data.error})</span>{/if}</div>
+  <div class="hint">No language connection yet — set one up in <a href="/settings/models">Settings ▸ Generation</a>.{#if data.error} <span class="err">({data.error})</span>{/if}</div>
 {:else}
-  <div class="hint">The model used for chat. {data.models.length} models available from your connection. Wire it up in <a href="/settings/connections">Connections</a>.</div>
+  <div class="hint">The model used for chat. {data.models.length} models available from your connection.</div>
   <label>Chat model</label>
   <Combobox items={items} value={data.active} placeholder="search models…" onpick={pick} />
   {#if msg}<div class:ok={msg.ok} class:err={msg.err} style="font-size:13px;margin-top:8px">{msg.text}</div>{/if}

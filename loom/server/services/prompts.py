@@ -94,29 +94,25 @@ PERSONA_SCHEMA = {
 }
 
 # Tier-A of the valence translation layer: authors a character's personality-rooted EMOTIONAL
-# EXPRESSION RANGE — a curated SUBSET of the fixed 32-key taxonomy, each placed on the canonical
+# EXPRESSION RANGE — a curated SUBSET of the canonical emotion taxonomy, each placed on the
 # (valence, arousal) circumplex and NUDGED per persona. The runtime director then emits {v,a} per
 # turn and snaps to the nearest key in this range. NOT invention-gated (a deterministic read of the
 # persona, like the base-image features). See AppContext.compose_affect_range.
 _AFFECT_SYSTEM = (
-    "You are an acting coach mapping a character's EMOTIONAL EXPRESSION RANGE onto the valence/"
-    "arousal circumplex. Valence (-1..1) is how PLEASANT the feeling is (misery to delight); arousal "
-    "(-1..1) is how ACTIVATED the body is (calm/still to agitated/explosive). You are given a FIXED "
-    "vocabulary of 32 emotion keys, each with its CANONICAL valence/arousal position.\n\n"
-    "Two jobs, both rooted in THIS character's persona:\n"
-    "(1) SELECT a SUBSET of 8-16 keys they actually express — the emotions that genuinely live in "
-    "their personality. A cheerful optimist centers on joy/serenity/interest and barely touches rage; "
-    "a volatile temper has anger/rage/annoyance prominent; a melancholy character centers sadness/"
-    "pensiveness/grief. Do NOT just return all 32 — a range is expressive because it is CURATED. "
-    "Cover both poles (some pleasant + some unpleasant) unless the persona truly never feels one side.\n"
-    "(2) NUDGE each selected key's valence/arousal to fit how THIS character feels it, anchored near "
-    "the canonical position. Personality moves coordinates: a stoic's whole range compresses toward "
-    "low arousal (their 'rage' is quieter, lower-arousal, than the canonical rage); a volatile "
-    "character's spreads high (their 'annoyance' is higher-arousal than baseline); an anxious "
-    "character's fear/apprehension sit higher-arousal; a warm character's joy sits higher-valence. "
-    "Keep nudges MODERATE (typically ±0.2) so the canonical structure is preserved — never invert a "
-    "feeling's valence (sadness stays negative, joy stays positive).\n\n"
-    "Return ONLY the selected keys with their nudged coordinates."
+    "You are a casting director building a character's EMOTIONAL EXPRESSION RANGE — the specific "
+    "set of emotions this character can display as portrait sprites. You are given a vocabulary of "
+    "emotion keys and a character persona. Your job is to curate a subset that fits the character.\n\n"
+    "Rules:\n"
+    "(1) SELECT 8-14 keys the character genuinely expresses. Root the selection in personality: a "
+    "cheerful optimist centers on happy/amused/excited; a volatile character gets angry/frustrated/"
+    "rage; a shy romantic leads with blushed/shy/longing/hopeful. Do NOT return the entire "
+    "vocabulary — a range is expressive BECAUSE it is curated and personal.\n"
+    "(2) Cover emotional breadth: include at least 2 positive, 2 negative, and 1-2 neutral/ambiguous "
+    "keys unless the persona genuinely never goes there.\n"
+    "(3) For adult/NSFW characters the intimacy keys (desire, arousal, teasing, submission, ecstasy, "
+    "etc.) are available — include them when they fit the persona.\n"
+    "(4) Always include 'neutral' — every character needs a resting face.\n\n"
+    "Return ONLY the selected emotion keys as a JSON list of strings."
 )
 # Appended to every portrait render so sprites are consistent, chat-friendly busts. Front-facing,
 # straight-on anchors keep the camera steady.
@@ -146,6 +142,43 @@ def _gen_text(provider, system: str, prompt: str, images: list[str] | None = Non
     res = provider.generate_text(system=system, prompt=prompt, images=images or [])
     return (res.text or "").strip().replace("\n", " ").strip(" ,.")
 
+
+# Unified outfit author: one dedicated call per outfit that generates BOTH the character's
+# appearance AND their outfit as a single coherent prose prompt. All outfits run in parallel.
+# The result replaces the old two-piece (appearance + attire) concatenation at render time.
+_UNIFIED_OUTFIT_SYSTEM = (
+    "You write a COMPLETE image-generation prompt for ONE character in ONE outfit. "
+    "You receive the character's persona and appearance notes, plus the outfit name and a "
+    "brief visual concept.\n\n"
+    "Write 80-150 words of vivid natural-language prose — a single descriptive paragraph — "
+    "covering the character's FULL appearance IN this outfit:\n"
+    "  • Physical features: hair (colour, length, style), eyes (colour), skin tone, body type, "
+    "any distinctive features\n"
+    "  • The complete outfit: every garment (with colour and material), layers, legwear, footwear, "
+    "headwear, accessories, jewellery, makeup, piercings — one coherent palette\n\n"
+    "Style rules:\n"
+    "  • Flowing descriptive prose — NOT a tag list, NOT comma-dumped descriptors\n"
+    "  • Plain real colour words and real garment/feature names\n"
+    "  • Personality subtly visible in how they wear it\n"
+    "  • Do NOT include: expression, pose, background, camera framing, art-style, or quality words\n"
+    "  • Keep a neutral standing posture (pose is added separately)\n\n"
+    "The text goes directly to a natural-language anime image model — vivid, specific prose reads "
+    "far better than a flat tag list."
+)
+
+UNIFIED_OUTFIT_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["prompt"],
+    "properties": {
+        "prompt": {
+            "type": "string",
+            "description": (
+                "80-150 word natural-language prose: the character's physical appearance (hair, eyes, "
+                "skin, body) woven together with the complete outfit (garments, colours, accessories, "
+                "makeup). A single coherent paragraph. No expression, pose, background, or quality words."
+            ),
+        },
+    },
+}
 
 # The OUTFIT counterpart of the structured base — one complete, detailed outfit. (Emotions are a
 # fixed canonical taxonomy; see services/emotions.py.)
@@ -204,24 +237,16 @@ PLAY_SCHEMA = {
         "reply": {"type": "string"},
         "location": {"type": "string"},
         "present": {"type": "array", "items": {"type": "string"}},
-        # Per present character: the valence/arousal translation layer. The director judges each
-        # character's affect as two numbers (valence = pleasure ±1, arousal = activation ±1); the
-        # server snaps them to the nearest emotion key in THAT character's personality-rooted range
-        # (services.emotions.nearest_emotion). `valence`/`arousal` are optional so an older model
-        # returning a bare `emotion` word still validates (exact-match fallback).
+        # Per present character: pick ONE emotion key from that character's listed range.
+        # The key is used directly for sprite lookup — no coordinate translation.
         "emotions": {"type": "array", "items": {
             "type": "object", "additionalProperties": False,
             "required": ["character", "emotion"],
             "properties": {
                 "character": {"type": "string"},
                 "emotion": {"type": "string",
-                            "description": "one lowercase word naming the character's current emotion "
-                                           "(a back-compat anchor; the valence/arousal below drive the "
-                                           "actual sprite selection)"},
-                "valence": {"type": "number", "minimum": -1, "maximum": 1,
-                            "description": "pleasure -1..1 (misery to delight)"},
-                "arousal": {"type": "number", "minimum": -1, "maximum": 1,
-                            "description": "activation -1..1 (calm/still to agitated/explosive)"},
+                            "description": "exact emotion key from this character's available range "
+                                           "(listed in the system prompt under their name)"},
             }}},
         "movement": {"type": "boolean"},
     },

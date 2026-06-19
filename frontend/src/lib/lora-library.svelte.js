@@ -29,34 +29,39 @@ export const folderFam = (name) => {
   return (p.length > 1 ? p[0] : 'unknown').toLowerCase();
 };
 
-export const loraFamMap = $derived(Object.fromEntries(
+// These derive from loraLib ($state), but Svelte 5 forbids exporting $derived
+// from a module — so they're exported as functions that recompute on call.
+// Invoked inside a component's $derived/template they read loraLib and stay
+// reactive; the read registers the dependency just like a $derived would.
+export const loraFamMap = () => Object.fromEntries(
   (loraLib.scan.items || []).filter((i) => i.kind === 'lora')
-    .map((i) => [i.rel, i.family || 'unknown'])));
-export const baseFamMap = $derived(Object.fromEntries(
+    .map((i) => [i.rel, i.family || 'unknown']));
+export const baseFamMap = () => Object.fromEntries(
   (loraLib.scan.items || []).filter((i) => i.kind === 'checkpoint' || i.kind === 'diffusion')
-    .map((i) => [i.rel, i.family || 'unknown'])));
-export const famArch = $derived(Object.fromEntries(
-  (loraLib.families || []).map((f) => [f.id, (f.arch || '').toLowerCase()])));
-export const famLabel = $derived(Object.fromEntries(
-  (loraLib.families || []).map((f) => [f.id, f.label])));
+    .map((i) => [i.rel, i.family || 'unknown']));
+export const famArch = () => Object.fromEntries(
+  (loraLib.families || []).map((f) => [f.id, (f.arch || '').toLowerCase()]));
+export const famLabel = () => Object.fromEntries(
+  (loraLib.families || []).map((f) => [f.id, f.label]));
 
-export const famOf = (name) => loraFamMap[normRel(name)] || folderFam(name);
+export const famOf = (name) => loraFamMap()[normRel(name)] || folderFam(name);
 
 // Soft compatibility: 'native' (same family), 'cross' (same arch, different
 // sub-family — usually works), or 'incompatible' (different arch).
 export function compat(lf, mf) {
   if (!lf || !mf || lf === 'unknown' || mf === 'unknown') return 'cross';
   if (lf === mf) return 'native';
-  return (famArch[lf] && famArch[lf] === famArch[mf]) ? 'cross' : 'incompatible';
+  const fa = famArch();
+  return (fa[lf] && fa[lf] === fa[mf]) ? 'cross' : 'incompatible';
 }
 
-// Reused option lists for the comboboxes.
-export const loraItems = $derived((loraLib.choices.loras || []).map((c) => ({ value: c, label: c })));
-export const ckItems = $derived([
+// Reused option lists for the comboboxes (functions — see the note above).
+export const loraItems = () => (loraLib.choices.loras || []).map((c) => ({ value: c, label: c }));
+export const ckItems = () => [
   { value: '', label: '— workflow default —' },
   ...(loraLib.choices.checkpoints || []).map((c) => ({ value: c, label: c })),
-]);
-export const baseFamByKey = $derived(Object.fromEntries(loraLib.bases.map((b) => [b.key, b.family])));
+];
+export const baseFamByKey = () => Object.fromEntries(loraLib.bases.map((b) => [b.key, b.family]));
 
 // The API stores keys as arrays; the edit UI joins them to comma strings.
 // Hydrate one way (load), serialize back on save.

@@ -12,7 +12,7 @@ from pathlib import Path
 
 
 # -- story builder -----------------------------------------------------------
-STORY_BUILDER_DEFAULT = {"model": "", "models": {}, "inventions": {}, "systems": {}}
+STORY_BUILDER_DEFAULT = {"model": "", "models": {}, "systems": {}}
 
 
 def load_story_builder(root: Path) -> dict:
@@ -34,12 +34,6 @@ def _stage_model(cfg: dict, stage: str | None, override: str | None = None) -> s
         return override
     per = (cfg.get("models") or {}).get(stage or "") if stage else ""
     return per or cfg.get("model") or ""
-
-
-def _stage_invention(cfg: dict, stage: str | None) -> str:
-    """The invention level configured for a STAGE (its own setting; default
-    'balanced'). 'none' disables the directive for that stage."""
-    return ((cfg.get("inventions") or {}).get(stage or "") if stage else "") or "balanced"
 
 
 # -- per-role image-workflow overrides ---------------------------------------

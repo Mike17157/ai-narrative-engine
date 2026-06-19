@@ -125,7 +125,7 @@
 
 <div class="controls">
   <button class="bar-btn" onclick={resetChat} title="Clear this conversation and start fresh">↺ New chat</button>
-  <a class="bar-btn" href="/settings/models" title="Models, connections & system prompts — in Settings">⚙ Models</a>
+  <a class="bar-btn" href="/settings/models/chat" title="Language model, connections & system prompt — in Settings">⚙ Generation</a>
 </div>
 
 <div class="log" bind:this={logEl}>
@@ -134,7 +134,7 @@
       {#if activeCharObj?.avatar}<img class="emimg" src={activeCharObj.avatar} alt="" />{:else}<div class="emark"></div>{/if}
       <p>Chat with {charName}</p>
       <span class="hint">
-        {#if connected}Running on <b>{activeChat}</b>.{:else}No model connected — replies are a local prototype. Set one up in <a href="/settings/models">Settings ▸ Models</a>.{/if}
+        {#if connected}Running on <b>{activeChat}</b>.{:else}No model connected — replies are a local prototype. Set one up in <a href="/settings/models">Settings ▸ Generation</a>.{/if}
       </span>
     </div>
   {/if}

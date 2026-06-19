@@ -4,7 +4,13 @@
   import { app } from '$lib/app.svelte.js';
   import Combobox from '$lib/components/Combobox.svelte';
   import { askConfirm } from '$lib/confirm.svelte.js';
+  import { goto } from '$app/navigation';
   import { chars, blurb, selectChar, deleteChar } from '$lib/characters.svelte.js';
+
+  function openChar(c) {
+    if (c.story) goto(`/stories/${c.story}/cast?c=${c.key}`);
+    else selectChar(c.key);
+  }
 
   async function delCard(c) {
     if (await askConfirm({ title: `Delete ${c.name || c.key}?`,
@@ -58,7 +64,7 @@
 </script>
 
 {#snippet card(c)}
-  <div class="pcard" class:sel={c.key === app.activeChar} role="button" tabindex="0" onclick={() => selectChar(c.key)}>
+  <div class="pcard" class:sel={c.key === app.activeChar} role="button" tabindex="0" onclick={() => openChar(c)}>
     {#if c.reference || c.avatar}
       <img class="pav" src={c.reference || c.avatar} alt={c.name} />
     {:else}

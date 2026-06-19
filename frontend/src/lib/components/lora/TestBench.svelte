@@ -14,7 +14,7 @@
 
   let testStack = $state('');
   let testTheme = $state('');
-  let testModel = $state('illustrious');
+  let testModel = $state('anima');
 
   // Sync to the externally selected stack (from StackBuilder on the Stacks tab).
   $effect(() => { if (stack && stack !== testStack) testStack = stack; });
@@ -26,7 +26,7 @@
   let renderPct = $state(null);
   let renderErr = $state(null);
 
-  let imgModelItems = $derived((app.models?.image || []).map((m) => ({ value: m.key, label: m.key, group: famLabel[baseFamByKey[m.key]] || 'Other' })));
+  let imgModelItems = $derived((app.models?.image || []).map((m) => ({ value: m.key, label: m.key, group: famLabel()[baseFamByKey()[m.key]] || 'Other' })));
   let stackItems = $derived(loraLib.cfg.stacks.filter((s) => s.name).map((s) => ({ value: s.name, label: s.name })));
   let themeItems = $derived([{ value: '', label: '— none —' }, ...loraLib.cfg.library.filter((l) => l.type === 'theme' && l.name).map((l) => ({ value: l.name, label: l.name }))]);
 

@@ -21,20 +21,6 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
-INVENTION = {
-    "faithful": (
-        "Stay strictly faithful to the card. Only structure and lightly expand what is "
-        "explicitly present; do not invent beyond clear implications of the source material."
-    ),
-    "balanced": (
-        "Preserve everything the card establishes. Invent new plot, places and supporting "
-        "characters only where needed to make a coherent, plausible, playable story."
-    ),
-    "inventive": (
-        "Use the card as a creative seed. Freely invent a rich plot, places and supporting "
-        "cast, while keeping the core character entirely true to the card."
-    ),
-}
 
 _OBJ = "object"
 
@@ -97,15 +83,19 @@ PROTAGONIST_SCHEMA = {
     "properties": _CARD_PROPS,
 }
 
-# Wardrobe planning emits OUTFITS only — the emotion sprite set is now a FIXED canonical taxonomy
-# (composed per-character separately; see loom/server/services/emotions.py), no longer planned here.
+# Wardrobe PLANNING — emits outfit names + brief visual concepts only. A dedicated per-outfit
+# parallel pass (compose_outfit_prompt) generates the full unified prose prompt for each.
+# The emotion sprite set is a FIXED canonical taxonomy, not planned here.
 WARDROBE_SCHEMA = {
     "type": _OBJ, "additionalProperties": False, "required": ["outfits"],
     "properties": {
         "outfits": _arr({"type": _OBJ, "additionalProperties": False,
-                         "required": ["name", "attire_prompt"],
-                         "properties": {"name": {"type": "string"},
-                                        "attire_prompt": {"type": "string"}}}),
+                         "required": ["name", "concept"],
+                         "properties": {
+                             "name": {"type": "string"},
+                             "concept": {"type": "string",
+                                        "description": "A SHORT visual concept — 3-10 words naming the key garment(s) and palette (e.g. 'navy sailor uniform with pleated skirt' or 'red string bikini'). Do NOT write a full outfit description — a dedicated generation pass handles that."},
+                         }}),
     },
 }
 
@@ -280,21 +270,21 @@ DEFAULT_SYSTEMS = {
         + _APPEARANCE_RULE
     ),
     "wardrobe": (
-        "You are a character art director planning the OUTFITS for a visual-novel character. "
-        "Given the story and one character, produce the outfit list.\n\n"
-        "OUTFITS — the FIRST outfit is always a SWIMSUIT look: name it 'Base (swimwear)' with a "
-        "swimsuit concept (e.g. a coloured bikini for female characters, swim trunks for male). THEN "
-        "add the distinct outfits this character genuinely needs ACROSS THIS STORY: usually just one "
-        "main outfit; add more only when the plot clearly changes their attire (a transformation, a "
-        "time-skip, a formal event, a disguise, ruined/bloodied clothing).\n"
-        "For EACH outfit, write a SHORT CONCEPT in `attire_prompt` — just the handful of defining "
-        "garment tags (e.g. 'navy blue sailor uniform, pleated skirt' or 'red bikini'). Do NOT try to "
-        "fully detail every garment, accessory and colour here — a DEDICATED SECOND PASS expands each "
-        "outfit on its own into the complete, detailed look (full colours, legwear, footwear, "
-        "accessories, makeup, piercings). Keep this pass light so you don't get overwhelmed.\n\n"
-        "(The emotional EXPRESSION range is a fixed set handled separately — do not plan it here.)\n\n"
-        "Each `attire_prompt` is CLOTHING booru tags (NO facial expression, NO pose, NO background), "
-        "following these OUTFIT rules:\n" + _OUTFIT_RULE
+        "You are a character art director selecting the OUTFITS for a visual-novel character. "
+        "Your only job here is to decide WHICH outfits this character needs — a dedicated per-outfit "
+        "pass will write the full detailed prompt for each one.\n\n"
+        "OUTFITS — the FIRST outfit is always a SWIMSUIT look: name it 'Base (swimwear)' and give "
+        "the brief concept (e.g. 'red string bikini' or 'navy swim trunks'). THEN add the distinct "
+        "outfits this character genuinely needs ACROSS THIS STORY: usually just one main outfit; add "
+        "more only when the plot clearly changes their attire (a transformation, a time-skip, a formal "
+        "event, a disguise, ruined/bloodied clothing).\n\n"
+        "For EACH outfit, give:\n"
+        "  • `name` — a short descriptive label (e.g. 'Casual', 'School uniform', 'Evening gown')\n"
+        "  • `concept` — a 3-10 word visual sketch of the key garment(s) and palette ONLY. "
+        "Do NOT write a full description — that happens in the next pass.\n\n"
+        "(Emotional expressions are a fixed canonical taxonomy handled separately — do not plan them here.)\n"
+        "Keep this pass FAST AND LIGHT — resist the urge to detail accessories or colours beyond "
+        "what names the outfit."
     ),
     # Base-image generator: fills the fixed physical-feature schema (assembled into tags
     # in code). Invention does NOT apply here — a base image is a deterministic identity
@@ -328,22 +318,14 @@ def _card_context(name: str, persona: str, extras: dict) -> str:
     return "\n".join(parts)
 
 
-# Stages whose output is a deterministic identity capture — the invention directive
-# (how freely to invent beyond the card) does NOT apply to them.
-NO_INVENTION = {"base_image"}
-
 # Stages that read an image — they need a VISION-capable model, so the model picker filters
 # to those. base_image is NO LONGER here: its prompt is generated from the character's written
 # description (text), so a strong text model does it better than a hallucination-prone vision one.
 NEEDS_IMAGE: set[str] = set()
 
 
-def _sys(systems: dict, stage: str, invention: str) -> str:
-    base = (systems or {}).get(stage) or DEFAULT_SYSTEMS[stage]
-    # 'none'/'off' disables the directive for this stage; base_image never gets one.
-    if stage in NO_INVENTION or invention in (None, "none", "off"):
-        return base
-    return f"{base}\n\n{INVENTION.get(invention, INVENTION['balanced'])}"
+def _sys(systems: dict, stage: str) -> str:
+    return (systems or {}).get(stage) or DEFAULT_SYSTEMS[stage]
 
 
 def _slug(s: str, fallback: str = "x") -> str:
@@ -364,11 +346,11 @@ def _call(provider, system: str, prompt: str, schema: dict, stage: str, on_delta
 
 # Stage 1 — streamed as readable text, then parsed --------------------------- #
 def storyboard_inputs(*, name: str, persona: str, extras: dict | None = None,
-                      invention: str = "balanced", systems: dict | None = None) -> tuple[str, str]:
+                      systems: dict | None = None) -> tuple[str, str]:
     """(system, prompt) for the storyboard stage. Plain text (no structured
     output) so it can be streamed token-by-token and watched live."""
     card = _card_context(name, persona, extras or {})
-    return (_sys(systems or {}, "storyboard", invention),
+    return (_sys(systems or {}, "storyboard"),
             f"{card}\n\nStoryboard a plausible story for this character.")
 
 
@@ -416,7 +398,7 @@ def parse_storyboard(text: str) -> dict:
 
 
 # Stage 2 ------------------------------------------------------------------- #
-def extract_locations(provider, *, board: dict, invention: str = "balanced",
+def extract_locations(provider, *, board: dict,
                       systems: dict | None = None) -> dict:
     # Distinct place names from the beats (order-preserving), in the prompt.
     seen, places = set(), []
@@ -425,7 +407,7 @@ def extract_locations(provider, *, board: dict, invention: str = "balanced",
         if loc and loc.lower() not in seen:
             seen.add(loc.lower()); places.append(loc)
     place_lines = "\n".join(f"- {p}" for p in places) or "(infer from the logline)"
-    out = _call(provider, _sys(systems or {}, "locations", invention),
+    out = _call(provider, _sys(systems or {}, "locations"),
                 f"LOGLINE: {board.get('logline','')}\nTONE: {board.get('tone','')}\n"
                 f"PLACES THE STORY VISITS:\n{place_lines}\n\n"
                 f"Consolidate these into a tight set of KEENLY DISTINCT neutral locations.",
@@ -455,7 +437,7 @@ def _name_tokens(s: str) -> list[str]:
 
 
 def extract_protagonist(provider, *, name: str, persona: str, extras: dict | None = None,
-                        invention: str = "faithful", systems: dict | None = None, on_event=None) -> dict:
+                        systems: dict | None = None, on_event=None) -> dict:
     """Step 1 of cast-building: distill the imported source card into ONE clean BASE
     CHARACTER CARD — a structured persona (the source's own section format), the appearance
     booru tags, and a role. This card is the canonical format every supporting character
@@ -466,7 +448,7 @@ def extract_protagonist(provider, *, name: str, persona: str, extras: dict | Non
         on_event({"type": "phase", "label": f"Distilling the base card — {name}"})
     dl = (lambda t: on_event({"type": "delta", "text": t})) if on_event else None
     card = _card_context(name, persona, extras or {})
-    out = _call(provider, _sys(systems or {}, "protagonist", invention),
+    out = _call(provider, _sys(systems or {}, "protagonist"),
                 f"{card}\n\nNormalize this into ONE clean base character card for the main character.",
                 PROTAGONIST_SCHEMA, "protagonist", on_delta=dl)
     return {"name": out.get("name") or name, "persona": out.get("persona") or (persona or ""),
@@ -474,7 +456,7 @@ def extract_protagonist(provider, *, name: str, persona: str, extras: dict | Non
 
 
 def revise_character(provider, *, name: str, persona: str, role: str = "", appearance: str = "",
-                     instruction: str = "", board: dict | None = None, invention: str = "balanced",
+                     instruction: str = "", board: dict | None = None,
                      systems: dict | None = None, on_event=None) -> dict:
     """Re-derive ONE existing cast member's card with a user CHANGE applied — rewriting persona,
     role and appearance together so the story overview AND the base image stay in sync. `instruction`
@@ -500,14 +482,14 @@ def revise_character(provider, *, name: str, persona: str, role: str = "", appea
               "`name` unless the change explicitly renames them. Give an updated one-phrase `role`. "
               "The `appearance` field (and ONLY that field — the persona stays prose) must follow "
               "this:\n" + _APPEARANCE_RULE)
-    out = _call(provider, _sys(systems or {}, "protagonist", invention), prompt,
+    out = _call(provider, _sys(systems or {}, "protagonist"), prompt,
                 PROTAGONIST_SCHEMA, "characters", on_delta=dl)
     return {"name": out.get("name") or name, "persona": out.get("persona") or persona,
             "appearance": out.get("appearance", ""), "role": out.get("role") or role or "supporting"}
 
 
 def extract_characters(provider, *, name: str, persona: str, board: dict,
-                       extras: dict | None = None, invention: str = "balanced",
+                       extras: dict | None = None,
                        systems: dict | None = None, reference_card: str = "", on_event=None) -> dict:
     # The protagonist (the source character) is added separately as the primary cast
     # member — exclude her from the supporting NPCs even when beats use a short/variant
@@ -562,7 +544,7 @@ def extract_characters(provider, *, name: str, persona: str, board: dict,
     if reference_card:
         ref = ("\n\nBASE CHARACTER CARD (the MAIN CHARACTER) — write THIS supporting character "
                "in the EXACT same structure, section headings, and depth:\n" + reference_card)
-    sys_p = _sys(systems or {}, "characters", invention)
+    sys_p = _sys(systems or {}, "characters")
     logline = board.get("logline", "")
 
     # PHASE 1 — CAST ROSTER in ONE pass: assign each character a DISTINCT full name + a heritage,
@@ -650,7 +632,7 @@ def extract_characters(provider, *, name: str, persona: str, board: dict,
 
 # Stage 4 — wardrobe planning for one character (OUTFITS only; emotions are a fixed taxonomy) #
 def plan_wardrobe(provider, *, char_name: str, persona: str, appearance: str, story: dict,
-                  invention: str = "balanced", systems: dict | None = None, on_event=None) -> dict:
+                  systems: dict | None = None, on_event=None) -> dict:
     """Guess the outfits this character needs across the story (short attire concepts; a dedicated
     second pass details each). The emotion sprite set is a FIXED canonical taxonomy composed
     separately, so it is NOT planned here. `on_event` (optional): stream {type:phase|delta} so a UI
@@ -668,7 +650,7 @@ def plan_wardrobe(provider, *, char_name: str, persona: str, appearance: str, st
     if on_event:
         on_event({"type": "phase", "label": f"Planning {char_name}'s wardrobe"})
     dl = (lambda t: on_event({"type": "delta", "text": t})) if on_event else None
-    out = _call(provider, _sys(systems or {}, "wardrobe", invention), ctx, WARDROBE_SCHEMA, "wardrobe", on_delta=dl)
-    outfits = [{"name": o.get("name", ""), "attire_prompt": o.get("attire_prompt", "")}
-               for o in out.get("outfits", []) if o.get("attire_prompt")]
+    out = _call(provider, _sys(systems or {}, "wardrobe"), ctx, WARDROBE_SCHEMA, "wardrobe", on_delta=dl)
+    outfits = [{"name": o.get("name", ""), "concept": o.get("concept", "")}
+               for o in out.get("outfits", []) if o.get("name")]
     return {"outfits": outfits}

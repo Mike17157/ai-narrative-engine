@@ -14,7 +14,7 @@
   <div class="libhead"><span>LoRA</span><span>Type</span><span>Weight</span><span>On</span><span>Note</span><span></span></div>
   {#each loraLib.cfg.library as l, i (i)}
     <div class="librow">
-      <div class="lsel"><Combobox items={loraItems} value={l.name} placeholder="lora…" onpick={(v) => (l.name = v)} /></div>
+      <div class="lsel"><Combobox items={loraItems()} value={l.name} placeholder="lora…" onpick={(v) => (l.name = v)} /></div>
       <select bind:value={l.type}><option value="detail">detail</option><option value="theme">theme</option><option value="character">character</option></select>
       <ScrubInput class="w" step={0.01} min={-2} max={2} bind:value={l.weight} title="drag ↕ or click to type" />
       <input class="ck" type="checkbox" bind:checked={l.enabled} title={l.type === 'detail' ? 'always-on' : 'available to pick'} />

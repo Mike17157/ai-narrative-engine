@@ -22,7 +22,7 @@
   let selBase = $derived(loraLib.bases.find((b) => b.key === baseModel) || null);
   let wfFam = $derived(selBase?.family || 'unknown');
   function famMatch(f) { const c = compat(f, wfFam); return loraLib.showAll ? c !== 'incompatible' : c === 'native'; }
-  let baseItems = $derived(loraLib.bases.map((b) => ({ value: b.key, label: `${b.key}  ·  ${famLabel[b.family] || b.family || b.arch}` })));
+  let baseItems = $derived(loraLib.bases.map((b) => ({ value: b.key, label: `${b.key}  ·  ${famLabel()[b.family] || b.family || b.arch}` })));
   let visibleTriage = $derived(triageItems.filter((t) => famMatch(t.fam)));
   let triageDone = $derived(visibleTriage.filter((t) => t.img).length);
   let triageGroups = $derived((loraLib.families || []).map((f) => ({
@@ -115,7 +115,7 @@
   <div class="trow2">
     <button onclick={startTriage}>{triageRunning ? '■ Stop' : (triageDone ? 'Resume' : 'Render all')}</button>
     <span class="m">{triageDone}/{visibleTriage.length} rendered{triageRunning ? ' — generating…' : ''}</span>
-    {#if selBase}<span class="warnsm">{famLabel[selBase.family] || selBase.family || selBase.arch} · {visibleTriage.length} of {triageItems.length} LoRAs{triageItems.length - visibleTriage.length ? ` (${triageItems.length - visibleTriage.length} hidden)` : ''}</span>{/if}
+    {#if selBase}<span class="warnsm">{famLabel()[selBase.family] || selBase.family || selBase.arch} · {visibleTriage.length} of {triageItems.length} LoRAs{triageItems.length - visibleTriage.length ? ` (${triageItems.length - visibleTriage.length} hidden)` : ''}</span>{/if}
     <label class="allchk"><input type="checkbox" bind:checked={loraLib.showAll} /> show all compatible</label>
   </div>
 
@@ -131,7 +131,7 @@
             {:else if it.status === 'nockpt' || !selBase}<div class="ph err" title="pick a workflow above">no base</div>
             {:else}<button class="ph go" onclick={() => renderOne(it)} title="render this one">▶</button>{/if}
           </div>
-          <div class="cap" title={it.name}><span class="ach">{famLabel[it.fam] || it.fam}</span><span class="fn">{it.name.split(/[\\/]/).pop()}</span></div>
+          <div class="cap" title={it.name}><span class="ach">{famLabel()[it.fam] || it.fam}</span><span class="fn">{it.name.split(/[\\/]/).pop()}</span></div>
           <div class="types">
             {#each ['detail', 'theme', 'character', 'skip'] as t}
               <button class="tbtn {t}" class:on={it.type === t} onclick={() => classify(it, t)}>{t === 'character' ? 'char' : t}</button>

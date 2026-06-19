@@ -28,6 +28,11 @@ frontend/build/
 .cache/
 logs/
 
+# Launcher exe (build artifact — rebuild with dotnet publish)
+Loom.exe
+Loom.dll
+Loom.runtimeconfig.json
+
 # Large data files (runtime-only, not source)
 danbooru_character.csv
 loom/data/

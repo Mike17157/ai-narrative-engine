@@ -301,13 +301,13 @@ class AppContext:
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
 
     def builder_ctx(self, body: dict, stage: str | None = None):
-        """(provider, invention, systems) for a builder step, or (None, err, _).
-        Each stage carries its own model + invention config."""
+        """(provider, systems) for a builder step, or (None, err).
+        Each stage carries its own model config."""
         cfg = self.load_story_builder()
         provider = self.author_provider(config_files._stage_model(cfg, stage, (body or {}).get("model")))
         if provider is None or not hasattr(provider, "generate_text"):
-            return None, "no chat connection — connect a chat model first", None
-        return provider, config_files._stage_invention(cfg, stage), (cfg.get("systems") or {})
+            return None, "no chat connection — connect a chat model first"
+        return provider, (cfg.get("systems") or {})
 
     # A thin seed → a thorough, disciplined-prose character sheet. The single "flesh thin→rich" front
     # door that feeds every downstream parser (appearance / pose / expression → tags).
@@ -323,16 +323,16 @@ class AppContext:
         ch = self.base_settings.characters.get(key)
         if ch is None:
             return {"error": "no such character"}
-        provider, invention, systems = self.builder_ctx({}, "characters")
+        provider, systems = self.builder_ctx({}, "characters")
         if provider is None:
-            return {"error": invention}
+            return {"error": systems}
         fields = ch.fields or {}
         try:
             revised = revise_character(
                 provider, name=ch.name, persona=ch.system or "", role=fields.get("role", ""),
                 appearance=fields.get("appearance", ""),
                 instruction=instruction.strip() or self._FLESH_INSTRUCTION,
-                invention=invention, systems=systems)
+                systems=systems)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"flesh failed: {exc}"}
         safe = re.sub(r"[^\w\-]+", "", key)
@@ -517,36 +517,41 @@ class AppContext:
     def portrait_payload(self, key: str) -> dict:
         """The manifest enriched with served image URLs for the frontend.
 
-        - `affect.range` — the character's PERSONALITY-ROOTED emotion range (a curated subset of the
-          32 keys with persona-nudged V-A coords), in canonical circumplex order. This drives the
-          carousel's X axis. Falls back to the full 32 at canonical coords when none is authored
-          (== today's flat taxonomy), so a character without a composed range still renders fully.
-        - each outfit's `expression_set` stays the FULL fixed taxonomy (back-compat: a render can
-          target any key), but each entry now carries its (valence, arousal) so a cell can plot where
-          it sits, and `in_range` flags whether it's part of THIS character's personality range."""
+        affect.range in the manifest may be either the old format (list of dicts with
+        emotion/valence/arousal) or the new format (list of strings). Both are normalised to
+        a plain list of keys here; the API response enriches back to [{emotion, valence, arousal}]
+        for the frontend carousel and AffectScatter."""
         from .services.emotions import (EMOTION_KEYS, EMOTION_LABELS, EMOTION_COORDS,
-                                        canonical_range)
+                                        NORMAL_KEYS, range_to_display)
         m = self.portrait_manifest(key)
         base = f"/api/characters/{key}/portraits/img"
-        canon = m.get("expression_prompts") or {}   # character-level canonical {key: face_tags}
-        # The personality-rooted range (Tier-A), if authored; else the full 32 at canonical coords.
-        affect_stored = (m.get("affect") or {}).get("range") if isinstance(m.get("affect"), dict) else None
-        affect_range = affect_stored if affect_stored else canonical_range()
-        affect_keys = {e["emotion"] for e in affect_range}   # fast membership for in_range flag
-        coords = {e["emotion"]: (e.get("valence"), e.get("arousal")) for e in affect_range}
+        canon = m.get("expression_prompts") or {}
+        # Normalise affect.range to a list of string keys regardless of stored format.
+        raw_range = (m.get("affect") or {}).get("range") if isinstance(m.get("affect"), dict) else None
+        if isinstance(raw_range, list) and raw_range:
+            if isinstance(raw_range[0], dict):
+                # Old format: [{emotion, valence?, arousal?}] → extract keys
+                affect_key_list = [e["emotion"] for e in raw_range if e.get("emotion") in EMOTION_KEYS]
+            else:
+                # New format: [key1, key2, ...]
+                affect_key_list = [k for k in raw_range if k in EMOTION_KEYS]
+        else:
+            affect_key_list = list(NORMAL_KEYS)
+        affect_keys = set(affect_key_list)
+        # Build display-ready range (sorted by circumplex angle) for carousel + AffectScatter.
+        affect_range_display = range_to_display(affect_key_list)
         outfits = []
         for o in m.get("outfits", []):
             oid = o["id"]
             files = o.get("expressions") or {}
-            exprs = {emo: f"{base}/{oid}/{fn}" for emo, fn in files.items()}   # legacy {emo:url}
-            out_prompts = o.get("expression_prompts") or {}   # legacy per-outfit overrides, if any
+            exprs = {emo: f"{base}/{oid}/{fn}" for emo, fn in files.items()}
+            out_prompts = o.get("expression_prompts") or {}
             expression_set = [{
-                "emotion": k, "label": EMOTION_LABELS[k],
+                "emotion": k, "label": EMOTION_LABELS.get(k, k),
                 "prompt": out_prompts.get(k) or canon.get(k, ""),
                 "url": f"{base}/{oid}/{files[k]}" if files.get(k) else None,
-                # V-A from the range if present, else the canonical coord (so every cell is placeable).
-                "valence": (coords.get(k) or EMOTION_COORDS[k])[0],
-                "arousal": (coords.get(k) or EMOTION_COORDS[k])[1],
+                "valence": EMOTION_COORDS[k][0],
+                "arousal": EMOTION_COORDS[k][1],
                 "in_range": k in affect_keys,
             } for k in EMOTION_KEYS]
             outfits.append({
@@ -554,12 +559,13 @@ class AppContext:
                 "instruction": o.get("instruction", ""), "prompt": o.get("prompt", ""),
                 "attire_prompt": o.get("attire_prompt", o.get("prompt", "")),
                 "base": f"{base}/{oid}/base.png" if (o.get("base")) else None,
-                "expressions": exprs,                    # legacy map (standalone studio)
-                "expression_set": expression_set,        # full fixed taxonomy (cast wardrobe Sprites)
+                "expressions": exprs,
+                "expression_set": expression_set,
             })
         return {"appearance": m.get("appearance", ""),
                 "emotions": EMOTION_KEYS,
-                "affect": {"range": affect_range, "dimensions": ["valence", "arousal"]},
+                "affect": {"range": affect_range_display, "keys": affect_key_list,
+                           "dimensions": ["valence", "arousal"]},
                 "expression_prompts": canon, "outfits": outfits}
 
     def scenario_cast(self, scn) -> list[dict]:
@@ -775,145 +781,125 @@ class AppContext:
             data = {}
         return {k: (str(data.get(k) or "").strip() or fallback[k]) for k in EMOTION_KEYS}
 
-    def compose_affect_range(self, persona: str, model: str | None = None) -> dict:
-        """Author a character's personality-rooted EMOTIONAL EXPRESSION RANGE — the curated subset of
-        the fixed 32-key taxonomy that THIS character actually expresses, each placed on the canonical
-        (valence, arousal) circumplex and NUDGED to fit their personality. ONE structured call to the
-        cheap 'emotion'-stage model (DeepSeek 3.2 by default).
+    def compose_affect_range(self, persona: str, model: str | None = None,
+                             nsfw: bool = False) -> dict:
+        """Curate a character's EMOTIONAL EXPRESSION RANGE — the set of emotion keys they can
+        display as portrait sprites. ONE structured call to the cheap 'emotion'-stage model.
 
-        This is Tier-A of the valence translation layer: the 32 keys carry the nuance (rage ≠ terror
-        ≠ desire are distinct keys); this call (a) selects which ones a character expresses and (b)
-        displaces their canonical V-A coordinates per persona — a stoic compresses toward low arousal,
-        a volatile one spreads high, an anxious character's fear sits at higher arousal than baseline.
-        Authored ONCE per character (cached on the manifest) and reused every turn at runtime, where
-        the director's {v,a} snaps to the nearest key in this range (services.emotions.nearest_emotion).
+        Returns {range: [key1, key2, ...]} — a plain list of emotion key strings, sorted by
+        circumplex angle so the carousel X-axis has a stable, sensible left-to-right order.
 
-        Returns {range: [{emotion, valence, arousal}, ...]} in canonical circumplex order. On any
-        failure (no provider, bad structured output), falls back to the full 32 keys at canonical
-        coordinates — so a missing/failed cheap model never blocks sprite lookup (== today's behaviour)."""
-        from .services.emotions import (EMOTIONS, EMOTION_KEYS, EMOTION_COORDS, canonical_range)
-        fallback = {"range": canonical_range()}
+        The caller stores this list in the manifest as affect.range. At runtime the director picks
+        a key directly from this list — no coordinate snap. V-A is looked up from EMOTION_COORDS
+        at display time only (portrait_payload enriches the list before sending to the frontend).
+
+        On any failure falls back to the full NORMAL_KEYS set so sprite lookup never breaks."""
+        from .services.emotions import (EMOTIONS, EMOTION_KEYS, NORMAL_KEYS, NSFW_KEYS,
+                                        EMOTION_COORDS, range_to_display)
+        pool = EMOTION_KEYS if nsfw else NORMAL_KEYS
+        fallback = {"range": NORMAL_KEYS[:]}
         cfg = self.load_story_builder()
         provider = self.author_provider(config_files._stage_model(cfg, "emotion", model))
         if provider is None:
             return fallback
-        # The 'emotion' stage's system prompt (configs/story_builder.json systems.emotion, else the
-        # DEFAULT_AFFECT_SYSTEM in prompts). It is NOT invention-gated — a range is a deterministic
-        # read of the persona, like the base-image features.
         from .services.prompts import _AFFECT_SYSTEM
         systems = cfg.get("systems") or {}
         system = systems.get("emotion") or _AFFECT_SYSTEM
-        # Strict schema: emotion must be one of the 32 keys (the model cannot invent keys); valence
-        # and arousal are numbers in [-1, 1]. `additionalProperties: False` + a closed enum is what
-        # makes OpenAI-structured-output reliably validate against the real vocabulary.
-        emo_enum = {"type": "string", "enum": EMOTION_KEYS}
+        # Closed enum on the pool so the model cannot invent keys.
         schema = {
             "type": "object", "additionalProperties": False, "required": ["range"],
-            "properties": {"range": {"type": "array", "minItems": 6, "maxItems": 32, "items": {
-                "type": "object", "additionalProperties": False,
-                "required": ["emotion", "valence", "arousal"],
-                "properties": {
-                    "emotion": emo_enum,
-                    "valence": {"type": "number", "minimum": -1, "maximum": 1},
-                    "arousal": {"type": "number", "minimum": -1, "maximum": 1},
-                }}}},
+            "properties": {"range": {
+                "type": "array", "minItems": 6, "maxItems": len(pool),
+                "items": {"type": "string", "enum": pool},
+            }},
         }
-        # Hand the model the full menu (key, label, canonical coords) so it selects a subset and
-        # NUDGES coords, not invents them from scratch — anchored to the real positions.
-        listing = "\n".join(f"- {e['key']} ({e['label']}): v={EMOTION_COORDS[e['key']][0]:+.2f}, "
-                            f"a={EMOTION_COORDS[e['key']][1]:+.2f} — {e['hint']}" for e in EMOTIONS)
+        pool_emotions = [e for e in EMOTIONS if e["key"] in set(pool)]
+        listing = "\n".join(f"- {e['key']}: {e['hint']}" for e in pool_emotions)
         prompt = (f"CHARACTER PERSONA:\n{persona}\n\n"
-                  f"THE EMOTION VOCABULARY (32 keys, with canonical valence/arousal):\n{listing}\n\n"
-                  f"Select THIS character's emotional expression range: a SUBSET of 8-16 keys they "
-                  f"genuinely express (rooted in their personality — not all 32), and nudge each key's "
-                  f"valence/arousal to fit how THEY feel it. Return the range.")
+                  f"AVAILABLE EMOTION KEYS:\n{listing}\n\n"
+                  f"Return the emotion keys for this character's range.")
         try:
             data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
-        except Exception:  # noqa: BLE001 — never block on the cheap model
+        except Exception:  # noqa: BLE001
             return fallback
         raw = data.get("range") if isinstance(data, dict) else None
         if not isinstance(raw, list) or not raw:
             return fallback
-        # Ground: keep only real keys, clamp ±1, dedupe (first occurrence wins). A defensive parse
-        # so a slightly-off structured response still yields a usable range.
-        seen, cleaned = set(), []
-        for e in raw:
-            if not isinstance(e, dict):
-                continue
-            key = e.get("emotion")
-            if key not in EMOTION_COORDS or key in seen:
-                continue
-            try:
-                v = max(-1.0, min(1.0, float(e.get("valence", 0.0))))
-                a = max(-1.0, min(1.0, float(e.get("arousal", 0.0))))
-            except (TypeError, ValueError):
-                v, a = EMOTION_COORDS[key]
-            seen.add(key)
-            cleaned.append({"emotion": key, "valence": v, "arousal": a})
+        # Dedupe and ground to real keys only.
+        seen: set[str] = set()
+        pool_set = set(pool)
+        cleaned = [k for k in raw if isinstance(k, str) and k in pool_set and not seen.add(k)]  # type: ignore[func-returns-value]
         if not cleaned:
             return fallback
-        # canonical circumplex order (for a stable carousel X axis)
+        # Ensure neutral is always present.
+        if "neutral" in pool_set and "neutral" not in seen:
+            cleaned.append("neutral")
         import math
-        cleaned.sort(key=lambda x: math.atan2(x["arousal"], x["valence"]))
+        cleaned.sort(key=lambda k: math.atan2(EMOTION_COORDS[k][1], EMOTION_COORDS[k][0]))
         return {"range": cleaned}
 
     def compose_outfit_prompt(self, persona: str, base_appearance: str, outfit_name: str,
-                              attire_draft: str, model: str | None = None) -> dict:
-        """The OUTFIT counterpart of `_compose_base_prompt` — a UNIQUE 2-step call PER outfit (so the
-        model is never overwhelmed generating a whole wardrobe at once). Pass 1 fills OUTFIT_SCHEMA
-        (detailed best-guess garments+colours+accessories+makeup+piercings); pass 2 retrieves a faceted
-        PMI palette and CONSTRUCTS the final outfit from it. Returns {attire: snapped tag string}.
-        (Emotions are NO longer per-outfit — the sprite set is a fixed canonical taxonomy.) Empty
-        attire on failure (caller keeps the draft)."""
-        from ..scenario.builder import DEFAULT_SYSTEMS
+                              brief_concept: str = "", model: str | None = None) -> dict:
+        """Generate a UNIFIED prose prompt for ONE outfit: character appearance + outfit in a single
+        coherent 80-150 word passage. One dedicated LLM call per outfit — never batched with others
+        so the model gives each its full attention. Returns {attire, unified} where attire is the
+        complete prose prompt ready for the image model. unified=True tells the render pipeline not
+        to prepend the appearance separately (it is already embedded). Empty attire on failure."""
+        import re as _re
         cfg = self.load_story_builder()
         provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
         if provider is None:
-            return {"attire": ""}
+            return {"attire": "", "unified": False}
 
-        system = ((cfg.get("systems") or {}).get("wardrobe") or DEFAULT_SYSTEMS["wardrobe"]) + (
-            "\n\nNOW list the SINGLE outfit below as short, EXPLICIT garment descriptors (ONE coloured "
-            "piece per item): a COMPLETE, DETAILED look — every garment coloured, plus the accessories, "
-            "piercings and makeup that fit. Generous, never minimal. The system grounds each item to a "
-            "real booru tag.")
         context = "\n\n".join(p for p in [
             f"CHARACTER PERSONA:\n{persona}" if persona else "",
-            (f"CHARACTER BASE APPEARANCE (body + persistent worn jewelry/piercings — pick a palette "
-             f"that suits it; do NOT restate body/hair/face):\n{base_appearance}") if base_appearance else "",
-            f"OUTFIT: {outfit_name}" if outfit_name else "",
-            f"DRAFT / CONCEPT: {attire_draft}" if attire_draft else "",
+            f"BASE APPEARANCE (physical traits — for integration into the outfit prompt):\n{base_appearance}" if base_appearance else "",
+            f"OUTFIT NAME: {outfit_name}" if outfit_name else "",
+            f"OUTFIT CONCEPT: {brief_concept}" if brief_concept else "",
         ] if p)
-        # ONE call: the model lists ATOMIC garment descriptors; we dedupe and tidy (prose-intact).
-        feats = (provider.generate_text(system=system, prompt=context, emits=_prompts.OUTFIT_SCHEMA).data) or {}
-        items = [str(t).strip() for t in (feats.get("outfit") or []) if str(t).strip()]
-        if not items:
-            return {"attire": ""}
-        snapped = _prompts._snap_prompt(_prompts._safe_image_tags(", ".join(items)))
-        deduped = _prompts._dedupe_outfit_tags([t.strip() for t in snapped.split(",") if t.strip()])
-        return {"attire": _prompts._regionize_prompt(", ".join(deduped))}
+
+        try:
+            data = (provider.generate_text(
+                system=_prompts._UNIFIED_OUTFIT_SYSTEM,
+                prompt=context,
+                emits=_prompts.UNIFIED_OUTFIT_SCHEMA,
+            ).data) or {}
+        except Exception:  # noqa: BLE001
+            return {"attire": "", "unified": False}
+
+        prose = _re.sub(r"\s+", " ", (data.get("prompt") or "").strip())
+        if not prose:
+            return {"attire": "", "unified": False}
+        return {"attire": prose, "unified": True}
 
     def refine_outfits(self, outfits: list, persona: str, base_appearance: str,
                        model: str | None = None, emit=None) -> list:
-        """Run `_compose_outfit_prompt` over a wardrobe plan's outfits IN PARALLEL (the per-outfit
-        refine pass): each gets a careful 2-step booru `attire_prompt`. Emotions are NOT set here —
-        they come from the fixed canonical taxonomy at the character level. A failed outfit keeps
-        its draft."""
+        """Generate a unified appearance+outfit prose prompt for EVERY outfit in PARALLEL — one
+        dedicated LLM call per outfit, all fired simultaneously. Each call has the model's full
+        attention (never shared with other outfits). The brief planning concept seeds each call but
+        the model generates the complete prompt from scratch. Outfits whose generation fails keep
+        their concept as a fallback attire_prompt."""
         from concurrent.futures import ThreadPoolExecutor
         outfits = [dict(o) for o in (outfits or [])]
         if not outfits:
             return outfits
 
         def _one(o):
+            # Use the brief planning concept (or legacy attire_prompt if migrating old data)
+            concept = o.get("concept") or o.get("attire_prompt") or o.get("prompt") or ""
             try:
                 r = self.compose_outfit_prompt(persona, base_appearance, o.get("name", ""),
-                                               o.get("attire_prompt") or o.get("prompt") or "", model)
+                                               concept, model)
                 if r.get("attire"):
                     o["attire_prompt"] = r["attire"]
+                    o["unified"] = r.get("unified", False)
             except Exception:  # noqa: BLE001
                 pass
             if emit:
-                emit({"type": "item", "name": o.get("name", "outfit"), "text": o.get("attire_prompt", "")})
+                emit({"type": "item", "name": o.get("name", "outfit"),
+                      "text": o.get("attire_prompt", o.get("concept", ""))})
             return o
 
-        with ThreadPoolExecutor(max_workers=min(len(outfits), 6)) as ex:
+        # All outfits in parallel — max_workers = number of outfits (typically 2-5)
+        with ThreadPoolExecutor(max_workers=len(outfits)) as ex:
             return list(ex.map(_one, outfits))

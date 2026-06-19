@@ -24,7 +24,7 @@
       await new Promise((r) => setTimeout(r, 1000));
       try { const r = await fetch('/api/health'); if (r.ok) { location.reload(); return; } } catch { /* still down */ }
     }
-    restarting = false; // gave up waiting
+    restarting = false;
   }
 
   onMount(async () => {
@@ -34,53 +34,97 @@
 </script>
 
 <div class="screen">
-  <div class="col left">
-    <h3>Environment</h3>
-    <p class="hint flat">This machine. Profile is read from <code>user.yaml</code>; GPU/CUDA are auto-detected.</p>
-    <div class="grid">
-      <div class="kv"><span>Profile</span><b>{profile.name || '—'}</b></div>
-      {#if profile.email}<div class="kv"><span>Email</span><b>{profile.email}</b></div>{/if}
-      <div class="kv"><span>GPU</span><b>{gpu?.gpu || 'not detected'}</b></div>
-      <div class="kv"><span>CUDA</span><b>{gpu?.cuda || '—'}{gpu?.compute_cap ? ` · sm ${gpu.compute_cap}` : ''}</b></div>
+  <section class="card">
+    <div class="card-head">
+      <h3>Environment</h3>
+      <span class="card-sub">from <code>user.yaml</code></span>
     </div>
-  </div>
+    <div class="rows">
+      <div class="row"><span>Profile</span><b>{profile.name || '—'}</b></div>
+      {#if profile.email}<div class="row"><span>Email</span><b>{profile.email}</b></div>{/if}
+      <div class="row"><span>GPU</span><b title={gpu?.gpu}>{gpu?.gpu || 'not detected'}</b></div>
+      <div class="row"><span>CUDA</span><b>{gpu?.cuda || '—'}{gpu?.compute_cap ? ` · sm_${gpu.compute_cap}` : ''}</b></div>
+    </div>
+  </section>
 
-  <div class="col right">
-    <div class="chead">
-      <h3>Backend server</h3>
-      <span class="slight {restarting ? 'busy' : 'up'}"></span>
-      <span class="slbl">{restarting ? 'restarting…' : 'running'}</span>
+  <section class="card">
+    <div class="card-head">
+      <h3>Backend</h3>
+      <span class="dot {restarting ? 'busy' : 'up'}"></span>
+      <span class="status-lbl">{restarting ? 'restarting…' : 'running'}</span>
     </div>
-    <div class="grid">
-      <div class="kv"><span>Uptime</span><b>{fmtUptime(srv?.uptime_s)}</b></div>
-      <div class="kv"><span>Python</span><b class="mono">{srv?.python || '—'}</b></div>
-      <div class="kv"><span>PID</span><b class="mono">{srv?.pid || '—'}</b></div>
+    <div class="rows">
+      <div class="row"><span>Uptime</span><b>{fmtUptime(srv?.uptime_s)}</b></div>
+      <div class="row"><span>Python</span><b class="mono">{srv?.python || '—'}</b></div>
+      <div class="row"><span>PID</span><b class="mono">{srv?.pid || '—'}</b></div>
     </div>
-    <p class="hint flat">Restart to apply config changes (new workflows/models, edited <code>models.yaml</code>). Interrupts running training/generation; managed ComfyUI keeps running.</p>
-    <div class="actions">
-      <button onclick={restartServer} disabled={restarting}>{restarting ? 'Restarting…' : 'Restart server'}</button>
+    <div class="card-foot">
+      <button onclick={restartServer} disabled={restarting}>
+        {restarting ? 'Restarting…' : 'Restart server'}
+      </button>
+      <span class="foot-note">Re-reads config · interrupts generation · ComfyUI keeps running</span>
     </div>
-  </div>
+  </section>
 </div>
 
 <style>
-  .screen { flex: 1; min-height: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 18px 20px 18px 4px; }
-  .col { background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--radius-lg); padding: 18px; overflow: auto; min-width: 0; }
-  h3 { margin: 0 0 8px; font-size: 15px; font-weight: 650; }
-  .chead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-  .chead h3 { margin: 0; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 24px; margin-top: 16px; }
-  .kv { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
-  .kv span { font-size: 12.5px; color: var(--muted); width: 64px; flex: none; }
-  .kv b { font-size: 13px; font-weight: 560; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .mono { font-family: ui-monospace, monospace; font-size: 12px; }
-  .actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
-  .hint { font-size: 12.5px; color: var(--muted); margin: 12px 0 0; line-height: 1.55; }
-  .hint.flat { margin-top: 4px; }
-  code { background: var(--elev); padding: 1px 5px; border-radius: 5px; font-size: 11.5px; }
-  .slight { display: inline-block; width: 9px; height: 9px; border-radius: 50%; box-shadow: 0 0 8px currentColor; }
-  .slight.up { background: var(--good); color: var(--good); }
-  .slight.busy { background: var(--warn); color: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
-  .slbl { font-size: 12.5px; color: var(--muted); }
-  @keyframes pulse { 50% { opacity: .35; } }
+  .screen {
+    flex: 1; min-height: 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 16px;
+    padding: 18px 20px 18px 4px;
+    align-content: start;
+  }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border-soft);
+    border-radius: var(--radius-lg); padding: 20px 22px;
+    display: flex; flex-direction: column; gap: 0;
+  }
+
+  .card-head {
+    display: flex; align-items: center; gap: 9px;
+    padding-bottom: 16px; border-bottom: 1px solid var(--border-soft);
+    margin-bottom: 4px;
+  }
+  h3 { margin: 0; font-size: 14px; font-weight: 660; color: var(--text); }
+  .card-sub { font-size: 11.5px; color: var(--faint, var(--muted)); margin-left: auto; }
+  .card-sub code {
+    background: var(--elev); padding: 1px 5px; border-radius: 4px;
+    font-size: 11px; color: var(--muted);
+  }
+
+  .dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    flex: none; box-shadow: 0 0 7px currentColor; margin-left: auto;
+  }
+  .dot.up   { background: var(--good); color: var(--good); }
+  .dot.busy { background: var(--warn); color: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+  .status-lbl { font-size: 12px; color: var(--muted); }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  .rows { display: flex; flex-direction: column; gap: 0; padding: 4px 0; }
+  .row {
+    display: flex; align-items: baseline; gap: 12px;
+    padding: 9px 0; border-bottom: 1px solid var(--border-soft);
+  }
+  .row:last-child { border-bottom: none; }
+  .row span {
+    font-size: 12px; color: var(--muted); width: 62px; flex: none;
+    letter-spacing: .01em;
+  }
+  .row b {
+    font-size: 13px; font-weight: 550; flex: 1; min-width: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .mono { font-family: ui-monospace, monospace; font-size: 12px; font-weight: 450; }
+
+  .card-foot {
+    display: flex; align-items: center; gap: 14px;
+    margin-top: 18px; padding-top: 16px;
+    border-top: 1px solid var(--border-soft);
+  }
+  .foot-note {
+    font-size: 11.5px; color: var(--faint, var(--muted));
+    line-height: 1.5; flex: 1;
+  }
 </style>

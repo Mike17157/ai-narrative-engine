@@ -14,17 +14,12 @@
     { id: 'locations', label: 'Scenes / locations', note: 'consolidation — distinct neutral places' },
     { id: 'characters', label: 'Characters', note: 'consolidation — supporting cast backgrounds' },
     { id: 'wardrobe', label: 'Wardrobe', note: 'generation — outfits + expressions' },
-    { id: 'base_image', label: 'Base image', note: 'character base reference — fills the physical-feature schema (invention does not apply)' }
+    { id: 'base_image', label: 'Base image', note: 'character base reference — fills the physical-feature schema' }
   ];
-  // Each stage owns its invention level; 'none' = no invention directive.
-  const INV_OPTS = [{ id: 'faithful', label: 'Faithful' }, { id: 'balanced', label: 'Balanced' },
-                    { id: 'inventive', label: 'Inventive' }, { id: 'none', label: 'Off' }];
-
   let cfg = $state(null);          // cached story-builder config
   let stage = $state('storyboard');
   let model = $state('');          // this stage's own model (a concrete id)
-  let stageInv = $state('balanced'); // this stage's invention level
-  let data = $state(null);         // { base, default, system, prompt?, model, invention, no_invention }
+  let data = $state(null);         // { base, default, system, prompt?, model }
   let previewChar = $state('');    // character used to preview / test the stage
   let active = $state('');         // active chat model (only used to seed an unset stage)
   let saving = $state(false);
@@ -34,25 +29,24 @@
   let loading = $state(false);     // true while load() runs (suppresses auto-save)
   let snap = $state(null);         // signature of the last loaded/saved state
   let saveTimer = null;
-  const sig = () => JSON.stringify([stage, model, stageInv, data?.base]);
+  const sig = () => JSON.stringify([stage, model, data?.base]);
 
   async function test() {
     if (!previewChar) { testResult = { err: 'pick a character to test with' }; return; }
     testing = true; testResult = null;
     const r = await post('/stories/builder/test',
-      { stage, character: previewChar, model, invention: stageInv, system: data?.base });
+      { stage, character: previewChar, model, system: data?.base });
     testing = false;
     testResult = r.ok ? r.data : { err: r.data?.error || 'test failed' };
   }
 
-  // Always re-fetch the config so the saved model/invention/prompt load correctly.
+  // Always re-fetch the config so the saved model/prompt load correctly.
   async function load() {
     loading = true; data = null; msg = null;
     cfg = await get('/story-builder');
     model = (cfg.models || {})[stage] || active;   // each stage has its own concrete model
     const r = await post('/stories/builder/prompt', { stage, character: previewChar, model });
     data = r.data;
-    stageInv = data?.invention || 'balanced';
     loading = false;
     snap = sig();   // baseline; auto-save only fires on changes after this
   }
@@ -82,16 +76,15 @@
     cfg = await get('/story-builder');                 // fresh + merge, so other stages are preserved
     cfg.systems = { ...(cfg.systems || {}), [stage]: data.base };
     cfg.models = { ...(cfg.models || {}), [stage]: model || '' };
-    cfg.inventions = { ...(cfg.inventions || {}), [stage]: stageInv };
     const r = await post('/story-builder', cfg);
     saving = false;
     msg = r.data?.ok ? { ok: true, text: '✓ saved' } : { err: true, text: r.data?.error || 'save failed' };
     snap = sig();
   }
 
-  // Auto-save: debounce any change to this stage's model / invention / prompt.
+  // Auto-save: debounce any change to this stage's model / prompt.
   $effect(() => {
-    const cur = JSON.stringify([stage, model, stageInv, data?.base]);
+    const cur = JSON.stringify([stage, model, data?.base]);
     if (loading || snap === null || cur === snap) return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(save, 700);
@@ -102,21 +95,12 @@
 </script>
 
 <div class="cfg">
-  <p class="intro">Each stage of story consolidation and generation has its own model, invention level
-    and system prompt. Choices are saved for every story; leave a model blank to use the active chat model.</p>
+  <p class="intro">Each stage of story consolidation and generation has its own model and system prompt.
+    Choices are saved for every story; leave a model blank to use the active chat model.</p>
 
   {#if curStage}<h3 class="shead">{curStage.label}</h3><p class="note">{curStage.note}</p>{/if}
 
   {#if data}
-    {#if !data.no_invention}
-      <label>Invention <span class="lo">— how freely this stage may invent beyond the card</span></label>
-      <div class="inv">
-        {#each INV_OPTS as iv}
-          <button class="ivopt sm" class:on={stageInv === iv.id} onclick={() => (stageInv = iv.id)}>{iv.label}</button>
-        {/each}
-      </div>
-    {/if}
-
     <label>Model <span class="lo">— this stage's own model{data.requires_image ? '; needs a 👁 vision model (reads the reference image)' : ''}</span></label>
     <Combobox items={usableModels} bind:value={model} placeholder="pick a model…" />
     {#if data.requires_image && model && !usableModels.some((m) => m.value === model)}
@@ -158,10 +142,6 @@
   .fld:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); outline: none; }
   .ta { line-height: 1.5; font-family: inherit; min-height: 38px; overflow: hidden; resize: none; }
   .mono { font-family: ui-monospace, monospace; font-size: 12px; }
-  .inv { display: flex; gap: 8px; }
-  .ivopt { flex: 1; padding: 8px; border-radius: 9px; box-shadow: none; background: var(--bg); border: 1px solid var(--border); color: var(--text); font-size: 13px; font-weight: 600; }
-  .ivopt:hover { filter: none; border-color: var(--accent); } .ivopt.on { border-color: var(--accent); background: rgba(124,109,255,.12); }
-  .ivopt.sm { padding: 6px; font-size: 12px; }
   .shead { margin: 0 0 2px; font-size: 16px; font-weight: 700; color: var(--text); }
   .note { font-size: 12px; color: var(--faint); margin: 6px 0 0; }
   .prow { display: flex; align-items: center; gap: 10px; margin-top: 10px; }

@@ -1,6 +1,6 @@
 <script>
-  // Settings shell. The folder tree (Models/Connections/Personas/ComfyUI/Trainer/System)
-  // is rendered by the root layout's TreeNav; this layout just passes children through.
+  // Settings shell. The folder tree is rendered by the root layout's TreeNav;
+  // this layout just passes children through.
   let { children } = $props();
 </script>
 

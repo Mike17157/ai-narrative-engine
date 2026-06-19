@@ -55,12 +55,12 @@ def register(app, ctx):
         ch = ctx.base_settings.characters.get(body.get("character"))
         if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        provider, invention, systems = ctx.builder_ctx(body, "storyboard")
+        provider, systems = ctx.builder_ctx(body, "storyboard")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
         system, prompt = storyboard_inputs(name=ch.name, persona=ch.system,
                                            extras=ctx.card_extras(ch, body["character"]),
-                                           invention=invention, systems=systems)
+                                           systems=systems)
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -100,39 +100,36 @@ def register(app, ctx):
     def builder_prompt(body: dict):
         """Preview/inspect a builder STAGE's prompt before generating. Returns the
         editable `base` system prompt, the `default` (for reset), and the effective
-        `system` (base + invention directive). For the storyboard stage it also
+        `system` (the effective system prompt). For the storyboard stage it also
         composes the user-message `prompt` for the given character. Stages:
         storyboard · locations · characters · wardrobe."""
-        from ...scenario.builder import NEEDS_IMAGE, NO_INVENTION, DEFAULT_SYSTEMS, _sys, storyboard_inputs
+        from ...scenario.builder import NEEDS_IMAGE, DEFAULT_SYSTEMS, _sys, storyboard_inputs
 
         body = body or {}
         stage = body.get("stage", "storyboard")
         if stage not in DEFAULT_SYSTEMS:
             return JSONResponse({"error": f"unknown stage '{stage}'"}, status_code=400)
         cfg = config_files.load_story_builder(ctx.root)
-        invention = config_files._stage_invention(cfg, stage)
         systems = cfg.get("systems") or {}
         out = {
             "stage": stage,
             "base": systems.get(stage) or DEFAULT_SYSTEMS[stage],
             "default": DEFAULT_SYSTEMS[stage],
-            "system": _sys(systems, stage, invention),
-            "model": config_files._stage_model(cfg, stage, body.get("model")),  # this stage's model ('' = active chat)
-            "invention": invention,                                 # this stage's invention level
-            "no_invention": stage in NO_INVENTION,
-            "requires_image": stage in NEEDS_IMAGE,                  # needs a vision model
+            "system": _sys(systems, stage),
+            "model": config_files._stage_model(cfg, stage, body.get("model")),
+            "requires_image": stage in NEEDS_IMAGE,
         }
         ch = ctx.base_settings.characters.get(body.get("character"))
         if stage == "storyboard" and ch is not None:
             _, out["prompt"] = storyboard_inputs(name=ch.name, persona=ch.system,
                                                  extras=ctx.card_extras(ch, body["character"]),
-                                                 invention=invention, systems=systems)
+                                                 systems=systems)
         return out
 
     @app.post("/api/stories/builder/test")
     async def builder_test(body: dict):
         """Test ONE builder stage end-to-end for a chosen character, using that stage's
-        (possibly unsaved) model + invention + system prompt. Prerequisite stages run
+        (possibly unsaved) model + system prompt. Prerequisite stages run
         with their SAVED config. Returns a readable {summary, output} to preview before
         committing the config."""
         from fastapi.concurrency import run_in_threadpool
@@ -152,7 +149,6 @@ def register(app, ctx):
         systems = dict(saved)
         if body.get("system"):           # the unsaved edit for the target stage
             systems[stage] = body["system"]
-        t_inv = body.get("invention") or config_files._stage_invention(cfg, stage)
         t_prov = ctx.author_provider(body.get("model") or config_files._stage_model(cfg, stage))
         if t_prov is None:
             return JSONResponse({"error": "no author model configured"}, status_code=400)
@@ -160,10 +156,9 @@ def register(app, ctx):
         fields = ch.fields or {}
 
         def gen_board(target: bool):
-            inv = t_inv if (target and stage == "storyboard") else config_files._stage_invention(cfg, "storyboard")
             sysd = systems if (target and stage == "storyboard") else saved
             prov = t_prov if (target and stage == "storyboard") else ctx.author_provider(config_files._stage_model(cfg, "storyboard"))
-            s, p = B.storyboard_inputs(name=ch.name, persona=ch.system, extras=extras, invention=inv, systems=sysd)
+            s, p = B.storyboard_inputs(name=ch.name, persona=ch.system, extras=extras, systems=sysd)
             return B.parse_storyboard(prov.generate_text(system=s, prompt=p).text or "")
 
         def run():
@@ -189,12 +184,12 @@ def register(app, ctx):
                 return "feature schema filled" + (" (from reference image)" if imgs else ""), _assemble_base_prompt(feats)
             bd = gen_board(False)
             if stage == "locations":
-                locs = extract_locations(t_prov, board=bd, invention=t_inv, systems=systems).get("locations", [])
+                locs = extract_locations(t_prov, board=bd, systems=systems).get("locations", [])
                 return f"{len(locs)} locations", "\n".join(
                     f"• {l.get('name')} ({l.get('id')})\n  {l.get('background_prompt') or l.get('description','')}" for l in locs)
             if stage == "characters":
                 npcs = extract_characters(t_prov, name=ch.name, persona=ch.system, board=bd,
-                                          extras=extras, invention=t_inv, systems=systems).get("npcs", [])
+                                          extras=extras, systems=systems).get("npcs", [])
                 return f"{len(npcs)} characters", "\n\n".join(
                     f"• {n.get('name')} — {n.get('role','')}\n  {n.get('appearance','')}" for n in npcs) or "(no supporting cast in this storyboard)"
             if stage == "wardrobe":
@@ -202,8 +197,8 @@ def register(app, ctx):
                          "storyboard": {"logline": bd.get("logline", ""), "beats": bd.get("beats", [])}}
                 plan = plan_wardrobe(t_prov, char_name=ch.name, persona=ch.system,
                                      appearance=fields.get("appearance", ""), story=story,
-                                     invention=t_inv, systems=systems)
-                outs = "\n".join(f"• {o['name']}: {o['attire_prompt']}" for o in plan.get("outfits", []))
+                                     systems=systems)
+                outs = "\n".join(f"• {o['name']}: {o.get('concept') or o.get('attire_prompt', '')}" for o in plan.get("outfits", []))
                 exprs = "\n".join(f"• {k}: {v}" for k, v in (plan.get("expressions") or {}).items())
                 return (f"{len(plan.get('outfits', []))} outfits, {len(plan.get('expressions') or {})} expressions",
                         f"OUTFITS\n{outs}\n\nEXPRESSIONS\n{exprs}")
@@ -220,12 +215,12 @@ def register(app, ctx):
         """Stage 2 — extract neutral locations (pure backgrounds) from the beats."""
         from ...scenario import extract_locations
 
-        provider, invention, systems = ctx.builder_ctx(body or {}, "locations")
+        provider, systems = ctx.builder_ctx(body or {}, "locations")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
         board = (body or {}).get("board") or {}
         try:
-            return extract_locations(provider, board=board, invention=invention, systems=systems)
+            return extract_locations(provider, board=board, systems=systems)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
 
@@ -241,16 +236,16 @@ def register(app, ctx):
         ch = ctx.base_settings.characters.get(body.get("character"))
         if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        provider, invention, systems = ctx.builder_ctx(body, "characters")
+        provider, systems = ctx.builder_ctx(body, "characters")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
         extras = ctx.card_extras(ch, body["character"])
         try:
             base = extract_protagonist(provider, name=ch.name, persona=ch.system or "",
-                                       extras=extras, invention="faithful", systems=systems)
+                                       extras=extras, systems=systems)
             out = extract_characters(provider, name=base["name"], persona=base["persona"],
                                      board=body.get("board") or {}, extras=extras,
-                                     invention=invention, systems=systems,
+                                     systems=systems,
                                      reference_card=base["persona"])
             npcs = out.get("npcs", [])
             # ONE uniform cast list — protagonist first, flagged `primary`. Compose the SUPERIOR ✨
@@ -329,11 +324,11 @@ def register(app, ctx):
         if src is not None and not any(m.get("primary") for m in cast_in):
             base_card = None
             try:
-                provider, _inv, systems = ctx.builder_ctx(draft, "characters")
+                provider, systems = ctx.builder_ctx(draft, "characters")
                 if provider is not None:
                     base_card = extract_protagonist(
                         provider, name=src.name, persona=src.system or "",
-                        extras=ctx.card_extras(src, primary_key), invention="faithful", systems=systems)
+                        extras=ctx.card_extras(src, primary_key), systems=systems)
             except Exception:  # noqa: BLE001
                 base_card = None
             if not base_card:
@@ -493,9 +488,9 @@ def register(app, ctx):
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        provider, invention, systems = ctx.builder_ctx(body or {}, "characters")
+        provider, systems = ctx.builder_ctx(body or {}, "characters")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
 
         # Resolve the protagonist source: the imported source card if it still exists, else fall
         # back to the story's current primary cast member.
@@ -513,13 +508,13 @@ def register(app, ctx):
             if prot is not None:
                 prot_data = extract_protagonist(
                     provider, name=prot.name, persona=prot.system or "",
-                    extras=ctx.card_extras(prot, prot_key), invention="faithful",
+                    extras=ctx.card_extras(prot, prot_key),
                     systems=systems, on_event=emit)
             out = extract_characters(
                 provider, name=(prot_data["name"] if prot_data else st.name),
                 persona=(prot_data["persona"] if prot_data else ""),
                 board=board, extras=ctx.card_extras(prot, prot_key) if prot else {},
-                invention=invention, systems=systems,
+                systems=systems,
                 reference_card=(prot_data["persona"] if prot_data else ""), on_event=emit)
             npcs = out.get("npcs", [])
             if cancelled():
@@ -591,6 +586,31 @@ def register(app, ctx):
                         f.unlink()
                 shutil.rmtree(ctx.portrait_dir(ck), ignore_errors=True)
             ctx.reload_settings()
+
+            # Auto-plan wardrobes for every new cast member so the wardrobe view is
+            # immediately populated when the user arrives at the cast page.
+            emit({"type": "phase", "label": "Planning wardrobes…"})
+            try:
+                from ...scenario import plan_wardrobe as _plan_wardrobe
+                w_prov, w_sys = ctx.builder_ctx({}, "wardrobe")
+                if w_prov is not None:
+                    full_story = st.model_dump()
+                    for ckey in created:
+                        if cancelled():
+                            break
+                        ch = ctx.base_settings.characters.get(ckey)
+                        if ch is None:
+                            continue
+                        emit({"type": "phase", "label": f"Planning {ch.name}'s wardrobe"})
+                        appr = (ch.fields or {}).get("appearance", "")
+                        plan = _plan_wardrobe(w_prov, char_name=ch.name, persona=ch.system or "",
+                                              appearance=appr, story=full_story,
+                                              systems=w_sys, on_event=emit)
+                        outfits = ctx.refine_outfits(plan.get("outfits"), ch.system or "", appr, emit=emit)
+                        portraits_apply_wardrobe(ckey, {"outfits": outfits, "replace": True})
+            except Exception as exc:  # noqa: BLE001
+                emit({"type": "phase", "label": f"Wardrobe planning skipped ({exc})"})
+
             emit({"type": "phase", "label": f"Done — {len(cast)} cast members"})
             return {"ok": True, "cast": [m["character"] for m in cast], "created": created}
 
@@ -618,9 +638,25 @@ def register(app, ctx):
         provider = build_provider(ModelDef(provider=tconn.provider, kind="text", options=opts))
 
         # Compose the director's brief from the story.
+        from ..services.emotions import EMOTION_KEYS, NORMAL_KEYS
+
+        def _char_emotion_keys(char_key: str) -> list[str]:
+            """Return this character's affect.range keys (new or old manifest format)."""
+            mf = ctx.portrait_manifest(char_key)
+            raw = (mf.get("affect") or {}).get("range") if isinstance(mf.get("affect"), dict) else None
+            if isinstance(raw, list) and raw:
+                if isinstance(raw[0], dict):
+                    return [e["emotion"] for e in raw if e.get("emotion") in EMOTION_KEYS]
+                return [k for k in raw if k in EMOTION_KEYS]
+            return list(NORMAL_KEYS)
+
         def cast_line(m):
             c = ctx.base_settings.characters.get(m.character)
-            return f"- {c.name if c else m.character}: {((c.system or '').splitlines()[0] if c else '')[:160]}"
+            name = c.name if c else m.character
+            desc = ((c.system or "").splitlines()[0] if c else "")[:140]
+            keys = _char_emotion_keys(m.character)
+            return f"- {name}: {desc}\n  emotions: {', '.join(keys)}"
+
         cast = "\n".join(cast_line(m) for m in st.cast) or "(none)"
         locs = "\n".join(f"- {l.id} | {l.name}: {l.description}" for l in st.locations) or "(none)"
         lore = "; ".join(e.get("comment", "") for e in (st.lorebook or {}).get("entries", []) if e.get("comment"))
@@ -646,10 +682,9 @@ def register(app, ctx):
             "- location: the id of the location the scene is currently in (one of the listed ids).\n"
             "- present: ALWAYS list the names of EVERY cast character physically in the scene right now "
             "(anyone who speaks, acts, or is described as present) — never leave it empty if someone is there.\n"
-            "- emotions: for each present character, name their current emotion as ONE lowercase "
-            "word AND give `valence` (-1..1: misery to delight) and `arousal` (-1..1: calm/still to "
-            "agitated/explosive) capturing how they feel right now. The two numbers are what select "
-            "their expression sprite — judge them honestly from the moment, not a default."
+            "- emotions: for each present character, pick the ONE emotion key from their listed emotions "
+            "that best matches how they feel right now. Use the exact key string — it selects their "
+            "portrait sprite directly. Judge honestly from the moment; default to 'neutral' if unsure.\n"
             "- movement: true ONLY when this moment invites the player to move to a different location "
             "(they suggest leaving, a path opens, the beat concludes) — otherwise false."
         )
@@ -679,42 +714,22 @@ def register(app, ctx):
         name_to_key = {(ctx.base_settings.characters[m.character].name if m.character in ctx.base_settings.characters
                         else m.character).lower(): m.character for m in st.cast}
         present_keys = [name_to_key.get((n or "").lower()) for n in data.get("present", [])]
-        # The valence/arousal translation layer. The director emits per-character {valence, arousal}
-        # (optional) + a back-compat `emotion` word. When coords are present, snap to the NEAREST
-        # emotion key in that character's personality-rooted range (services.emotions.nearest_emotion)
-        # — never a miss, even for an emotion word not in their range. Without coords, fall back to
-        # the bare emotion word (today's exact-match behaviour).
-        from ..services.emotions import nearest_emotion, canonical_range
+        # Direct key resolution. The director names an emotion key from the character's range.
+        # If the key is valid (in EMOTION_KEYS), use it. If it's unrecognised, fall back to neutral.
         emotions = {}
-        affect = {}   # raw {char_key: {valence, arousal, resolved}} for the UI (optional display)
         for e in data.get("emotions", []):
             ck = name_to_key.get((e.get("character") or "").lower())
             if not ck:
                 continue
-            word = (e.get("emotion") or "").strip()
-            v, a = e.get("valence"), e.get("arousal")
-            resolved = word
-            if v is not None and a is not None:
-                try:
-                    v_f, a_f = float(v), float(a)
-                except (TypeError, ValueError):
-                    v_f, a_f = None, None
-                if v_f is not None:
-                    # The character's authored range, else the full 32 at canonical coords (== today).
-                    m = ctx.portrait_manifest(ck)
-                    rng = ((m.get("affect") or {}).get("range")
-                           if isinstance(m.get("affect"), dict) else None) or canonical_range()
-                    snap = nearest_emotion(v_f, a_f, rng)
-                    if snap:
-                        resolved = snap
-                    affect[ck] = {"valence": v_f, "arousal": a_f, "resolved": resolved}
-            emotions[ck] = resolved
+            key = (e.get("emotion") or "neutral").strip().lower()
+            if key not in EMOTION_KEYS:
+                key = "neutral"
+            emotions[ck] = key
         loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
         return {
             "reply": data.get("reply", ""), "location": loc,
             "present": [k for k in present_keys if k],
             "emotions": emotions,
-            "affect": affect,
             "movement": bool(data.get("movement")),
         }
 
@@ -732,15 +747,15 @@ def register(app, ctx):
         ch = ctx.base_settings.characters.get(char_key)
         if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        provider, invention, systems = ctx.builder_ctx(body or {}, "wardrobe")
+        provider, systems = ctx.builder_ctx(body or {}, "wardrobe")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
         story = st.model_dump()
         appearance = (ch.fields or {}).get("appearance", "")
 
         def work(emit, cancelled):
             plan = plan_wardrobe(provider, char_name=ch.name, persona=ch.system,
-                                 appearance=appearance, story=story, invention=invention,
+                                 appearance=appearance, story=story,
                                  systems=systems, on_event=emit)
             # Pass 2 — refine EACH outfit into careful, consistent booru tags, in parallel (same
             # 2-step pipeline the base image gets).
@@ -761,9 +776,9 @@ def register(app, ctx):
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        provider, invention, systems = ctx.builder_ctx(body or {}, "wardrobe")
+        provider, systems = ctx.builder_ctx(body or {}, "wardrobe")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
         story = st.model_dump()
         members = [m.character for m in st.cast]
 
@@ -779,7 +794,7 @@ def register(app, ctx):
                 try:
                     appr = (ch.fields or {}).get("appearance", "")
                     plan = plan_wardrobe(provider, char_name=ch.name, persona=ch.system,
-                                         appearance=appr, story=story, invention=invention,
+                                         appearance=appr, story=story,
                                          systems=systems, on_event=emit)
                     outfits = ctx.refine_outfits(plan.get("outfits"), ch.system, appr, emit=emit)
                     # Emotions are the fixed canonical taxonomy — apply composes them from the
@@ -846,23 +861,24 @@ def register(app, ctx):
             except Exception:  # noqa: BLE001
                 poses = {}
         m["pose_prompts"] = poses
-        # Personality-rooted emotion RANGE (Tier-A of the valence translation layer) — the curated
-        # subset of the 32 keys THIS character expresses, each with persona-nudged V-A coords. An
-        # explicit `affect.range` in the body overrides; else compose ONCE from the persona when the
-        # manifest has none yet. Sibling of expression_prompts/pose_prompts.
+        # Personality-rooted emotion RANGE — the curated subset of keys this character expresses.
+        # Stored as affect.range = [key1, key2, ...] (plain list of strings).
+        # An explicit `affect.range` in the body overrides; else compose ONCE when the manifest
+        # has none. The director picks keys directly from this list at runtime.
         affect = m.get("affect") if isinstance(m.get("affect"), dict) else None
         body_affect = body.get("affect") if isinstance(body.get("affect"), dict) else None
         if body_affect and isinstance(body_affect.get("range"), list):
-            affect = {"dimensions": body_affect.get("dimensions", ["valence", "arousal"]),
-                      "range": body_affect["range"]}
+            body_range = body_affect["range"]
+            # Accept both old [{emotion,...}] and new [key,...] formats from callers.
+            if body_range and isinstance(body_range[0], dict):
+                body_range = [e["emotion"] for e in body_range if e.get("emotion")]
+            affect = {"range": body_range}
         elif not (affect and affect.get("range")):
             from ..services.prompts import _persona_text
             try:
                 affect = ctx.compose_affect_range(_persona_text(c))
                 if not isinstance(affect, dict) or not affect.get("range"):
-                    affect = None   # compose failed → leave unset (payload falls back to full 32)
-                else:
-                    affect["dimensions"] = ["valence", "arousal"]
+                    affect = None
             except Exception:  # noqa: BLE001
                 affect = None
         if affect:
@@ -907,9 +923,9 @@ def register(app, ctx):
         ch = ctx.base_settings.characters.get(char_key)
         if ch is None or not any(m.character == char_key for m in st.cast):
             return JSONResponse({"error": "character is not in this story's cast"}, status_code=404)
-        provider, invention, systems = ctx.builder_ctx(body, "characters")
+        provider, systems = ctx.builder_ctx(body, "characters")
         if provider is None:
-            return JSONResponse({"error": invention}, status_code=400)
+            return JSONResponse({"error": systems}, status_code=400)
         instruction = (body.get("instruction") or "").strip()
         text_only = bool(body.get("text_only"))
         is_primary = any(m.character == char_key and m.primary for m in st.cast)
@@ -923,7 +939,7 @@ def register(app, ctx):
             # 1. Rewrite persona + role + appearance, steered by the instruction.
             revised = revise_character(provider, name=cur_name, persona=cur_persona, role=cur_role,
                                        appearance=cur_appear, instruction=instruction, board=board,
-                                       invention=invention, systems=systems, on_event=emit)
+                                       systems=systems, on_event=emit)
             if cancelled():
                 return {"cancelled": True}
             # 2. Compose the rich base-image prompt from the rewritten persona + appearance.
@@ -991,14 +1007,14 @@ def register(app, ctx):
                              "affect": fresh_affect if isinstance(fresh_affect, dict) and fresh_affect.get("range") else None}
                     if not (ctx.portrait_manifest(char_key).get("outfits") or []):
                         plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
-                                             appearance=revised["appearance"], story=story, invention=invention,
+                                             appearance=revised["appearance"], story=story,
                                              systems=systems, on_event=emit)
                         apply["outfits"] = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
                                                               revised["appearance"], emit=emit)
                     portraits_apply_wardrobe(char_key, apply)
                 else:
                     plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
-                                         appearance=revised["appearance"], story=story, invention=invention,
+                                         appearance=revised["appearance"], story=story,
                                          systems=systems, on_event=emit)
                     outfits = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
                                               revised["appearance"], emit=emit)

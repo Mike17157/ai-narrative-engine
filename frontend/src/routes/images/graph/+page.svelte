@@ -10,6 +10,7 @@
   import NodeTree from '$lib/workflow/NodeTree.svelte';
   import RoutedEdge from '$lib/workflow/RoutedEdge.svelte';
   import JsonEditor from '$lib/components/JsonEditor.svelte';
+  import ModelLibraryModal from '$lib/components/ModelLibraryModal.svelte';
 
   const nodeTypes = { comfy: ComfyNode };
   const edgeTypes = { routed: RoutedEdge };
@@ -239,6 +240,10 @@
     }
   }
 
+  // Full cross-family model library + organizer (relocated here from the Models pane).
+  let libOpen = $state(false);
+  async function onLibApplied() { await refreshModels(); loadGraphFamilies(); }
+
   function openPalette() { paletteOpen = true; q = ''; queueMicrotask(() => paletteEl?.querySelector('input')?.focus()); }
   function pick(classType) { addNode(classType); paletteOpen = false; rebuild(); }
   $effect(() => {
@@ -270,6 +275,7 @@
       </optgroup>
     {/each}
   </select>
+  <button class="tbtn" onclick={() => (libOpen = true)} title="Browse & organize the full model library (all families)">⊞ <span>Model library</span></button>
   {#if img.workflow}
     <div class="seg" role="tablist">
       <button class:on={view === 'graph'} onclick={() => (view = 'graph')}>Graph</button>
@@ -374,6 +380,8 @@
     </div>
   </SvelteFlowProvider>
 {/if}
+
+<ModelLibraryModal open={libOpen} onclose={() => (libOpen = false)} onapplied={onLibApplied} />
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && (drop = null)} />
 
