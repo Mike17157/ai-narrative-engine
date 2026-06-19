@@ -35,7 +35,12 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
 
     # 2. base-image prompt (grounds the look to tags)
     emit({"type": "phase", "label": "Composing the base prompt"})
-    comp = ctx.compose_base_prompt(ch.name, persona, fields.get("appearance", ""), fields.get("role", ""))
+    from loom.pipeline import compose_base_prompt
+    from loom.server.services import config_files
+    _bp_cfg = ctx.load_story_builder()
+    _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+    comp = compose_base_prompt(_bp_prov, ch.name, persona, fields.get("appearance", ""),
+                               fields.get("role", ""), systems=(_bp_cfg.get("systems") or {}))
     base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
     if not base_prompt:
         raise ValueError(comp.get("error", "base prompt generation failed") if isinstance(comp, dict) else "base prompt failed")
@@ -74,12 +79,15 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
 
     # 4. persona-driven expressions + body language
     emit({"type": "phase", "label": "Composing expressions + poses"})
-    exprs = ctx.compose_expressions(persona)
-    poses = ctx.compose_poses(persona)
+    from loom.pipeline import compose_expressions, compose_poses, compose_outfit_prompt
+    _w_cfg = ctx.load_story_builder()
+    _w_prov = ctx.author_provider(config_files._stage_model(_w_cfg, "wardrobe"))
+    exprs = compose_expressions(_w_prov, persona)
+    poses = compose_poses(_w_prov, persona)
 
     # 5. one default outfit → manifest
     emit({"type": "phase", "label": "Composing the outfit"})
-    attire = (ctx.compose_outfit_prompt(persona, appearance, "Casual", "") or {}).get("attire", "")
+    attire = (compose_outfit_prompt(_w_prov, persona, appearance, "Casual", "") or {}).get("attire", "")
     oid = "casual"
     m = ctx.portrait_manifest(key)
     m["appearance"] = appearance

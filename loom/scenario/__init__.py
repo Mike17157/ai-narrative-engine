@@ -1,9 +1,15 @@
 """Story Builder — the storyboard-first process that authors a story experience
-from a character card. See builder.py."""
+from a character card. See loom/pipeline/ for implementation."""
 
-from .builder import (
-    STAGES, extract_characters, extract_locations, extract_protagonist,
-    parse_storyboard, plan_wardrobe, revise_character, storyboard_inputs,
+from loom.pipeline import (
+    STAGES,
+    extract_characters,
+    extract_locations,
+    extract_protagonist,
+    parse_storyboard,
+    plan_wardrobe,
+    revise_character,
+    storyboard_inputs,
 )
 
 __all__ = ["STAGES", "storyboard_inputs", "parse_storyboard", "extract_locations",

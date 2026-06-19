@@ -126,13 +126,15 @@ storyboard:
     - Trish
     - assorted friends
 cast:
-- character: kaia_nakumura_2
+- character: kaia_nakumura
   primary: true
-- character: trish_o_connell
+- character: maya_delacroix
   primary: false
-- character: darek_kowalski_2
+- character: trish_okafor
   primary: false
-- character: reyes
+- character: linda_pak
+  primary: false
+- character: darek_whitlock
   primary: false
 lorebook: {}
 locations:

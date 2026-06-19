@@ -88,17 +88,19 @@ async function postCancelable(path, payload) {
 }
 
 // Stage 1 streams the storyboard live (watch it write); cancel stops upstream.
-export async function genStoryboard() {
+// Optional `workshopPremise` is passed when the user has gone through the Workshop first.
+export async function genStoryboard(workshopPremise = '') {
   const wz = w();
   wz.busy = true; wz.streaming = true; wz.error = null; wz.streamText = '';
   abortCtl = new AbortController();
   const job = startJob('Storyboard', wz.charName || wz.character, 'stories/new/storyboard');
   job.onCancel = cancelGen;
   let board = null;
+  const bodyExtra = workshopPremise ? { premise: workshopPremise } : {};
   try {
     const res = await fetch('/api/stories/storyboard', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(reqBody()), signal: abortCtl.signal
+      body: JSON.stringify(reqBody(bodyExtra)), signal: abortCtl.signal
     });
     const reader = res.body.getReader();
     const dec = new TextDecoder();
@@ -120,7 +122,7 @@ export async function genStoryboard() {
     }
     if (board) {
       wz.board = { logline: board.logline || '', premise: board.premise || '', tone: board.tone || '',
-                   themes: board.themes || [], beats: board.beats || [] };
+                   themes: board.themes || [], beats: board.beats || [], heart: board.heart || '' };
       if (!wz.name) wz.name = wz.charName || '';
       wz.step = 1;
       job.status = 'done';
@@ -174,11 +176,18 @@ export async function saveStory() {
   stories.saving = false;
   if (r.data?.ok) {
     stories.msg = { ok: true, text: `✓ Saved “${wz.name}”` + (r.data.created_characters?.length ? ` (+${r.data.created_characters.length} NPCs)` : '') };
+    const storyKey = r.data.key;
     // Reload chars too: the story's freshly-generated cast must be in chars.list or every
-    // charName(key) lookup falls back to the raw key (e.g. "riley_costello").
+    // charName(key) lookup falls back to the raw key (e.g. “riley_costello”).
     await Promise.all([loadStories(), loadChars()]);
     stories.wizard = blankWizard();
-    goto('/stories');   // back to the library after creating a story
+    // Kick off wardrobe planning immediately — navigate to cast so the user sees progress.
+    let wardrobeJob = null;
+    try {
+      const wr = await post(`/stories/${storyKey}/plan-wardrobe-all`, {});
+      if (wr.data?.job) wardrobeJob = wr.data.job;
+    } catch { /* non-fatal — user can plan wardrobes manually from the cast page */ }
+    goto(wardrobeJob ? `/stories/${storyKey}/cast?job=${wardrobeJob}` : `/stories/${storyKey}/cast`);
   } else { wz.error = r.data?.error || 'save failed'; }
 }
 

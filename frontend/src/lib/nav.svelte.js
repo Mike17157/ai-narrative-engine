@@ -35,8 +35,6 @@ export function settingsTree() {
   return [
     ...MODELS,
     ...STORY_GEN,
-    { id: 'comfyui', label: 'ComfyUI', href: '/settings/comfyui' },
-    { id: 'trainer', label: 'Trainer', href: '/settings/trainer' },
     { id: 'system', label: 'System', href: '/settings/system' }
   ];
 }
@@ -52,14 +50,8 @@ export function charactersTree() {
   ];
 }
 
-// Roles moved to Settings ▸ Story pipeline ▸ Image workflows. LoRA keeps its sub-leaves.
 export function imagesTree() {
-  return [
-    { id: 'models', label: 'Models', href: '/images/models' },
-    { id: 'graph', label: 'Graph', href: '/images/graph' },
-    { id: 'poses', label: 'Poses', href: '/images/poses' },
-    { id: 'lora', label: 'LoRA', href: '/images/lora/library' }
-  ];
+  return [];
 }
 
 // Stories is a content browser: Library + a named folder per story, whose sections

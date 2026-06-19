@@ -38,11 +38,8 @@ def register(app, ctx):
         return {"text": text, "image": image}
 
     @app.get("/api/text-models")
-    def text_models(kind: str = "text") -> dict:
-        """The full model list from the active connection of `kind` (text =
-        chat model, image_prompt = image-prompt generator) — so each picker can
-        index every model offered by its own connection, not just the saved one."""
-        conn = ctx.store.active(kind if kind in ("text", "image_prompt") else "text")
+    def text_models() -> dict:
+        conn = ctx.store.active("text")
         if not conn:
             return {"models": [], "active": None, "connected": False}
         try:
@@ -54,8 +51,7 @@ def register(app, ctx):
     @app.post("/api/text/model")
     def set_text_model(body: dict):
         body = body or {}
-        kind = body.get("kind") if body.get("kind") in ("text", "image_prompt") else "text"
-        conn = ctx.store.active(kind)
+        conn = ctx.store.active("text")
         if conn is None:
             return JSONResponse({"error": f"no {kind} connection — set one up in Connection"}, status_code=400)
         conn.model = body.get("model")
@@ -108,8 +104,7 @@ def register(app, ctx):
     # -- connections ------------------------------------------------------
     @app.get("/api/providers")
     def providers(kind: str | None = None) -> list:
-        # image_prompt connections use the same (text) providers as chat.
-        return list_providers("text" if kind == "image_prompt" else kind)
+        return list_providers(kind if kind == "image" else "text")
 
     @app.get("/api/connections")
     def connections() -> dict:
@@ -172,18 +167,6 @@ def register(app, ctx):
     def conn_delete(conn_id: str):
         ctx.store.remove(conn_id)
         return {"ok": True, "active": ctx.store.active_map}
-
-    @app.get("/api/promptgen")
-    def get_promptgen() -> dict:
-        return config_files.load_promptgen(ctx.root)
-
-    @app.post("/api/promptgen")
-    def save_promptgen(body: dict):
-        cfg = {**config_files.PROMPTGEN_DEFAULT, **(body or {})}
-        path = ctx.root / "configs" / "promptgen.json"
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
-        return {"ok": True}
 
     @app.get("/api/chatgen")
     def get_chatgen() -> dict:

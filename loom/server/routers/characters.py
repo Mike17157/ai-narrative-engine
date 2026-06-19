@@ -104,7 +104,11 @@ def register(app, ctx):
         if body.get("compose"):
             ctx.ensure_fleshed(key)          # thin seed → disciplined prose first
             c = ctx.base_settings.characters.get(key)
-            pp = ctx.compose_poses(_persona_text(c))
+            from loom.pipeline import compose_poses as _compose_poses
+            from ..services import config_files as _cfiles
+            _w_cfg = ctx.load_story_builder()
+            _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe"))
+            pp = _compose_poses(_w_prov, _persona_text(c))
         else:
             emo = (body.get("emotion") or "").strip()
             if emo not in EMOTION_KEYS:
@@ -499,8 +503,14 @@ def register(app, ctx):
             ctx.ensure_fleshed(key)
             c = ctx.base_settings.characters.get(key)
             from ..services.prompts import _persona_text
+            from loom.pipeline import compose_affect_range as _compose_affect_range
+            from ..services import config_files as _cfiles
             nsfw = bool(body.get("nsfw"))
-            affect = ctx.compose_affect_range(_persona_text(c), body.get("model"), nsfw=nsfw)
+            _emo_cfg = ctx.load_story_builder()
+            _emo_prov = ctx.author_provider(_cfiles._stage_model(_emo_cfg, "emotion",
+                                                                  body.get("model")))
+            affect = _compose_affect_range(_emo_prov, _persona_text(c), nsfw=nsfw,
+                                           systems=(_emo_cfg.get("systems") or {}))
             if not (isinstance(affect, dict) and affect.get("range")):
                 return JSONResponse({"error": "could not compose affect range "
                                               "(emotion model may not support structured output)"},
@@ -754,9 +764,14 @@ def register(app, ctx):
             return JSONResponse({"error": "no such outfit"}, status_code=404)
         # Use the brief concept (if stored) as the seed — not the full prose prompt.
         brief_concept = outfit.get("concept") or ""
-        r = ctx.compose_outfit_prompt(
-            ch.system or "", (ch.fields or {}).get("appearance", ""), outfit.get("name", ""),
-            brief_concept, (body or {}).get("model"))
+        from loom.pipeline import compose_outfit_prompt as _compose_outfit_prompt
+        from ..services import config_files as _cfiles
+        _w_cfg = ctx.load_story_builder()
+        _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe",
+                                                            (body or {}).get("model")))
+        r = _compose_outfit_prompt(
+            _w_prov, ch.system or "", (ch.fields or {}).get("appearance", ""),
+            outfit.get("name", ""), brief_concept)
         attire = r.get("attire") if isinstance(r, dict) else ""
         if not attire:
             return JSONResponse({"error": "could not compose outfit prompt (author model may "
@@ -852,9 +867,14 @@ def register(app, ctx):
         await run_in_threadpool(ctx.ensure_fleshed, key)
         ch = ctx.base_settings.characters.get(key)
         fields = ch.fields or {}
-        out = await run_in_threadpool(lambda: ctx.compose_base_prompt(
-            ch.name, ch.system or "", fields.get("appearance", ""), fields.get("role", ""),
-            (body or {}).get("model")))
+        from loom.pipeline import compose_base_prompt as _compose_base_prompt
+        from ..services import config_files as _cfiles
+        _bp_cfg = ctx.load_story_builder()
+        _bp_prov = ctx.author_provider(_cfiles._stage_model(_bp_cfg, "base_image",
+                                                             (body or {}).get("model")))
+        out = await run_in_threadpool(lambda: _compose_base_prompt(
+            _bp_prov, ch.name, ch.system or "", fields.get("appearance", ""),
+            fields.get("role", ""), systems=(_bp_cfg.get("systems") or {})))
         if "error" in out:
             return JSONResponse({"error": out["error"]}, status_code=500)
         # Persist the derived numeric stature (used for sprite scaling, not a prompt tag) so it
@@ -1018,3 +1038,19 @@ def register(app, ctx):
             return ctx.write_character(to_character(card), avatar)
         except Exception as exc:
             return JSONResponse({"error": f"import failed: {exc}"}, status_code=400)
+
+    @app.post("/api/characters/{key}/portraits/wardrobe")
+    def portraits_apply_wardrobe(key: str, body: dict):
+        """Merge a planned wardrobe into the character's portrait manifest.
+
+        Additive by default — new outfits are appended; expression/pose/affect are composed from
+        the persona when absent.  With `replace: true` existing outfits (and their sprite
+        directories) are deleted first and the persona-derived prompt caches are cleared so
+        everything is recomposed fresh."""
+        from ..services.wardrobe import apply_manifest
+        if ctx.base_settings.characters.get(key) is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        try:
+            return apply_manifest(ctx, key, body or {})
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)

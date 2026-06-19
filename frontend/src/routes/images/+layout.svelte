@@ -10,16 +10,12 @@
 
   let { children } = $props();
 
-  // Persist the test prompt globally on any change (typed or preset-picked).
   $effect(() => { saveTestPrompt(img.testPrompt); });
 
-  // img2img workflows need a source image for the test grid to run against.
   let needsInit = $derived(workflowNeedsInit());
 
-  // --- test modes: sprite/scene mirror real production renders; tags/sweep are raw experimentation ---
-  let testMode = $state('sprite'); // sprite | scene | tags | sweep
-  // Subject source for the parity modes (sprite/scene): typed prompt, or a picked character's appearance.
-  let subjectMode = $state('typed'); // typed | char
+  let testMode = $state('sprite');
+  let subjectMode = $state('typed');
   let testChar = $state('');
   let charItems = $derived((chars.list || []).map((c) => ({ value: c.key, label: c.name || c.key })));
   const REP_EMOTIONS = ['Neutral', 'Joy', 'Sadness', 'Anger', 'Fear', 'Surprise', 'Desire', 'Disgust'];
@@ -76,22 +72,54 @@
   }
 
   let path = $derived($page.url.pathname);
-  // The folder tree (Models/Graph/Roles/Poses/LoRA▸…) is rendered by the root
-  // layout's TreeNav — no in-page tab strip here. Graph still needs full width.
 
   onMount(() => { loadChoices(); loadChars(); });
-  // Load the workflow when the active image model becomes available / changes
-  // (avoids a race with refreshAll() setting app.activeImage on first paint).
   let loadedFor = $state(null);
   $effect(() => {
     const key = app.activeImage;
     if (key && key !== loadedFor) { loadedFor = key; loadWorkflow(); }
   });
 
+  // --- header Data dropdown ---
+  let dataOpen = $state(false);
+  let dataEl = $state();
+
+  $effect(() => {
+    if (!dataOpen) return;
+    const handler = (e) => { if (dataEl && !dataEl.contains(e.target)) dataOpen = false; };
+    const t = setTimeout(() => document.addEventListener('mousedown', handler), 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', handler); };
+  });
+
+  const DATA_LINKS = [
+    { href: '/images/models', label: 'Models' },
+    { href: '/images/poses',  label: 'Poses'  }
+  ];
+
+  const isData = $derived(path.startsWith('/images/models') || path.startsWith('/images/poses'));
 </script>
 
+<!-- Images section header nav -->
+<header class="imghead">
+  <a href="/images/graph" class="hbtn" class:on={path === '/images/graph'}>Graph</a>
+  <a href="/images/lora/library" class="hbtn" class:on={path.startsWith('/images/lora')}>LoRA</a>
+  <div class="datawrap" bind:this={dataEl}>
+    <button class="hbtn drop" class:on={isData} onclick={(e) => { e.stopPropagation(); dataOpen = !dataOpen; }}>
+      Data <span class="arr" class:up={dataOpen}>▾</span>
+    </button>
+    {#if dataOpen}
+      <div class="datasub" role="menu">
+        {#each DATA_LINKS as l (l.href)}
+          <a href={l.href} class="subitem" class:on={path === l.href} role="menuitem"
+             onclick={() => (dataOpen = false)}>{l.label}</a>
+        {/each}
+      </div>
+    {/if}
+  </div>
+</header>
+
 <div class="page">
-  <div class="col" class:wide={path !== '/images/graph'} class:full={path === '/images/graph'}>
+  <div class="col" class:full={path === '/images/graph'}>
     {#if img.msg}<div class="status" class:ok={img.msg.ok} class:err={img.msg.err}>{img.msg.text}</div>{/if}
     {@render children()}
   </div>
@@ -123,7 +151,7 @@
           <p class="lo" style="margin:0 0 8px">
             {testMode === 'sprite'
               ? 'Renders the REAL sprite prompt — subject + expression + pose + full-body framing — so framing/pose match production.'
-              : 'Renders the subject through the scene workflow’s own framing.'}
+              : 'Renders the subject through the scene workflow's own framing.'}
           </p>
           <div class="modeseg" style="margin-bottom:10px">
             <button class:on={subjectMode === 'typed'} onclick={() => (subjectMode = 'typed')}>Typed subject</button>
@@ -220,9 +248,54 @@
 {/if}
 
 <style>
-  .col.full { max-width: none; }
+  /* ── header nav bar ── */
+  .imghead {
+    flex: none;
+    display: flex; align-items: center; gap: 2px;
+    padding: 6px 10px;
+    background: #13161e;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .hbtn {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 5px 14px; border-radius: 7px;
+    font-size: 13px; font-weight: 600;
+    color: var(--muted); background: none; border: none;
+    cursor: pointer; text-decoration: none; line-height: 1;
+    transition: color .12s, background .12s;
+  }
+  .hbtn:hover { color: var(--text); background: var(--elev); }
+  .hbtn.on { color: #fff; background: var(--elev-2); }
+
+  .datawrap { position: relative; }
+  .drop { cursor: pointer; }
+  .arr { font-size: 10px; transition: transform .15s; display: inline-block; }
+  .arr.up { transform: rotate(180deg); }
+
+  .datasub {
+    position: absolute; top: calc(100% + 5px); left: 0; z-index: 40;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 9px; box-shadow: 0 6px 20px rgba(0,0,0,.35);
+    padding: 4px; min-width: 130px;
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .subitem {
+    display: block; padding: 7px 12px; border-radius: 6px;
+    font-size: 13px; font-weight: 500; color: var(--muted);
+    text-decoration: none; white-space: nowrap;
+    transition: color .1s, background .1s;
+  }
+  .subitem:hover { color: var(--text); background: var(--elev); }
+  .subitem.on { color: #fff; background: var(--elev-2); }
+
+  /* ── content area ── */
+  .page { flex: 1; min-height: 0; overflow: auto; }
+  .col { max-width: 900px; margin: 0 auto; padding: 20px 24px; }
+  .col.full { max-width: none; margin: 0; padding: 0; height: 100%; }
   .status { font-size: 13px; margin: 0 0 12px; }
 
+  /* ── test modal ── */
   .overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, .6); display: grid; place-items: center; z-index: 50; padding: 24px; }
   .modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg);
            box-shadow: var(--shadow); width: min(92vw, 760px); max-height: 88vh; overflow: auto; padding: 16px; }

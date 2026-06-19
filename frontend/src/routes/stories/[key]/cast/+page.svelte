@@ -6,7 +6,9 @@
 
   let st = $derived(stories.current);
   // ?c=<key> (from the side-menu cast tier) selects that member in the carousel; no separate page.
+  // ?job=<id> passed by the story wizard after firing plan-wardrobe-all immediately on save.
   let selKey = $derived(page.url.searchParams.get('c') || '');
+  let jobParam = $derived(page.url.searchParams.get('job') || '');
   let sourceK = $derived(st.fields?.source_character);
   // ONE surface: the dashboard switches character, investigates properties inline, and runs all
   // (re)generation through the gated RegenModal. (The per-character ?c= Portrait Studio is retired.)
@@ -26,6 +28,12 @@
   async function reload() { await Promise.all([loadStory(st.key), loadChars()]); }
 </script>
 
-<div class="page"><div class="col full">
-  <CastDashboard storyKey={st.key} {cast} selectKey={selKey} onChanged={reload} />
+<div class="page castpage"><div class="col full fillh">
+  <CastDashboard storyKey={st.key} {cast} selectKey={selKey} onChanged={reload} initialJob={jobParam} />
 </div></div>
+
+<style>
+  /* Override global .page padding so the snap container can fill flush */
+  .castpage { padding: 0; overflow: hidden; }
+  .fillh { height: 100%; }
+</style>

@@ -3,7 +3,6 @@
 
   let textModel = $derived(app.health?.active_chat_model || app.conns?.active?.text || '—');
   let imageModel = $derived(app.health?.active_image_model || app.activeImage || '—');
-  let imgPrompt = $derived(app.health?.promptgen_model || '(uses chat model)');
 </script>
 
 <div class="menu" role="menu" onclick={(e) => e.stopPropagation()}>
@@ -11,10 +10,6 @@
   <div class="row">
     <span class="lbl">TextGen</span>
     <span class="val" title={textModel}>{textModel}</span>
-  </div>
-  <div class="row">
-    <span class="lbl">ImgPrompt</span>
-    <span class="val" title={imgPrompt}>{imgPrompt}</span>
   </div>
   <div class="row">
     <span class="lbl">ImageGen</span>

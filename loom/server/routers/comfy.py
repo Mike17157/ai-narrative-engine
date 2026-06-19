@@ -467,8 +467,7 @@ def register(app, ctx):
         LLM. This is the prose→tags step; state routing then matches these tags
         against each LoRA's own tags. (The LLM does the understanding; the router
         does the matching.)"""
-        pg = config_files.load_promptgen(ctx.root)
-        provider = ctx.text_provider_for((body or {}).get("model") or pg.get("model"))
+        provider = ctx.text_provider_for((body or {}).get("model"))
         if provider is None:
             return JSONResponse({"error": "no text connection — set one up in Connection first"}, status_code=400)
         scene = (body or {}).get("scene", "").strip()
@@ -485,7 +484,7 @@ def register(app, ctx):
             f"canonical lowercase danbooru spellings. Scene: {scene}. Return the `tags` array."
         )
         try:
-            res = provider.generate_text(system=pg.get("system"), prompt=instruction, emits=schema)
+            res = provider.generate_text(system=None, prompt=instruction, emits=schema)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
         # Flatten (models often cram comma-lists into single array items), strip

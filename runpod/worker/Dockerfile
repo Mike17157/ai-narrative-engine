@@ -5,17 +5,16 @@ ARG BASE_TAG=3.6.0-base
 FROM timpietruskyblibla/runpod-worker-comfy:${BASE_TAG}
 
 # Update ComfyUI to latest so newer samplers (er_sde, sa_solver, etc.) are available.
-# The base image checks out a tagged release in detached HEAD, so git pull won't work;
-# fetch + checkout master gives us the full history and installs any new deps.
+# The base image pins a release tag; fetch+checkout master gets us current HEAD.
 RUN cd /comfyui && git fetch origin && git checkout origin/master && pip install --no-cache-dir -r requirements.txt
 
 WORKDIR /comfyui/custom_nodes
-# NOTE: Impact-Subpack is cloned INSIDE ComfyUI-Impact-Pack/ (not at the top level)
-# because Impact-Pack looks for its subpack at ComfyUI-Impact-Pack/impact_subpack/.
-# Cloning it as a sibling means UltralyticsDetectorProvider never registers → 400.
+# NOTE: Impact-Subpack MUST be a top-level sibling in custom_nodes/, NOT nested inside
+# ComfyUI-Impact-Pack/. ComfyUI only scans the top level; the nested placement means
+# UltralyticsDetectorProvider never registers → 400.
 RUN git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Pack.git && \
-    git clone --depth 1 https://github.com/yolain/ComfyUI-Easy-Use.git && \
-    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git ComfyUI-Impact-Pack/impact_subpack
+    git clone --depth 1 https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git && \
+    git clone --depth 1 https://github.com/yolain/ComfyUI-Easy-Use.git
 
 # Install each pack's Python deps. Do NOT swallow failures (|| true) — a broken
 # pip install (e.g. sam2/transformers pulling an incompatible numpy/torch) leaves
@@ -28,7 +27,9 @@ RUN for d in */ ; do \
             if [ -s /tmp/req.txt ]; then pip install --no-cache-dir -r /tmp/req.txt ; fi ; \
         fi ; \
     done && \
-    pip install --no-cache-dir "ultralytics>=8.0.0" "segment-anything"
+    pip install --no-cache-dir "ultralytics>=8.0.0" "segment-anything" && \
+    pip uninstall -y opencv-python opencv-python-headless && \
+    pip install --no-cache-dir opencv-python-headless
 
 # Build-time diagnostic: test the imports that Impact-Pack depends on at runtime.
 # If any fail the build fails here with a clear message instead of silently at startup.

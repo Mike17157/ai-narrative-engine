@@ -12,7 +12,7 @@
   // cast: [{ character, name, role, primary, hasRef, height, desc, images:[url] }] · onChanged() reloads.
   // ONE surface: flip the carousel to switch character, investigate properties inline (tabs), and
   // run all (re)generation through the gated RegenModal. (The old ?c= Portrait Studio is retired.)
-  let { storyKey, cast = [], selectKey = '', onChanged = () => {} } = $props();
+  let { storyKey, cast = [], selectKey = '', onChanged = () => {}, initialJob = '' } = $props();
   const abs = (u) => (u && u.startsWith('/api') ? location.origin + u : u);
 
   // ---- carousel: pick a character; the strip shows the cast height-scaled (feet on one floor) ----
@@ -108,6 +108,8 @@
   let bulkTitle = $state('');
   let bulkErr = $state(null);
   let bulkFailed = false;
+  // Seed from a job started by the caller (e.g. story wizard fires plan-wardrobe-all on save).
+  $effect(() => { if (initialJob && !bulkJob) { bulkJob = initialJob; bulkTitle = 'Planning wardrobes'; } });
   async function regenCast() {
     if (!await askConfirm({
       title: 'Regenerate the whole cast?',
@@ -129,45 +131,52 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="dash">
-  <div class="dhead">
-    <h4>Cast &amp; wardrobe <span class="lo">— flip through the cast; investigate &amp; regenerate inline</span></h4>
-    <div class="bulk">
-      <button class="ghost sm dgr" onclick={regenCast} disabled={!!bulkJob}>↻ Regenerate whole cast</button>
-      <button class="ghost sm" onclick={planAll} disabled={!!bulkJob}>✨ Plan outfits for all</button>
-    </div>
-  </div>
-  {#if bulkErr}<div class="err">⚠ {bulkErr}</div>{/if}
-  {#if bulkJob}<GenStream jobId={bulkJob} title={bulkTitle} onError={(m) => { bulkErr = m; bulkFailed = true; }} onDone={onBulkDone} />{/if}
-
-  {#if !cast.length}
-    <div class="empty">No cast yet — regenerate the cast to populate it.</div>
-  {:else}
-    <!-- height-scaled character carousel: arrows + click to select -->
-    <div class="carousel">
-      <button class="nav" onclick={() => slide(-1)} disabled={winStart === 0} aria-label="Previous">‹</button>
-      <div class="strip">
-        {#each visible as v (v.c.character)}
-          <button class="fig" class:sel={v.i === selIdx} class:primary={v.c.primary}
-                  onclick={() => (selIdx = v.i)} title={v.c.name}>
-            <div class="chart">
-              {#if v.c.hasRef}
-                <img src={refUrl(v.c)} alt={v.c.name} style="transform:scale({figScale(v.c)})" />
-              {:else}
-                <div class="noimg" style="transform:scale({figScale(v.c)})">no base</div>
-              {/if}
-            </div>
-            <span class="cap"><span class="nm">{v.c.name}{#if v.c.primary}<span class="lead">★</span>{/if}</span>
-              <span class="cm">{Number(v.c.height) ? `${v.c.height} cm · ${ftin(v.c.height)}` : '—'}</span></span>
-          </button>
-        {/each}
+  <!-- Screen 1: cast carousel + bulk controls -->
+  <div class="screen sc-cast">
+    <div class="dhead">
+      <h4>Cast &amp; wardrobe <span class="lo">— flip through the cast; investigate &amp; regenerate inline</span></h4>
+      <div class="bulk">
+        <button class="ghost sm dgr" onclick={regenCast} disabled={!!bulkJob}>↻ Regenerate whole cast</button>
+        <button class="ghost sm" onclick={planAll} disabled={!!bulkJob}>✨ Plan outfits for all</button>
       </div>
-      <button class="nav" onclick={() => slide(1)} disabled={winStart >= maxStart} aria-label="Next">›</button>
-      {#if cast.length > PAGE}<div class="pageind">{winStart + 1}–{Math.min(winStart + PAGE, cast.length)} of {cast.length}</div>{/if}
     </div>
+    {#if bulkErr}<div class="err">⚠ {bulkErr}</div>{/if}
+    {#if bulkJob}<GenStream jobId={bulkJob} title={bulkTitle} onError={(m) => { bulkErr = m; bulkFailed = true; }} onDone={onBulkDone} />{/if}
 
-    <!-- selected character — investigate tabs + one Regenerate entry point -->
-    {#if cur}
-      {@const s = cs(cur.character)}
+    {#if !cast.length}
+      <div class="empty">No cast yet — regenerate the cast to populate it.</div>
+    {:else}
+      <!-- height-scaled character carousel: arrows + click to select -->
+      <div class="carousel">
+        <button class="nav" onclick={() => slide(-1)} disabled={winStart === 0} aria-label="Previous">‹</button>
+        <div class="strip">
+          {#each visible as v (v.c.character)}
+            <button class="fig" class:sel={v.i === selIdx} class:primary={v.c.primary}
+                    onclick={() => (selIdx = v.i)} title={v.c.name}>
+              <div class="chart">
+                {#if v.c.hasRef}
+                  <img src={refUrl(v.c)} alt={v.c.name} style="transform:scale({figScale(v.c)})" />
+                {:else}
+                  <div class="noimg" style="transform:scale({figScale(v.c)})">no base</div>
+                {/if}
+              </div>
+              <span class="cap"><span class="nm">{v.c.name}{#if v.c.primary}<span class="lead">★</span>{/if}</span>
+                <span class="cm">{Number(v.c.height) ? `${v.c.height} cm · ${ftin(v.c.height)}` : '—'}</span></span>
+            </button>
+          {/each}
+        </div>
+        <button class="nav" onclick={() => slide(1)} disabled={winStart >= maxStart} aria-label="Next">›</button>
+        {#if cast.length > PAGE}<div class="pageind">{winStart + 1}–{Math.min(winStart + PAGE, cast.length)} of {cast.length}</div>{/if}
+      </div>
+      {#if cur}<div class="scroll-hint" aria-hidden="true">↓ details &amp; wardrobe</div>{/if}
+    {/if}
+  </div>
+
+  {#if cast.length && cur}
+    {@const s = cs(cur.character)}
+
+    <!-- Screen 2: selected character detail -->
+    <div class="screen sc-detail">
       <div class="detail" class:primary={cur.primary}>
         <div class="hero-col">
           <div class="hero">
@@ -211,17 +220,18 @@
           {/if}
         </div>
       </div>
+    </div>
 
-    {/if}
-
-    <!-- Inline wardrobe: always visible below the detail panel for the selected character -->
-    <div class="wardrobe">
-      <div class="w-hdr">
-        <span class="w-hdr-title">Outfits &amp; expressions — {cs(cur.character).name || cur.name}</span>
-        <AffectScatter charKey={cur.character} refresh={spriteBust} compact />
+    <!-- Screen 3: wardrobe -->
+    <div class="screen sc-wardrobe">
+      <div class="wardrobe">
+        <div class="w-hdr">
+          <span class="w-hdr-title">Outfits &amp; expressions — {s.name || cur.name}</span>
+          <AffectScatter charKey={cur.character} refresh={spriteBust} compact />
+        </div>
+        <Sprites charKey={cur.character} charName={cur.name} hasRef={cur.hasRef} mode="wardrobe"
+          refresh={spriteBust} {triggerGen} screen={`stories/${storyKey}/cast`} />
       </div>
-      <Sprites charKey={cur.character} charName={cur.name} hasRef={cur.hasRef} mode="wardrobe"
-        refresh={spriteBust} {triggerGen} screen={`stories/${storyKey}/cast`} />
     </div>
   {/if}
 </div>
@@ -232,7 +242,22 @@
 {/if}
 
 <style>
-  .dash { display: flex; flex-direction: column; gap: 12px; }
+  /* Scroll-snap container: each .screen is one full viewport slide */
+  .dash { display: flex; flex-direction: column; height: 100%; overflow-y: scroll;
+          scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+  .screen { scroll-snap-align: start; height: 100vh; flex-shrink: 0;
+            display: flex; flex-direction: column; gap: 12px;
+            padding: 20px 24px; box-sizing: border-box; overflow: hidden; }
+  /* Detail screen allows internal scroll for long descriptions */
+  .sc-detail { overflow-y: auto; overflow-x: hidden; }
+  /* Wardrobe screen: tighter padding, wardrobe fills remaining height */
+  .sc-wardrobe { padding: 12px 16px; }
+  .sc-wardrobe .wardrobe { flex: 1; min-height: 0; }
+  /* Bounce hint at bottom of the cast screen */
+  .scroll-hint { margin-top: auto; padding-bottom: 6px; text-align: center;
+                 font-size: 11px; color: var(--faint); animation: sc-bounce 2s ease-in-out infinite; }
+  @keyframes sc-bounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(5px); } }
+
   .dhead { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
   h4 { margin: 4px 0; font-size: 12px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
   .lo { color: var(--faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
@@ -299,7 +324,7 @@
   .hint { margin: 8px 0 0; font-size: 11.5px; }
 
   /* ---- inline wardrobe ---- */
-  .wardrobe { display: flex; flex-direction: column; min-height: 520px; height: 64vh;
+  .wardrobe { display: flex; flex-direction: column;
     background: var(--panel); border: 1px solid var(--border-soft); border-radius: 12px;
     overflow: hidden; }
   .w-hdr { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 10px 14px;
@@ -307,5 +332,5 @@
   .w-hdr-title { font-size: 13px; font-weight: 680; color: var(--text); flex: 1; }
   .wardrobe :global(.wv) { flex: 1; min-height: 0; }
 
-  @media (max-width: 640px) { .detail { grid-template-columns: 1fr; } }
+  @media (max-width: 640px) { .detail { grid-template-columns: 1fr; } .screen { padding: 14px 14px; } }
 </style>

@@ -12,16 +12,8 @@ from ..services import config_files
 from ..services.config_files import STORY_BUILDER_DEFAULT
 from ..services.images import _clean_reference_png, _randomize_seeds, _render
 from ..services.jobs_util import _start_stream_job
-from ..services.prompts import (
-    FEATURES_SCHEMA,
-    OUTFIT_SCHEMA,
-    PLAY_SCHEMA,
-    _FULLBODY_FRAMING,
-    _assemble_base_prompt,
-    _regionize_prompt,
-    _safe_image_tags,
-    _snap_prompt,
-)
+from ..services.prompts import FEATURES_SCHEMA, PLAY_SCHEMA, _assemble_base_prompt
+from ..services.wardrobe import apply_manifest as _apply_manifest, plan_and_apply as _plan_and_apply
 
 
 def register(app, ctx):
@@ -60,7 +52,8 @@ def register(app, ctx):
             return JSONResponse({"error": systems}, status_code=400)
         system, prompt = storyboard_inputs(name=ch.name, persona=ch.system,
                                            extras=ctx.card_extras(ch, body["character"]),
-                                           systems=systems)
+                                           systems=systems,
+                                           premise=(body.get("premise") or "").strip())
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -255,12 +248,17 @@ def register(app, ctx):
             # kept as the seed fed into the composer.
             cast = [{**base, "primary": True}] + [{**n, "primary": False} for n in npcs]
             from concurrent.futures import ThreadPoolExecutor
+            from loom.pipeline import compose_base_prompt as _compose_base_prompt
+            _bp_cfg = ctx.load_story_builder()
+            _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+            _bp_sys = (_bp_cfg.get("systems") or {})
 
             def _bp(item):
                 idx, p = item
                 try:
-                    r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
-                                             p.get("appearance", ""), p.get("role", ""))
+                    r = _compose_base_prompt(_bp_prov, p.get("name", ""), p.get("persona", ""),
+                                             p.get("appearance", ""), p.get("role", ""),
+                                             systems=_bp_sys)
                     if not isinstance(r, dict):
                         return (idx, "", None)
                     return (idx, r.get("prompt", ""), (r.get("features") or {}).get("height_cm"))
@@ -278,6 +276,227 @@ def register(app, ctx):
             return {"cast": cast}
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
+
+    @app.post("/api/stories/workshop")
+    async def story_workshop(body: dict):
+        """Collaborative story-planning chat. Streams a conversational response from a
+        story-architect persona that knows the character and helps the user develop a premise
+        before committing to a full storyboard generation.
+
+        Body: { character: str, messages: [{role: str, content: str}], premise?: str }
+        Streams `delta` text events + a final `done` event (same SSE pattern as storyboard).
+        """
+        import asyncio
+        import threading
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(body.get("character"))
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+
+        provider, systems = ctx.builder_ctx(body, "storyboard")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+
+        # Build character context for the workshop system prompt.
+        extras = ctx.card_extras(ch, body["character"])
+        from ...pipeline._helpers import _card_context
+        card = _card_context(ch.name, ch.system, extras)
+
+        system = (
+            f"You are a collaborative story architect. You know {ch.name} deeply — their card is "
+            f"provided below — and your job is to help the user develop the perfect story concept "
+            f"for them before committing to a full generation.\n\n"
+            f"Be curious and creative: ask what the user wants to feel, propose bold concepts, "
+            f"offer alternatives. Build toward a refined premise through conversation. Keep each "
+            f"response focused and conversational — 2-4 paragraphs at most. When the user seems "
+            f"satisfied or asks you to, offer to proceed with a full storyboard.\n\n"
+            f"Do NOT generate a full storyboard here — just converse and refine the concept.\n\n"
+            f"CHARACTER CARD:\n{card}"
+        )
+
+        # Build the conversation transcript as a single prompt string.
+        # The system prompt already has all the character context; the prompt is the dialogue.
+        messages = list(body.get("messages") or [])
+        premise = (body.get("premise") or "").strip()
+        if not messages and premise:
+            messages = [{"role": "user", "content": f"I have a premise in mind: {premise}"}]
+        elif not messages:
+            messages = [{"role": "user", "content": "Help me develop a story for this character."}]
+
+        # Serialize the conversation history as a readable transcript for the prompt.
+        transcript_parts = []
+        for msg in messages:
+            role = (msg.get("role") or "user").strip()
+            content = (msg.get("content") or "").strip()
+            label = "User" if role == "user" else "Assistant"
+            if content:
+                transcript_parts.append(f"{label}: {content}")
+        # The model sees the full history and must reply to the last user turn.
+        prompt = "\n\n".join(transcript_parts) if transcript_parts else "User: Help me develop a story for this character."
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        cancel_evt = threading.Event()
+
+        def on_delta(t: str):
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t})
+
+        async def run():
+            try:
+                await run_in_threadpool(lambda: provider.generate_text(
+                    system=system, prompt=prompt, on_delta=on_delta,
+                    cancel=cancel_evt.is_set))
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            try:
+                while True:
+                    ev = await q.get()
+                    if ev is None:
+                        break
+                    yield f"data: {json.dumps(ev)}\n\n"
+            finally:
+                cancel_evt.set()
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/api/stories/chapter/regenerate")
+    async def chapter_regenerate(body: dict):
+        """Regenerate a single chapter of a storyboard in context of the full board.
+        Streams `delta` events while the model writes, then emits a `chapter` event with
+        the parsed beat dict on completion.
+
+        Body: { character: str, board: dict, chapter_index: int, instruction?: str }
+        """
+        import asyncio
+        import threading
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        from ...scenario import parse_storyboard
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(body.get("character"))
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+
+        board = body.get("board") or {}
+        chapter_index = body.get("chapter_index")
+        if chapter_index is None:
+            return JSONResponse({"error": "chapter_index is required"}, status_code=400)
+        try:
+            chapter_index = int(chapter_index)
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "chapter_index must be an integer"}, status_code=400)
+
+        beats = board.get("beats") or []
+        if chapter_index < 0 or chapter_index >= len(beats):
+            return JSONResponse({"error": f"chapter_index {chapter_index} out of range (board has {len(beats)} chapters)"},
+                                status_code=400)
+
+        provider, systems = ctx.builder_ctx(body, "storyboard")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+
+        current_beat = beats[chapter_index]
+        instruction = (body.get("instruction") or "").strip()
+
+        # Build context: logline + premise + adjacent chapters for continuity.
+        logline = board.get("logline", "")
+        premise = board.get("premise", "")
+        prev_beat = beats[chapter_index - 1] if chapter_index > 0 else None
+        next_beat = beats[chapter_index + 1] if chapter_index < len(beats) - 1 else None
+
+        def _fmt_beat(b: dict, n: int) -> str:
+            return (f"Chapter {n + 1}: {b.get('title', '(untitled)')}\n"
+                    f"  Narrative: {b.get('summary', '')}\n"
+                    f"  Emotional: {b.get('emotional_core', '')}\n"
+                    f"  Hook: {b.get('hook', '')}\n"
+                    f"  Location: {b.get('location', '')}")
+
+        context_parts = []
+        if logline:
+            context_parts.append(f"LOGLINE: {logline}")
+        if premise:
+            context_parts.append(f"PREMISE: {premise}")
+        if prev_beat:
+            context_parts.append(f"PREVIOUS CHAPTER:\n{_fmt_beat(prev_beat, chapter_index - 1)}")
+        context_parts.append(f"CURRENT CHAPTER (to rewrite):\n{_fmt_beat(current_beat, chapter_index)}")
+        if next_beat:
+            context_parts.append(f"NEXT CHAPTER:\n{_fmt_beat(next_beat, chapter_index + 1)}")
+
+        system = (
+            "You are rewriting ONE chapter of a story. Maintain the established tone, characters, "
+            "and dramatic arc shown in the context. Output ONLY the single chapter line — no "
+            "commentary, no numbering prefix, no markdown — in exactly this format:\n\n"
+            "Title | Narrative: <what concretely happens> | Emotional: <what shifts internally> | "
+            "Hook: <tension/question pulling into next chapter> | Location Name | "
+            "Characters, comma-separated | Scene: <1-2 sentence visual background, empty environment, "
+            "no people, painterly/evocative, matching this chapter's emotional tone>"
+        )
+
+        extras = ctx.card_extras(ch, body["character"])
+        from ...pipeline._helpers import _card_context
+        card = _card_context(ch.name, ch.system, extras)
+
+        user_prompt = (
+            f"CHARACTER:\n{card}\n\n"
+            + "\n\n".join(context_parts)
+            + (f"\n\nINSTRUCTION: {instruction}" if instruction else "")
+            + "\n\nRewrite the current chapter now."
+        )
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        cancel_evt = threading.Event()
+        full_text: list[str] = []
+
+        def on_delta(t: str):
+            full_text.append(t)
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t})
+
+        async def run():
+            try:
+                await run_in_threadpool(lambda: provider.generate_text(
+                    system=system, prompt=user_prompt, on_delta=on_delta,
+                    cancel=cancel_evt.is_set))
+                if not cancel_evt.is_set():
+                    # Parse the single chapter line from the streamed output.
+                    raw = "".join(full_text).strip()
+                    # Wrap in a fake storyboard so parse_storyboard can extract it.
+                    fake_board_text = f"CHAPTERS:\n1. {raw}"
+                    parsed = parse_storyboard(fake_board_text)
+                    beat = parsed["beats"][0] if parsed["beats"] else {}
+                    loop.call_soon_threadsafe(q.put_nowait,
+                                              {"type": "chapter", "index": chapter_index, "beat": beat})
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            try:
+                while True:
+                    ev = await q.get()
+                    if ev is None:
+                        break
+                    yield f"data: {json.dumps(ev)}\n\n"
+            finally:
+                cancel_evt.set()
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.post("/api/stories")
     def save_story(body: dict):
@@ -341,6 +560,10 @@ def register(app, ctx):
         # authority) for EVERY member IN PARALLEL — reuse one already on the entry, only compose the
         # missing ones. Same path as the ✨ button and regenerate_cast.
         from concurrent.futures import ThreadPoolExecutor
+        from loom.pipeline import compose_base_prompt as _compose_base_prompt
+        _bp_cfg = ctx.load_story_builder()
+        _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+        _bp_sys = (_bp_cfg.get("systems") or {})
 
         def _bp(item):
             idx, p = item
@@ -348,8 +571,9 @@ def register(app, ctx):
             if existing:
                 return (idx, existing, p.get("height_cm"))
             try:
-                r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
-                                         p.get("appearance", ""), p.get("role", ""))
+                r = _compose_base_prompt(_bp_prov, p.get("name", ""), p.get("persona", ""),
+                                         p.get("appearance", ""), p.get("role", ""),
+                                         systems=_bp_sys)
                 if not isinstance(r, dict):
                     return (idx, "", p.get("height_cm"))
                 return (idx, r.get("prompt", ""),
@@ -392,14 +616,25 @@ def register(app, ctx):
                 name_to_loc[l["name"].lower()] = lid
 
         # Persist the storyboard as the spine; link each beat's place to a location id.
+        # New beats include emotional_core, hook, and scene_prompt from the enriched format.
         board = draft.get("storyboard") or {}
         beats = []
         for b in board.get("beats", []) or []:
             loc = (b.get("location") or "")
-            beats.append({"title": b.get("title", ""), "summary": b.get("summary", ""),
-                          "location": name_to_loc.get(loc.lower(), loc),
-                          "characters": b.get("characters", [])})
-        storyboard = {"logline": board.get("logline", ""), "beats": beats}
+            beat: dict = {
+                "title": b.get("title", ""), "summary": b.get("summary", ""),
+                "location": name_to_loc.get(loc.lower(), loc),
+                "characters": b.get("characters", []),
+            }
+            # Preserve enriched fields if present (new 7-field format).
+            if b.get("emotional_core"):
+                beat["emotional_core"] = b["emotional_core"]
+            if b.get("hook"):
+                beat["hook"] = b["hook"]
+            if b.get("scene_prompt"):
+                beat["scene_prompt"] = b["scene_prompt"]
+            beats.append(beat)
+        storyboard = {"heart": board.get("heart", ""), "logline": board.get("logline", ""), "beats": beats}
 
         story = {
             "name": name, "premise": draft.get("premise", ""), "tone": draft.get("tone", ""),
@@ -527,14 +762,20 @@ def register(app, ctx):
             people = ([("__prot__", prot_data)] if prot_data else []) \
                 + [(str(i), n) for i, n in enumerate(npcs)]
 
+            from loom.pipeline import compose_base_prompt as _compose_base_prompt
+            _bp_cfg = ctx.load_story_builder()
+            _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+            _bp_sys = (_bp_cfg.get("systems") or {})
+
             def _bp(item):
                 pid, p = item
                 if cancelled():
                     return (pid, "")
                 emit({"type": "phase", "label": f"Rendering appearance — {p.get('name', '?')}"})
                 try:
-                    r = ctx.compose_base_prompt(p.get("name", ""), p.get("persona", ""),
-                                             p.get("appearance", ""), p.get("role", ""))
+                    r = _compose_base_prompt(_bp_prov, p.get("name", ""), p.get("persona", ""),
+                                             p.get("appearance", ""), p.get("role", ""),
+                                             systems=_bp_sys)
                 except Exception as exc:  # noqa: BLE001 — one character must not sink the whole regen
                     emit({"type": "phase", "label": f"{p.get('name', '?')}: appearance failed ({exc})"})
                     return (pid, "")
@@ -591,7 +832,6 @@ def register(app, ctx):
             # immediately populated when the user arrives at the cast page.
             emit({"type": "phase", "label": "Planning wardrobes…"})
             try:
-                from ...scenario import plan_wardrobe as _plan_wardrobe
                 w_prov, w_sys = ctx.builder_ctx({}, "wardrobe")
                 if w_prov is not None:
                     full_story = st.model_dump()
@@ -602,12 +842,7 @@ def register(app, ctx):
                         if ch is None:
                             continue
                         emit({"type": "phase", "label": f"Planning {ch.name}'s wardrobe"})
-                        appr = (ch.fields or {}).get("appearance", "")
-                        plan = _plan_wardrobe(w_prov, char_name=ch.name, persona=ch.system or "",
-                                              appearance=appr, story=full_story,
-                                              systems=w_sys, on_event=emit)
-                        outfits = ctx.refine_outfits(plan.get("outfits"), ch.system or "", appr, emit=emit)
-                        portraits_apply_wardrobe(ckey, {"outfits": outfits, "replace": True})
+                        _plan_and_apply(ctx, w_prov, ckey, ch, full_story, w_sys, emit=emit, replace=True)
             except Exception as exc:  # noqa: BLE001
                 emit({"type": "phase", "label": f"Wardrobe planning skipped ({exc})"})
 
@@ -760,7 +995,8 @@ def register(app, ctx):
             # Pass 2 — refine EACH outfit into careful, consistent booru tags, in parallel (same
             # 2-step pipeline the base image gets).
             emit({"type": "phase", "label": "Refining each outfit — booru tags"})
-            plan["outfits"] = ctx.refine_outfits(plan.get("outfits"), ch.system, appearance, emit=emit)
+            from loom.pipeline import refine_outfits as _refine_outfits
+            plan["outfits"] = _refine_outfits(provider, plan.get("outfits"), ch.system, appearance, emit=emit)
             return {"character": char_key, **plan}
 
         job = _start_stream_job("wardrobe", "Plan wardrobe", ch.name,
@@ -771,8 +1007,6 @@ def register(app, ctx):
     async def story_plan_wardrobe_all(key: str, body: dict):
         """Plan + SAVE (replace) the wardrobe for EVERY cast member, STREAMED as one job. Plans
         only — renders no sprites; the user renders those per-character afterward. Returns {job}."""
-        from ...scenario import plan_wardrobe
-
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -792,17 +1026,10 @@ def register(app, ctx):
                     continue
                 emit({"type": "phase", "label": f"Planning {ch.name}'s wardrobe"})
                 try:
-                    appr = (ch.fields or {}).get("appearance", "")
-                    plan = plan_wardrobe(provider, char_name=ch.name, persona=ch.system,
-                                         appearance=appr, story=story,
-                                         systems=systems, on_event=emit)
-                    outfits = ctx.refine_outfits(plan.get("outfits"), ch.system, appr, emit=emit)
-                    # Emotions are the fixed canonical taxonomy — apply composes them from the
-                    # persona; we do NOT pass the (legacy) plan expressions.
-                    portraits_apply_wardrobe(ckey, {"outfits": outfits, "replace": True})
+                    outfits = _plan_and_apply(ctx, provider, ckey, ch, story, systems,
+                                              emit=emit, replace=True)
                     planned += 1
-                    emit({"type": "item", "name": ch.name,
-                          "text": f"{len(plan.get('outfits', []))} outfits"})
+                    emit({"type": "item", "name": ch.name, "text": f"{len(outfits)} outfits"})
                 except Exception as exc:  # noqa: BLE001 — one character failing must not sink the rest
                     emit({"type": "phase", "label": f"{ch.name} skipped ({exc})"})
             return {"ok": True, "planned": planned}
@@ -810,97 +1037,6 @@ def register(app, ctx):
         job = _start_stream_job("wardrobe", "Plan all wardrobes", st.name,
                                 f"stories/{key}/cast", work)
         return {"job": job.id}
-
-    @app.post("/api/characters/{key}/portraits/wardrobe")
-    def portraits_apply_wardrobe(key: str, body: dict):
-        """Merge a planned wardrobe into the character's portrait studio (additive): add outfits
-        (with attire_prompt). Emotions are the FIXED canonical taxonomy stored ONCE at the character
-        level (composed here from the persona if absent), shared by every outfit; sprites are
-        rendered later.
-
-        With `replace: true` it's DESTRUCTIVE — the existing outfits and their rendered sprites are
-        deleted first (e.g. after the base image changed, so the old sprites are stale), then the new
-        plan is written fresh. The canonical expression set is preserved across a replace."""
-        c = ctx.base_settings.characters.get(key)
-        if c is None:
-            return JSONResponse({"error": "no such character"}, status_code=404)
-        body = body or {}
-        m = ctx.portrait_manifest(key)
-        if body.get("replace"):
-            import shutil
-            pdir = ctx.portrait_dir(key)
-            for o in m.get("outfits", []) or []:
-                od = pdir / (o.get("id") or "")
-                if o.get("id") and od.is_dir():
-                    shutil.rmtree(od, ignore_errors=True)
-            m["outfits"] = []
-        # Character-level canonical emotion prompts (the FIXED taxonomy) — compose ONCE, reuse for
-        # every outfit. An explicit `expressions` in the body overrides/merges; else compose from the
-        # persona if the manifest doesn't have them yet.
-        canon = dict(m.get("expression_prompts") or {})
-        body_exprs = body.get("expressions") if isinstance(body.get("expressions"), dict) else None
-        if body_exprs:
-            canon.update(body_exprs)
-        if not canon:
-            from ..services.prompts import _persona_text
-            try:
-                canon = ctx.compose_expressions(_persona_text(c))
-            except Exception:  # noqa: BLE001
-                canon = {}
-        m["expression_prompts"] = canon
-        # Per-character body language (persona-driven), sibling of expression_prompts. Body explicit
-        # `poses` overrides/merges; else compose from the persona when the manifest has none yet.
-        poses = dict(m.get("pose_prompts") or {})
-        body_poses = body.get("poses") if isinstance(body.get("poses"), dict) else None
-        if body_poses:
-            poses.update(body_poses)
-        if not poses:
-            from ..services.prompts import _persona_text
-            try:
-                poses = ctx.compose_poses(_persona_text(c))
-            except Exception:  # noqa: BLE001
-                poses = {}
-        m["pose_prompts"] = poses
-        # Personality-rooted emotion RANGE — the curated subset of keys this character expresses.
-        # Stored as affect.range = [key1, key2, ...] (plain list of strings).
-        # An explicit `affect.range` in the body overrides; else compose ONCE when the manifest
-        # has none. The director picks keys directly from this list at runtime.
-        affect = m.get("affect") if isinstance(m.get("affect"), dict) else None
-        body_affect = body.get("affect") if isinstance(body.get("affect"), dict) else None
-        if body_affect and isinstance(body_affect.get("range"), list):
-            body_range = body_affect["range"]
-            # Accept both old [{emotion,...}] and new [key,...] formats from callers.
-            if body_range and isinstance(body_range[0], dict):
-                body_range = [e["emotion"] for e in body_range if e.get("emotion")]
-            affect = {"range": body_range}
-        elif not (affect and affect.get("range")):
-            from ..services.prompts import _persona_text
-            try:
-                affect = ctx.compose_affect_range(_persona_text(c))
-                if not isinstance(affect, dict) or not affect.get("range"):
-                    affect = None
-            except Exception:  # noqa: BLE001
-                affect = None
-        if affect:
-            m["affect"] = affect
-        existing = {o.get("name", "").lower() for o in m.get("outfits", [])}
-        for o in body.get("outfits", []) or []:
-            nm = (o.get("name") or "").strip()
-            if not nm or nm.lower() in existing:
-                continue
-            oid = re.sub(r"[^\w\-]+", "-", nm.lower()).strip("-") or "outfit"
-            base_oid, n = oid, 2
-            ids = {x.get("id") for x in m["outfits"]}
-            while oid in ids:
-                oid, n = f"{base_oid}-{n}", n + 1
-            # Tidy the attire (prose-intact; re-derived again when combined at render).
-            attire = _regionize_prompt(_snap_prompt(_safe_image_tags((o.get("attire_prompt") or "").strip())))
-            m["outfits"].append({"id": oid, "name": nm, "instruction": "",
-                                 "prompt": attire, "attire_prompt": attire, "expressions": {}})
-            existing.add(nm.lower())
-        ctx.save_portrait_manifest(key, m)
-        return {"ok": True, "outfits": [o["name"] for o in m["outfits"]],
-                "emotions": list(canon.keys())}
 
     @app.post("/api/stories/{key}/regenerate-character")
     async def regenerate_character(key: str, body: dict):
@@ -913,7 +1049,7 @@ def register(app, ctx):
         refresh the persona-driven canonical expression prompts (and plan a wardrobe if none exists) —
         and SKIPS every image render, leaving existing outfits and rendered sprites untouched. The
         gated RegenModal uses this so the user can review each image stage before it renders."""
-        from ...scenario import plan_wardrobe, revise_character
+        from ...scenario import revise_character
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
@@ -944,8 +1080,12 @@ def register(app, ctx):
                 return {"cancelled": True}
             # 2. Compose the rich base-image prompt from the rewritten persona + appearance.
             emit({"type": "phase", "label": "Composing the base-image prompt"})
-            comp = ctx.compose_base_prompt(revised["name"], revised["persona"],
-                                        revised["appearance"], revised["role"])
+            from loom.pipeline import compose_base_prompt as _compose_base_prompt
+            _bp_cfg = ctx.load_story_builder()
+            _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+            comp = _compose_base_prompt(_bp_prov, revised["name"], revised["persona"],
+                                        revised["appearance"], revised["role"],
+                                        systems=(_bp_cfg.get("systems") or {}))
             base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
             height_cm = (comp.get("features") or {}).get("height_cm") if isinstance(comp, dict) else None
             # 3. Persist the rewritten card (name / persona / role / appearance + base_prompt + height).
@@ -985,43 +1125,48 @@ def register(app, ctx):
                     emit({"type": "phase", "label": f"Base image skipped ({exc})"})
                 if cancelled():
                     return {"cancelled": True}
-            # 5. Refresh the wardrobe TEXT. Full path rebuilds (replace) — old outfits + stale sprites
-            #    cleared. text_only refreshes the persona-driven canonical expression prompts and keeps
-            #    existing outfits + rendered sprites intact (the outfit-image stage recomposes attire at
-            #    render time); it plans a wardrobe only when there is none yet, so the gated image
-            #    stages have outfits to render.
+            # 5. Refresh the wardrobe. Full path (replace=True) clears old outfits + sprite dirs and
+            #    recomposes all persona-derived prompts fresh. text_only keeps existing outfits and
+            #    rendered sprites intact but refreshes expression/pose/affect from the new persona;
+            #    it plans a wardrobe only when there is none yet so the image stages have something
+            #    to render.
             emit({"type": "phase", "label": "Refreshing prompts" if text_only else "Rebuilding the wardrobe"})
             try:
-                # Persona changed → recompose the fixed canonical emotion set + body language from the
-                # new persona (face expressions + per-character pose body-language).
-                emit({"type": "phase", "label": "Composing expression + pose range"})
-                fresh_exprs = ctx.compose_expressions(revised["persona"])
-                fresh_poses = ctx.compose_poses(revised["persona"])
-                # The personality-rooted emotion RANGE (Tier-A valence translation): a curated subset
-                # of the 32 keys + persona-nudged V-A coords. Re-derived from the new persona so the
-                # carousel's X axis tracks who they became.
-                emit({"type": "phase", "label": "Composing emotional expression range"})
-                fresh_affect = ctx.compose_affect_range(revised["persona"])
+                w_prov, w_sys = ctx.builder_ctx({}, "wardrobe")
+                fresh_ch = ctx.base_settings.characters[char_key]
                 if text_only:
-                    apply = {"expressions": fresh_exprs, "poses": fresh_poses,
-                             "affect": fresh_affect if isinstance(fresh_affect, dict) and fresh_affect.get("range") else None}
+                    # Recompose persona-driven prompts from the revised persona and merge them into
+                    # the manifest without touching the existing outfits or their sprites.
+                    from loom.pipeline import (compose_expressions as _compose_expressions,
+                                               compose_poses as _compose_poses,
+                                               compose_affect_range as _compose_affect_range,
+                                               plan_wardrobe as _plan_wardrobe,
+                                               refine_outfits as _refine_outfits)
+                    emit({"type": "phase", "label": "Composing expression + pose range"})
+                    fresh_exprs = _compose_expressions(w_prov or provider, revised["persona"])
+                    fresh_poses = _compose_poses(w_prov or provider, revised["persona"])
+                    emit({"type": "phase", "label": "Composing emotional expression range"})
+                    _emo_cfg = ctx.load_story_builder()
+                    _emo_prov = ctx.author_provider(config_files._stage_model(_emo_cfg, "emotion"))
+                    fresh_affect = _compose_affect_range(_emo_prov, revised["persona"],
+                                                        systems=(_emo_cfg.get("systems") or {}))
+                    apply_body: dict = {"expressions": fresh_exprs, "poses": fresh_poses}
+                    if isinstance(fresh_affect, dict) and fresh_affect.get("range"):
+                        apply_body["affect"] = fresh_affect
                     if not (ctx.portrait_manifest(char_key).get("outfits") or []):
-                        plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
-                                             appearance=revised["appearance"], story=story,
-                                             systems=systems, on_event=emit)
-                        apply["outfits"] = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
-                                                              revised["appearance"], emit=emit)
-                    portraits_apply_wardrobe(char_key, apply)
+                        plan = _plan_wardrobe(w_prov or provider, char_name=revised["name"],
+                                              persona=revised["persona"],
+                                              appearance=revised["appearance"],
+                                              story=story, systems=w_sys or systems, on_event=emit)
+                        apply_body["outfits"] = _refine_outfits(
+                            w_prov or provider, plan.get("outfits"),
+                            revised["persona"], revised["appearance"], emit=emit)
+                    _apply_manifest(ctx, char_key, apply_body)
                 else:
-                    plan = plan_wardrobe(provider, char_name=revised["name"], persona=revised["persona"],
-                                         appearance=revised["appearance"], story=story,
-                                         systems=systems, on_event=emit)
-                    outfits = ctx.refine_outfits(plan.get("outfits"), revised["persona"],
-                                              revised["appearance"], emit=emit)
-                    portraits_apply_wardrobe(char_key, {"outfits": outfits, "expressions": fresh_exprs,
-                                                        "poses": fresh_poses,
-                                                        "affect": fresh_affect if isinstance(fresh_affect, dict) and fresh_affect.get("range") else None,
-                                                        "replace": True})
+                    # Full rebuild: replace=True clears outfits + persona caches; apply_manifest
+                    # recomposes expressions/poses/affect fresh from the saved revised persona.
+                    _plan_and_apply(ctx, w_prov or provider, char_key, fresh_ch,
+                                    story, w_sys or systems, emit=emit, replace=True)
             except Exception as exc:  # noqa: BLE001
                 emit({"type": "phase", "label": f"Wardrobe refresh skipped ({exc})"})
             emit({"type": "phase", "label": f"Done — {revised['name']} {'text refreshed' if text_only else 'regenerated'}"})

@@ -29,7 +29,6 @@ from .routers import (
     lora,
     models_conn,
     personas,
-    run,
     scenarios,
     server,
     stories,
@@ -88,7 +87,6 @@ _ROUTERS = (
     comfy,
     personas,
     jobs,
-    run,
 )
 
 

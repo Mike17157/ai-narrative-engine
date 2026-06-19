@@ -62,8 +62,7 @@ def register(app, ctx):
     # -- LoRA dataset builder --------------------------------------------
     @app.post("/api/lora/prompts")
     def lora_prompts(body: LoraPromptsRequest):
-        pg = config_files.load_promptgen(ctx.root)
-        provider = ctx.text_provider_for(body.model or pg.get("model"))
+        provider = ctx.text_provider_for(body.model)
         if provider is None:
             return JSONResponse({"error": "no text connection — set one up in Connection first"}, status_code=400)
         schema = {
@@ -78,7 +77,7 @@ def register(app, ctx):
             f"(subject, appearance, setting, lighting, composition). Return them in `prompts`."
         )
         try:
-            res = provider.generate_text(system=pg.get("system"), prompt=instruction, emits=schema)
+            res = provider.generate_text(system=None, prompt=instruction, emits=schema)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
         prompts = [p for p in (res.data.get("prompts") or []) if isinstance(p, str) and p.strip()]

@@ -98,15 +98,25 @@ class AppContext:
         self.user = user
         self.comfy_url = comfy_url
         # RunPod config for dynamic GPU scaling
+        rp = user.runpod if hasattr(user, 'runpod') else None
         self.runpod_config = {
             # Env var wins so the secret can live in .env (gitignored) rather than user.yaml.
-            "api_key": os.environ.get("RUNPOD_API_KEY", "") or (user.runpod.api_key if hasattr(user, 'runpod') else ""),
-            "serverless_endpoint_id": os.environ.get("RUNPOD_ENDPOINT_ID", "") or (user.runpod.serverless_endpoint_id if hasattr(user, 'runpod') else ""),
-            "images_per_instance": user.runpod.images_per_instance if hasattr(user, 'runpod') else 10,
-            "min_instances": user.runpod.min_instances if hasattr(user, 'runpod') else 1,
-            "max_instances": user.runpod.max_instances if hasattr(user, 'runpod') else 10,
-            "template_id": user.runpod.template_id if hasattr(user, 'runpod') else None,
+            "enabled": rp.enabled if rp else True,
+            "api_key": os.environ.get("RUNPOD_API_KEY", "") or (rp.api_key if rp else ""),
+            "serverless_endpoint_id": os.environ.get("RUNPOD_ENDPOINT_ID", "") or (rp.serverless_endpoint_id if rp else ""),
+            "images_per_instance": rp.images_per_instance if rp else 10,
+            "min_instances": rp.min_instances if rp else 1,
+            "max_instances": rp.max_instances if rp else 10,
+            "template_id": rp.template_id if rp else None,
         }
+
+    def set_runpod_enabled(self, enabled: bool) -> None:
+        """Toggle RunPod routing on/off and persist to user.yaml."""
+        self.runpod_config["enabled"] = enabled
+        user_path = self.root / "user.yaml"
+        raw: dict = yaml.safe_load(user_path.read_text(encoding="utf-8")) if user_path.is_file() else {}
+        raw.setdefault("runpod", {})["enabled"] = enabled
+        user_path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def reload_settings(self) -> None:
         self.base_settings = load_settings(self.root)
@@ -136,34 +146,6 @@ class AppContext:
         from .services.poses import ASPECT_DIMS, resolve_geometry
         return ASPECT_DIMS[resolve_geometry(emo, config_files.load_poses(self.root))["aspect"]]
 
-    def compose_poses(self, persona: str, model: str | None = None) -> dict:
-        """Body-language booru tags for the FIXED emotion taxonomy, personalized to the persona — ONE
-        structured call (mirrors compose_expressions). Each emotion → THIS character's stance/limbs/energy,
-        grounded to real tags. Returns {emotion_key: pose_tags} (best-effort; omitted ones → '')."""
-        from .services.emotions import EMOTIONS, EMOTION_KEYS
-        from .services.poses import _POSE_SYSTEM
-        cfg = self.load_story_builder()
-        provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
-        if provider is None:
-            return {k: "" for k in EMOTION_KEYS}
-        schema = {"type": "object", "additionalProperties": False, "required": EMOTION_KEYS,
-                  "properties": {k: {"type": "string"} for k in EMOTION_KEYS}}
-        listing = "\n".join(f"- {e['key']} ({e['label']})" for e in EMOTIONS)
-        system = _POSE_SYSTEM + ("\n\nYou are given a FIXED list of emotions. For EVERY emotion key, output "
-                                 "how THIS character's BODY carries it as thorough body-language tags. "
-                                 "Return exactly one field per emotion key.")
-        prompt = f"CHARACTER PERSONA:\n{persona}\n\nEMOTIONS (give a body-language prompt for each):\n{listing}"
-        try:
-            data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
-        except Exception:  # noqa: BLE001
-            data = {}
-        # Pose tags join the sprite prompt at render time — tidy whitespace, prose-intact.
-        out = {}
-        for k in EMOTION_KEYS:
-            raw = str(data.get(k) or "").strip()
-            out[k] = _prompts._snap_prompt(_prompts._safe_image_tags(raw)) if raw else ""
-        return out
-
     def load_story_builder(self) -> dict:
         return config_files.load_story_builder(self.root)
 
@@ -171,7 +153,7 @@ class AppContext:
     def effective_settings(self) -> Settings:
         """Base models plus a text model for each saved text/image-prompt connection."""
         models = dict(self.base_settings.models)
-        for conn in [*self.store.list("text"), *self.store.list("image_prompt")]:
+        for conn in self.store.list("text"):
             models[conn.id] = ModelDef(provider=conn.provider, kind="text", options=conn.to_model_options())
         return Settings(models=models, characters=self.base_settings.characters, pipelines=self.base_settings.pipelines)
 
@@ -706,200 +688,3 @@ class AppContext:
         self.reload_settings()
         return f"/api/stories/{key}/bg/{loc}.png"
 
-    def compose_base_prompt(self, name: str, persona: str, appearance_notes: str = "",
-                            role: str = "", model: str | None = None) -> dict:
-        """THE single appearance authority. A natural-language physical description → the image
-        prompt + structured features. ONE author call (`compose_nl_base`) authors genuinely
-        STRUCTURED, personality-integrated prose and derives the structured fields in a single
-        pass; it falls back to the deterministic atomic-descriptor → prose assembler
-        (`_assemble_base_prompt`) if the structured call fails. Synchronous (call inside a
-        threadpool). Used by BOTH the ✨ button AND cast generation.
-        Returns {prompt, features, companions} or {error}."""
-        from ..scenario.builder import DEFAULT_SYSTEMS
-        cfg = self.load_story_builder()
-        provider = self.author_provider(config_files._stage_model(cfg, "base_image", model))
-        if provider is None:
-            return {"error": "no author model configured"}
-
-        # ---- ONE pass: derive structured fields AND author structured prose ----------------
-        try:
-            nl = _prompts.compose_nl_base(provider, name, persona, appearance_notes, role) \
-                or _prompts.compose_nl_base(provider, name, persona, appearance_notes, role)
-        except Exception:  # noqa: BLE001
-            nl = None
-        if nl:
-            # `features` carries the derived fields (height_cm drives sprite scaling, etc.).
-            feats = {k: v for k, v in nl.items() if k != "prompt"}
-            return {"prompt": nl["prompt"], "features": feats, "companions": []}
-
-        # ---- Fallback: atomic descriptors → deterministic prose assembly -----------------
-        system = (cfg.get("systems") or {}).get("base_image") or DEFAULT_SYSTEMS["base_image"]
-        context = "\n\n".join(p for p in [
-            f"NAME: {name}",
-            f"PERSONA:\n{persona}" if persona else "",
-            f"APPEARANCE NOTES: {appearance_notes}" if appearance_notes else "",
-            f"ROLE: {role}" if role else "",
-        ] if p)
-        context = ("Fill the feature schema from this character's WRITTEN DESCRIPTION below "
-                   "(persona + appearance). Give `appearance` as a LIST of short, explicit, ATOMIC "
-                   "descriptors (one attribute each) — the system weaves each into the image prompt.\n\n"
-                   + context)
-        def _gen_feats():
-            return (provider.generate_text(system=system, prompt=context, emits=_prompts.FEATURES_SCHEMA).data) or {}
-        try:
-            feats = _gen_feats() or _gen_feats()
-        except Exception as exc:  # noqa: BLE001
-            return {"error": f"appearance generation failed: {exc}"}
-        if not feats:
-            return {"error": "model returned no structured features "
-                             "(author model may not support structured output)"}
-        return {"prompt": _prompts._assemble_base_prompt(feats),
-                "features": feats, "companions": []}
-
-    def compose_expressions(self, persona: str, model: str | None = None) -> dict:
-        """Face-only booru expression tags for the FIXED canonical emotion taxonomy, personalized to
-        the persona — ONE structured call. A persona's expression of an emotion is outfit-independent,
-        so this is composed ONCE per character and reused across every outfit. Returns {key: face_tags}
-        for every EMOTION_KEY (best-effort; any the model omits fall back to the emotion's hint cues)."""
-        from .services.emotions import EMOTIONS, EMOTION_KEYS, EMOTION_HINTS
-        fallback = {k: EMOTION_HINTS[k] for k in EMOTION_KEYS}
-        cfg = self.load_story_builder()
-        provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
-        if provider is None:
-            return fallback
-        schema = {"type": "object", "additionalProperties": False, "required": EMOTION_KEYS,
-                  "properties": {k: {"type": "string"} for k in EMOTION_KEYS}}
-        listing = "\n".join(f"- {e['key']} ({e['label']}): cues — {e['hint']}" for e in EMOTIONS)
-        system = _prompts._EXPRESSION_SYSTEM + (
-            "\n\nYou are given a FIXED list of emotions. For EVERY emotion key, output how THIS "
-            "character's face shows it as 3-7 booru expression tags (face/eyes/eyebrows/mouth + "
-            "emotion tags), personalized to the persona. Return exactly one field per emotion key.")
-        prompt = f"CHARACTER PERSONA:\n{persona}\n\nEMOTIONS (give a face prompt for each):\n{listing}"
-        try:
-            data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
-        except Exception:  # noqa: BLE001 — fall back to the hint cues
-            data = {}
-        return {k: (str(data.get(k) or "").strip() or fallback[k]) for k in EMOTION_KEYS}
-
-    def compose_affect_range(self, persona: str, model: str | None = None,
-                             nsfw: bool = False) -> dict:
-        """Curate a character's EMOTIONAL EXPRESSION RANGE — the set of emotion keys they can
-        display as portrait sprites. ONE structured call to the cheap 'emotion'-stage model.
-
-        Returns {range: [key1, key2, ...]} — a plain list of emotion key strings, sorted by
-        circumplex angle so the carousel X-axis has a stable, sensible left-to-right order.
-
-        The caller stores this list in the manifest as affect.range. At runtime the director picks
-        a key directly from this list — no coordinate snap. V-A is looked up from EMOTION_COORDS
-        at display time only (portrait_payload enriches the list before sending to the frontend).
-
-        On any failure falls back to the full NORMAL_KEYS set so sprite lookup never breaks."""
-        from .services.emotions import (EMOTIONS, EMOTION_KEYS, NORMAL_KEYS, NSFW_KEYS,
-                                        EMOTION_COORDS, range_to_display)
-        pool = EMOTION_KEYS if nsfw else NORMAL_KEYS
-        fallback = {"range": NORMAL_KEYS[:]}
-        cfg = self.load_story_builder()
-        provider = self.author_provider(config_files._stage_model(cfg, "emotion", model))
-        if provider is None:
-            return fallback
-        from .services.prompts import _AFFECT_SYSTEM
-        systems = cfg.get("systems") or {}
-        system = systems.get("emotion") or _AFFECT_SYSTEM
-        # Closed enum on the pool so the model cannot invent keys.
-        schema = {
-            "type": "object", "additionalProperties": False, "required": ["range"],
-            "properties": {"range": {
-                "type": "array", "minItems": 6, "maxItems": len(pool),
-                "items": {"type": "string", "enum": pool},
-            }},
-        }
-        pool_emotions = [e for e in EMOTIONS if e["key"] in set(pool)]
-        listing = "\n".join(f"- {e['key']}: {e['hint']}" for e in pool_emotions)
-        prompt = (f"CHARACTER PERSONA:\n{persona}\n\n"
-                  f"AVAILABLE EMOTION KEYS:\n{listing}\n\n"
-                  f"Return the emotion keys for this character's range.")
-        try:
-            data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
-        except Exception:  # noqa: BLE001
-            return fallback
-        raw = data.get("range") if isinstance(data, dict) else None
-        if not isinstance(raw, list) or not raw:
-            return fallback
-        # Dedupe and ground to real keys only.
-        seen: set[str] = set()
-        pool_set = set(pool)
-        cleaned = [k for k in raw if isinstance(k, str) and k in pool_set and not seen.add(k)]  # type: ignore[func-returns-value]
-        if not cleaned:
-            return fallback
-        # Ensure neutral is always present.
-        if "neutral" in pool_set and "neutral" not in seen:
-            cleaned.append("neutral")
-        import math
-        cleaned.sort(key=lambda k: math.atan2(EMOTION_COORDS[k][1], EMOTION_COORDS[k][0]))
-        return {"range": cleaned}
-
-    def compose_outfit_prompt(self, persona: str, base_appearance: str, outfit_name: str,
-                              brief_concept: str = "", model: str | None = None) -> dict:
-        """Generate a UNIFIED prose prompt for ONE outfit: character appearance + outfit in a single
-        coherent 80-150 word passage. One dedicated LLM call per outfit — never batched with others
-        so the model gives each its full attention. Returns {attire, unified} where attire is the
-        complete prose prompt ready for the image model. unified=True tells the render pipeline not
-        to prepend the appearance separately (it is already embedded). Empty attire on failure."""
-        import re as _re
-        cfg = self.load_story_builder()
-        provider = self.author_provider(config_files._stage_model(cfg, "wardrobe", model))
-        if provider is None:
-            return {"attire": "", "unified": False}
-
-        context = "\n\n".join(p for p in [
-            f"CHARACTER PERSONA:\n{persona}" if persona else "",
-            f"BASE APPEARANCE (physical traits — for integration into the outfit prompt):\n{base_appearance}" if base_appearance else "",
-            f"OUTFIT NAME: {outfit_name}" if outfit_name else "",
-            f"OUTFIT CONCEPT: {brief_concept}" if brief_concept else "",
-        ] if p)
-
-        try:
-            data = (provider.generate_text(
-                system=_prompts._UNIFIED_OUTFIT_SYSTEM,
-                prompt=context,
-                emits=_prompts.UNIFIED_OUTFIT_SCHEMA,
-            ).data) or {}
-        except Exception:  # noqa: BLE001
-            return {"attire": "", "unified": False}
-
-        prose = _re.sub(r"\s+", " ", (data.get("prompt") or "").strip())
-        if not prose:
-            return {"attire": "", "unified": False}
-        return {"attire": prose, "unified": True}
-
-    def refine_outfits(self, outfits: list, persona: str, base_appearance: str,
-                       model: str | None = None, emit=None) -> list:
-        """Generate a unified appearance+outfit prose prompt for EVERY outfit in PARALLEL — one
-        dedicated LLM call per outfit, all fired simultaneously. Each call has the model's full
-        attention (never shared with other outfits). The brief planning concept seeds each call but
-        the model generates the complete prompt from scratch. Outfits whose generation fails keep
-        their concept as a fallback attire_prompt."""
-        from concurrent.futures import ThreadPoolExecutor
-        outfits = [dict(o) for o in (outfits or [])]
-        if not outfits:
-            return outfits
-
-        def _one(o):
-            # Use the brief planning concept (or legacy attire_prompt if migrating old data)
-            concept = o.get("concept") or o.get("attire_prompt") or o.get("prompt") or ""
-            try:
-                r = self.compose_outfit_prompt(persona, base_appearance, o.get("name", ""),
-                                               concept, model)
-                if r.get("attire"):
-                    o["attire_prompt"] = r["attire"]
-                    o["unified"] = r.get("unified", False)
-            except Exception:  # noqa: BLE001
-                pass
-            if emit:
-                emit({"type": "item", "name": o.get("name", "outfit"),
-                      "text": o.get("attire_prompt", o.get("concept", ""))})
-            return o
-
-        # All outfits in parallel — max_workers = number of outfits (typically 2-5)
-        with ThreadPoolExecutor(max_workers=len(outfits)) as ex:
-            return list(ex.map(_one, outfits))

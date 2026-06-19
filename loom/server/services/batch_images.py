@@ -41,13 +41,14 @@ async def batch_generate_image(
     image_count = len(prompts)
     cfg = ctx.runpod_config if ctx else {}
 
-    # Serverless endpoint configured: fan jobs out to it — RunPod auto-scales
-    # workers, so there are no pods to spin up or tear down. Preferred path.
-    if cfg.get("serverless_endpoint_id") and cfg.get("api_key"):
+    runpod_on = cfg.get("enabled", True)
+
+    # Serverless endpoint configured and RunPod enabled: fan jobs out to it.
+    if runpod_on and cfg.get("serverless_endpoint_id") and cfg.get("api_key"):
         return await _generate_runpod_serverless(provider, workflow, prompts, ctx, out_prefix_template, latent)
 
-    # Small batch (or no RunPod at all): use the local single-instance flow.
-    if image_count < 10 or not cfg.get("api_key"):
+    # Small batch, RunPod disabled, or no RunPod at all: use the local single-instance flow.
+    if not runpod_on or image_count < 10 or not cfg.get("api_key"):
         return await _generate_single_instance(provider, workflow, prompts, ctx, out_prefix_template, latent)
 
     # Large batch with only an API key: spin up and manage whole GPU pods.

@@ -1,6 +1,9 @@
 <script>
   import { goto } from '$app/navigation';
   import Combobox from '$lib/components/Combobox.svelte';
+  import ChapterCard from '$lib/components/ChapterCard.svelte';
+  import SceneModal from '$lib/components/SceneModal.svelte';
+  import StoryWorkshop from '$lib/components/StoryWorkshop.svelte';
   import { autosize } from '$lib/autosize.js';
   import {
     stories, genStoryboard, regenStoryboard, genScenes, genCharacters, saveStory, cancelWizard, cancelGen,
@@ -22,27 +25,78 @@
   function commitThemes() { if (wz.board) wz.board.themes = themesStr.split(',').map((t) => t.trim()).filter(Boolean); }
 
   const at = (s) => goto(`/stories/new/${s}`);
+
+  // Workshop: shown before storyboard generation on the setup step.
+  let workshopOpen = $state(false);
+
+  function openWorkshop() { workshopOpen = true; }
+
+  function workshopGenerate(premise) {
+    // Store the premise from the workshop into the wizard, then kick off storyboard.
+    if (premise) {
+      wz.board = wz.board || {};
+      wz.workshopPremise = premise;
+    }
+    workshopOpen = false;
+    genStoryboard(premise);
+    at('storyboard');
+  }
+
+  function workshopSkip() {
+    workshopOpen = false;
+    start();
+  }
+
   function start() { genStoryboard(); at('storyboard'); }          // fire stream, show it on the next route
   async function toScenes() { await genScenes(); if (wz.locations) at('scenes'); }
   async function toChars() { await genCharacters(); if (wz.cast !== null && wz.cast !== undefined) at('characters'); }
+
+  // SceneModal state (per-chapter regen/edit).
+  let sceneModalIdx = $state(null);   // null = closed; number = open for that beat index
+
+  function openEdit(i) { sceneModalIdx = i; }
+  function openRegen(i) { sceneModalIdx = i; }
+  function closeSceneModal() { sceneModalIdx = null; }
+
+  function saveChapter(updated) {
+    if (sceneModalIdx !== null && wz.board?.beats) {
+      wz.board.beats[sceneModalIdx] = { ...wz.board.beats[sceneModalIdx], ...updated };
+    }
+    sceneModalIdx = null;
+  }
 </script>
 
 <div class="wiz">
   {#if wz.error}<div class="err">⚠ {wz.error}</div>{/if}
 
   {#if step === 'setup'}
-    <div class="panel">
-      <h3>Build a story</h3>
-      <p class="sub">Storyboard a plausible plot from a character, then extract its scenes and cast — each step reviewed before the next.</p>
-      <label>Source character</label>
-      <Combobox items={charItems} value={wz.character} placeholder="character…"
-        onpick={(v) => { wz.character = v; wz.charName = charItems.find((c) => c.value === v)?.label || wz.charName; if (!wz.name) wz.name = wz.charName; }} />
-      <p class="cfghint lo">Each stage's model &amp; system prompt are configured in <a href="/settings/story-gen?section=storyboard">Settings ▸ Story pipeline</a>.</p>
-      <div class="acts">
-        <button class="ghost" onclick={cancelWizard}>Cancel</button>
-        <button onclick={start} disabled={!wz.character}>Storyboard →</button>
+    {#if workshopOpen}
+      <div class="panel">
+        <StoryWorkshop
+          character={wz.character}
+          charName={wz.charName}
+          onGenerate={workshopGenerate}
+          onSkip={workshopSkip}
+        />
+        <div class="acts" style="margin-top:8px">
+          <button class="ghost" onclick={() => (workshopOpen = false)}>← Back to setup</button>
+        </div>
       </div>
-    </div>
+    {:else}
+      <div class="panel">
+        <h3>Build a story</h3>
+        <p class="sub">Storyboard a plausible plot from a character, then extract its scenes and cast — each step reviewed before the next.</p>
+        <label>Source character</label>
+        <Combobox items={charItems} value={wz.character} placeholder="character…"
+          onpick={(v) => { wz.character = v; wz.charName = charItems.find((c) => c.value === v)?.label || wz.charName; if (!wz.name) wz.name = wz.charName; }} />
+        <p class="cfghint lo">Each stage's model &amp; system prompt are configured in <a href="/settings/story-gen?section=storyboard">Settings ▸ Story pipeline</a>.</p>
+        <div class="acts">
+          <button class="ghost" onclick={cancelWizard}>Cancel</button>
+          <button class="ghost" onclick={openWorkshop} disabled={!wz.character}>Workshop first…</button>
+          <button onclick={start} disabled={!wz.character}>Storyboard →</button>
+        </div>
+      </div>
+    {/if}
 
   {:else if step === 'storyboard'}
     {#if wz.streaming}
@@ -63,18 +117,26 @@
           <div><label>Tone</label><input class="fld" bind:value={wz.board.tone} /></div>
           <div><label>Themes</label><input class="fld" bind:value={themesStr} onblur={commitThemes} /></div>
         </div>
+
+        {#if wz.board.heart}
+          <div class="heart-callout">
+            <span class="heart-icon">♡</span>
+            <div class="heart-body">
+              <span class="heart-label">The soul of the story</span>
+              <span class="heart-text">{wz.board.heart}</span>
+            </div>
+          </div>
+        {/if}
+
         <div class="blkhead"><label style="margin:0">Chapters</label><button class="ghost sm" onclick={addBeat}>＋ Chapter</button></div>
         {#each wz.board.beats as beat, i (i)}
-          <div class="beat">
-            <div class="beatno">{i + 1}</div>
-            <div class="beatbody">
-              <input class="fld chtitle" placeholder="chapter title" bind:value={beat.title} />
-              <textarea class="fld ta" use:autosize={beat.summary} placeholder="what this chapter accomplishes" bind:value={beat.summary}></textarea>
-              <div class="two">
-                <input class="fld" placeholder="location" bind:value={beat.location} />
-                <input class="fld" placeholder="characters (comma)" value={csv(beat.characters)} onblur={(e) => setCsv(beat, e.target.value)} />
-              </div>
-            </div>
+          <div class="beatwrap">
+            <ChapterCard
+              chapter={beat}
+              index={i}
+              onRegen={openRegen}
+              onEdit={openEdit}
+            />
             <div class="beatctl">
               <button class="x" title="up" onclick={() => moveBeat(i, -1)} disabled={i === 0}>▲</button>
               <button class="x" title="down" onclick={() => moveBeat(i, 1)} disabled={i === wz.board.beats.length - 1}>▼</button>
@@ -88,6 +150,18 @@
           <button onclick={toScenes} disabled={wz.busy}>{wz.busy ? 'Extracting…' : 'Extract scenes →'}</button>
         </div>
       </div>
+
+      <!-- SceneModal for per-chapter regen/edit -->
+      {#if sceneModalIdx !== null && wz.board?.beats}
+        <SceneModal
+          chapter={wz.board.beats[sceneModalIdx]}
+          index={sceneModalIdx}
+          board={wz.board}
+          charKey={wz.character}
+          onSave={saveChapter}
+          onClose={closeSceneModal}
+        />
+      {/if}
     {/if}
 
   {:else if step === 'scenes' && wz.locations}
@@ -155,11 +229,30 @@
   .err { font-size: 12.5px; color: var(--bad); background: rgba(255,122,122,.1); border: 1px solid var(--border-soft); border-radius: 8px; padding: 8px 11px; margin-bottom: 12px; }
   .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
   .acts .ghost:first-child { margin-right: auto; }
+  /* Legacy single-beat layout (kept for reference; replaced by ChapterCard in storyboard step) */
   .beat { display: flex; gap: 10px; align-items: flex-start; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px; margin-top: 8px; }
   .beatno { width: 22px; height: 22px; flex: none; border-radius: 50%; display: grid; place-items: center; font-size: 11px; font-weight: 700; background: var(--accent); color: #0b0e14; margin-top: 4px; }
   .beatbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
   .chtitle { font-weight: 650; }
-  .beatctl { display: flex; flex-direction: column; gap: 4px; }
+  /* Beat wrapper: ChapterCard + vertical control buttons side by side */
+  .beatwrap { display: flex; gap: 6px; align-items: flex-start; margin-top: 8px; }
+  .beatwrap :global(.cc) { flex: 1; min-width: 0; }
+  .beatctl { display: flex; flex-direction: column; gap: 4px; padding-top: 4px; }
+  /* Heart callout — the human truth at the top of the chapter list */
+  .heart-callout {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    margin: 14px 0 4px;
+    padding: 10px 14px;
+    border-radius: 10px;
+    background: rgba(109, 140, 255, .08);
+    border: 1px solid rgba(109, 140, 255, .22);
+  }
+  .heart-icon { font-size: 18px; color: var(--accent); flex: none; margin-top: 1px; }
+  .heart-body { display: flex; flex-direction: column; gap: 2px; }
+  .heart-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--accent); }
+  .heart-text { font-size: 13px; color: var(--text); line-height: 1.5; font-style: italic; }
   .x { width: 24px; height: 24px; flex: none; padding: 0; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); font-size: 10px; }
   .x:hover:not(:disabled) { color: var(--text); filter: none; } .x:disabled { opacity: .35; }
   .loc, .npc { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 10px; padding: 10px; margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }

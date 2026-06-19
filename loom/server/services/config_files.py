@@ -85,37 +85,6 @@ def save_poses(root: Path, data: dict) -> None:
     path.write_text(json.dumps(data or {}, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-# -- promptgen ---------------------------------------------------------------
-PROMPTGEN_DEFAULT = {
-    "enabled": True,
-    "model": "",  # text model key; empty = use the active chat model
-    "system": (
-        "You are an expert prompt writer for anime illustration models "
-        "(Illustrious / SDXL, trained on Danbooru tags). You turn a described "
-        "scene into a generation-ready prompt.\n\n"
-        "Each prompt is lowercase, comma-separated Danbooru-style tags — never "
-        "sentences, explanations, quotes, or markdown. Order tags by weight "
-        "(earliest = strongest):\n"
-        "1. subject & framing: count + shot type, e.g. \"1girl, solo, upper body\" / \"1boy, full body\"\n"
-        "2. character: hair (length, color), eye color, distinctive features, expression, then clothing\n"
-        "3. action / pose: what they're doing, gaze (\"looking at viewer\", \"from side\")\n"
-        "4. setting: location + a few background elements\n"
-        "5. lighting & mood: e.g. \"golden hour\", \"soft lighting\", \"rim light\", \"dramatic shadows\", \"depth of field\"\n"
-        "6. quality tags last: \"masterpiece, best quality, highly detailed\"\n\n"
-        "Keep each prompt ~15-30 concrete tags. Reflect the scene's emotion and "
-        "time of day. Use any character appearance you're given; never substitute "
-        "a different named character. Output only the prompt text."
-    ),
-}
-
-
-def load_promptgen(root: Path) -> dict:
-    path = root / "configs" / "promptgen.json"
-    if path.is_file():
-        return {**PROMPTGEN_DEFAULT, **json.loads(path.read_text(encoding="utf-8"))}
-    return dict(PROMPTGEN_DEFAULT)
-
-
 # -- chat model system prompt ------------------------------------------------
 # A global system prompt for the chat model, layered on top of the selected
 # character's own system. Empty by default (character governs entirely).

@@ -151,14 +151,26 @@ class Beat(BaseModel):
     """One CHAPTER of the storyboard — a distinct, self-contained episode (title +
     what it accomplishes), where it happens, and who's present. Chapters are the
     bounded creative spine; scenes (locations) and the cast are EXTRACTED from
-    them. `location` is a place name (matched to a Location)."""
+    them. `location` is a place name (matched to a Location).
+
+    New fields from the enriched 7-field storyboard format:
+    - emotional_core: what shifts internally for the protagonist in this chapter
+    - hook: the tension/question/seed pulling the reader into the next chapter
+    - scene_prompt: a visual background prompt for this chapter (no characters);
+      used directly by the scene renderer as a fallback / replacement for the
+      s02 locations LLM pass when present.
+    """
     title: str = ""
     summary: str
     location: str = ""
     characters: list[str] = Field(default_factory=list)
+    emotional_core: str = ""
+    hook: str = ""
+    scene_prompt: str = ""
 
 
 class Storyboard(BaseModel):
+    heart: str = ""    # the human truth at the center of this story (new enriched format)
     logline: str = ""
     beats: list[Beat] = Field(default_factory=list)
 
@@ -311,6 +323,7 @@ class ComfyUISettings(BaseModel):
 
 class RunPodSettings(BaseModel):
     """RunPod GPU scaling configuration for dynamic image generation."""
+    enabled: bool = True
     api_key: str = ""
     # Serverless endpoint id. When set, batch rendering fans jobs out to this
     # auto-scaling ComfyUI endpoint instead of managing whole GPU pods.

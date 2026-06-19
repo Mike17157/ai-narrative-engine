@@ -150,20 +150,24 @@ _UNIFIED_OUTFIT_SYSTEM = (
     "You write a COMPLETE image-generation prompt for ONE character in ONE outfit. "
     "You receive the character's persona and appearance notes, plus the outfit name and a "
     "brief visual concept.\n\n"
-    "Write 80-150 words of vivid natural-language prose — a single descriptive paragraph — "
-    "covering the character's FULL appearance IN this outfit:\n"
+    "Write 60-130 words of prose — a single paragraph — covering:\n"
     "  • Physical features: hair (colour, length, style), eyes (colour), skin tone, body type, "
-    "any distinctive features\n"
+    "any distinctive features — stated plainly and specifically\n"
     "  • The complete outfit: every garment (with colour and material), layers, legwear, footwear, "
-    "headwear, accessories, jewellery, makeup, piercings — one coherent palette\n\n"
+    "headwear, accessories, jewellery, piercings — one coherent palette, listed in logical order\n"
+    "  • A single characterful pose that reflects their personality — this is the ONE place for "
+    "flair: posture, weight, hands, tilt of the head (e.g. 'leaning back with arms loosely crossed, "
+    "a faint smirk', 'hands clasped behind her back, heels together, chin slightly down'). "
+    "Let the pose set the mood for the whole image.\n\n"
     "Style rules:\n"
-    "  • Flowing descriptive prose — NOT a tag list, NOT comma-dumped descriptors\n"
-    "  • Plain real colour words and real garment/feature names\n"
-    "  • Personality subtly visible in how they wear it\n"
-    "  • Do NOT include: expression, pose, background, camera framing, art-style, or quality words\n"
-    "  • Keep a neutral standing posture (pose is added separately)\n\n"
-    "The text goes directly to a natural-language anime image model — vivid, specific prose reads "
-    "far better than a flat tag list."
+    "  • Outfit and features: LITERAL and CONCRETE — plain real colour words, real garment names\n"
+    "  • NOT a tag list, NOT comma-dumped descriptors; write connected sentences\n"
+    "  • Outfit: NO mood, NO metaphor, NO flowery language\n"
+    "  • Accessory fit/drape may use a short descriptive phrase "
+    "(e.g. 'scarf loosely knotted at the throat', 'glasses perched near the tip of her nose')\n"
+    "  • Do NOT include: expression, background, camera framing, art-style, or quality words\n\n"
+    "The text goes directly to a natural-language anime image model — specific prose with one "
+    "characterful pose reads far better than either a flat tag list or vague evocative language."
 )
 
 UNIFIED_OUTFIT_SCHEMA = {
@@ -172,9 +176,10 @@ UNIFIED_OUTFIT_SCHEMA = {
         "prompt": {
             "type": "string",
             "description": (
-                "80-150 word natural-language prose: the character's physical appearance (hair, eyes, "
-                "skin, body) woven together with the complete outfit (garments, colours, accessories, "
-                "makeup). A single coherent paragraph. No expression, pose, background, or quality words."
+                "60-130 word prose paragraph: physical appearance (hair, eyes, skin, body) stated "
+                "plainly, then the complete outfit (garments, colours, accessories) listed factually, "
+                "then ONE characterful pose reflecting personality (posture, hands, tilt). "
+                "Outfit is literal; pose may carry flair. No background, camera framing, or quality words."
             ),
         },
     },

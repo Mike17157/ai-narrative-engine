@@ -23,7 +23,15 @@
   const closeMenus = () => { showActivity = false; showDetails = false; };
 
   let comfyUp = $derived(app.health?.comfyui?.up);
+  let runpodConfigured = $derived(app.health?.runpod?.configured ?? false);
+  let runpodEnabled = $derived(app.health?.runpod?.enabled ?? true);
   let running = $derived(app.activity?.running || 0);
+
+  async function toggleRunpod() {
+    const next = !runpodEnabled;
+    await post('/runpod/enabled', { enabled: next });
+    await refreshHealth();
+  }
   let path = $derived($page.url.pathname);
   let search = $derived($page.url.search || '');
   const isActive = (id) => path === `/${id}` || path.startsWith(`/${id}/`);
@@ -31,14 +39,12 @@
   // Major categories — a left icon rail (ComfyUI / VS Code style). The rail picks
   // a section; TreeNav (the panel) shows that section's folder tree.
   const nav = [
-    { id: 'chat', label: 'Chat', icon: '💬', href: '/chat' },
     { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
     { id: 'stories', label: 'Stories', icon: '📖', href: '/stories' },
-    { id: 'images', label: 'Images', icon: '🖼', href: '/images/models' },
+    { id: 'images', label: 'Images', icon: '🖼', href: '/images/graph' },
     { id: 'settings', label: 'Settings', icon: '⚙', href: '/settings' }
   ];
 
-  // Sections that own a folder tree. Chat has none (it's a single surface).
   const TREE_SECTIONS = new Set(['characters', 'stories', 'images', 'settings']);
   let section = $derived(path.split('/')[1] || '');
 
@@ -128,6 +134,12 @@
           title="Active models" aria-label="Active models">ⓘ</button>
         {#if showDetails}<DetailsMenu />{/if}
       </div>
+      {#if runpodConfigured}
+        <button class="rptoggle" class:rpon={runpodEnabled} onclick={toggleRunpod}
+          title={runpodEnabled ? 'RunPod active — click to run locally' : 'Running locally — click to use RunPod'}>
+          <span class="rpicon">☁</span>
+        </button>
+      {/if}
       <span class="cdot {comfyUp ? 'up' : 'down'}" title={comfyUp ? 'ComfyUI live' : 'ComfyUI off'}></span>
       <button class="railbtn sm" class:on={isActive('settings')} onclick={() => go(nav[4])} title="Settings">
         <span class="ricon">⚙</span>
@@ -192,6 +204,15 @@
   .cdot { width: 8px; height: 8px; border-radius: 50%; }
   .cdot.up { background: var(--good); }
   .cdot.down { background: var(--bad); }
+
+  .rptoggle {
+    width: 34px; height: 34px; display: grid; place-items: center; padding: 0;
+    border: 1px solid var(--border); border-radius: 8px;
+    background: var(--elev); color: var(--muted); cursor: pointer; transition: all .15s;
+  }
+  .rptoggle:hover { color: var(--text); background: var(--elev-2); }
+  .rptoggle.rpon { color: #5ba3f5; border-color: rgba(91, 163, 245, .4); background: rgba(91, 163, 245, .12); }
+  .rpicon { font-size: 16px; line-height: 1; }
 
   /* folder tree panel */
   .panel {
