@@ -82,7 +82,7 @@
 
   // --- header Data dropdown ---
   let dataOpen = $state(false);
-  let dataEl = $state();
+  let dataEl;
 
   $effect(() => {
     if (!dataOpen) return;
@@ -116,6 +116,8 @@
       </div>
     {/if}
   </div>
+  <a href="/settings/connections/image" class="hbtn"
+     class:on={path.startsWith('/settings/connections/image')}>Connection</a>
 </header>
 
 <div class="page">
@@ -151,7 +153,7 @@
           <p class="lo" style="margin:0 0 8px">
             {testMode === 'sprite'
               ? 'Renders the REAL sprite prompt — subject + expression + pose + full-body framing — so framing/pose match production.'
-              : 'Renders the subject through the scene workflow's own framing.'}
+              : "Renders the subject through the scene workflow's own framing."}
           </p>
           <div class="modeseg" style="margin-bottom:10px">
             <button class:on={subjectMode === 'typed'} onclick={() => (subjectMode = 'typed')}>Typed subject</button>

@@ -301,7 +301,7 @@ class AppContext:
     def flesh_character(self, key: str, instruction: str = "") -> dict:
         """Rewrite a (thin) character into a thorough disciplined-prose sheet (persona + appearance +
         role) via the story reviser, persisted IN PLACE. Returns the new fields or {error}."""
-        from ..scenario import revise_character
+        from ..stories import revise_character
         ch = self.base_settings.characters.get(key)
         if ch is None:
             return {"error": "no such character"}

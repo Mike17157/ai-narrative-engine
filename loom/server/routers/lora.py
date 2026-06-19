@@ -455,9 +455,18 @@ def register(app, ctx):
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+        from ..services import triage_cache
+        cache = body.get("cache") or None
+
         async def events():
             try:
                 async for ev in stream_generate(provider.base_url, graph, provider.output_node, provider.timeout_s):
+                    if cache and ev.get("type") == "image" and (ev.get("images") or []):
+                        try:
+                            triage_cache.save_render(ctx.root, cache.get("scope", ""), cache.get("lora", ""),
+                                                     ev["images"][0], prompt=cache.get("prompt", ""), weight=cache.get("weight"))
+                        except Exception:  # noqa: BLE001 — caching is best-effort
+                            pass
                     yield f"data: {json.dumps(ev)}\n\n"
             except Exception as exc:  # noqa: BLE001
                 yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"

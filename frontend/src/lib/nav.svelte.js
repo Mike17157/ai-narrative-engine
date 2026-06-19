@@ -4,40 +4,9 @@
 // leaves as <a href>, navigation is native. ONE nav model for every section;
 // no in-page menu fragments anywhere.
 
-import { chars, charName } from './characters.svelte.js';
+import { chars } from './characters.svelte.js';
 import { stories } from './stories.svelte.js';
 import { app } from './app.svelte.js';
-
-// Generation: single pane — connection, chat model, prompt gen, image workflow.
-const MODELS = [
-  { id: 'models', label: 'Generation', href: '/settings/models', match: 'prefix' }
-];
-
-// Story pipeline — global config for all story-builder AI stages and image workflow
-// assignments (story_builder.json + image_roles.json), not per-story settings.
-const STORY_GEN = [
-  { id: 'story-gen', label: 'Story pipeline', children: [
-    { id: 'sg-gen-h', label: 'Text stages', header: true },
-    { id: 'sg-storyboard', label: 'Storyboard', href: '/settings/story-gen?section=storyboard' },
-    { id: 'sg-characters', label: 'Characters', href: '/settings/story-gen?section=characters' },
-    { id: 'sg-locations', label: 'Locations', href: '/settings/story-gen?section=locations' },
-    { id: 'sg-wardrobe', label: 'Wardrobe', href: '/settings/story-gen?section=wardrobe' },
-    { id: 'sg-base_image', label: 'Appearance', href: '/settings/story-gen?section=base_image' },
-    { id: 'sg-img-h', label: 'Image workflows', header: true },
-    { id: 'sg-base', label: 'Portrait', href: '/settings/story-gen?section=base' },
-    { id: 'sg-style', label: 'Style', href: '/settings/story-gen?section=style' },
-    { id: 'sg-sprite', label: 'Sprites', href: '/settings/story-gen?section=sprite' },
-    { id: 'sg-scene', label: 'Scene', href: '/settings/story-gen?section=scene' },
-  ]}
-];
-
-export function settingsTree() {
-  return [
-    ...MODELS,
-    ...STORY_GEN,
-    { id: 'system', label: 'System', href: '/settings/system' }
-  ];
-}
 
 export function charactersTree() {
   const n = chars.list?.length || 0;
@@ -46,7 +15,9 @@ export function charactersTree() {
     { id: 'selected', label: sel ? `Selected · ${sel.name || sel.key}` : 'Selected', href: '/characters/selected' },
     { id: 'search', label: `Browse${n ? ` (${n})` : ''}`, href: '/characters/search' },
     { id: 'import', label: 'Import card', href: '/characters/import' },
-    { id: 'personas', label: 'Personas', href: '/characters/personas' }
+    { id: 'personas', label: 'Personas', href: '/characters/personas' },
+    { id: 'models', label: 'Models', href: '/settings/models' },
+    { id: 'chat-connection', label: 'Connection', href: '/settings/connections/chat' },
   ];
 }
 
@@ -54,44 +25,63 @@ export function imagesTree() {
   return [];
 }
 
-// Stories is a content browser: Library + a named folder per story, whose sections
-// nest underneath. Cast & wardrobe is itself a folder of one leaf per cast member
-// (deep-links to ?c=<key>), so the tree exercises its full recursion. The wizard is
-// NOT in the nav — it's launched from the Library. Config moved to Settings.
-export function storiesTree() {
-  const storyFolders = (stories.list || []).map((s) => {
-    // Cast members come straight off the library payload (no per-key load needed), so
-    // the tier is populated even before a story is opened. The primary is starred.
-    const castLeaves = (s.cast || []).map((m) => ({
-      id: `${s.key}-cast-${m.character}`,
-      label: charName(m.character) + (m.primary ? ' ★' : ''),
-      href: `/stories/${s.key}/cast?c=${m.character}`
-    }));
-    return {
-      id: `story-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview`, icon: '📖',
-      children: [
-        { id: `${s.key}-overview`, label: 'Overview', href: `/stories/${s.key}/overview` },
-        { id: `${s.key}-backgrounds`, label: 'Backgrounds', href: `/stories/${s.key}/backgrounds` },
-        { id: `${s.key}-cast`, label: 'Cast & wardrobe', href: `/stories/${s.key}/cast`, children: castLeaves },
-        { id: `${s.key}-edit`, label: '✎ Edit story', href: `/stories/${s.key}/edit` },
-        { id: `${s.key}-play`, label: '▶ Play', href: `/stories/${s.key}/play` }
-      ]
-    };
-  });
+// Stories subnav — 3 contextual modes:
+//   Mode A (library): Library · story list · Pipeline
+//   Mode B (wizard):  ← Library · Setup · Storyboard · Scenes · Cast  (step indicators)
+//   Mode C (story):   [Story Name ▾ picker] · Overview · Backgrounds · Cast · Edit · ▶ Play
+export function storiesTree(path = '') {
+  const list = stories.list || [];
 
+  // Mode B — wizard
+  if (path.startsWith('/stories/new')) {
+    const step = stories.wizard?.step ?? 0;
+    const STEPS = [
+      { id: 'wz-setup',      label: 'Setup',      href: '/stories/new/setup' },
+      { id: 'wz-storyboard', label: 'Storyboard', href: '/stories/new/storyboard' },
+      { id: 'wz-scenes',     label: 'Scenes',     href: '/stories/new/scenes' },
+      { id: 'wz-cast',       label: 'Cast',       href: '/stories/new/characters' },
+    ];
+    return [
+      { id: 'wz-back', label: '← Library', href: '/stories', match: 'exact' },
+      ...STEPS.map((s, i) => ({
+        ...s,
+        done: i < step,
+        dimmed: i > step,
+        label: i < step ? s.label + ' ✓' : s.label
+      }))
+    ];
+  }
+
+  // Mode C — inside a specific story
+  const m = path.match(/^\/stories\/([^/?]+)/);
+  const key = m?.[1];
+  const active = key && key !== 'new' ? list.find((s) => s.key === key) : null;
+
+  if (active) {
+    return [
+      { id: 'story-picker', label: active.name || active.key, picker: true,
+        children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview` })) },
+      { id: `${key}-overview`,    label: 'Overview',    href: `/stories/${key}/overview` },
+      { id: `${key}-backgrounds`, label: 'Backgrounds', href: `/stories/${key}/backgrounds` },
+      { id: `${key}-cast`,        label: 'Cast',        href: `/stories/${key}/cast` },
+      { id: `${key}-edit`,        label: 'Edit',        href: `/stories/${key}/edit` },
+      { id: `${key}-play`,        label: '▶ Play',      href: `/stories/${key}/play` },
+    ];
+  }
+
+  // Mode A — library
   return [
     { id: 'library', label: 'Library', href: '/stories', match: 'exact' },
-    ...storyFolders
+    ...list.map((s) => ({ id: `story-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview` })),
+    { id: 'pipeline', label: 'Pipeline', href: '/settings/story-gen' }
   ];
 }
 
-// Active-section entry: returns the node tree for the current top-level section.
-export function treeFor(section) {
+export function treeFor(section, path = '') {
   switch (section) {
-    case 'settings': return settingsTree();
     case 'characters': return charactersTree();
     case 'images': return imagesTree();
-    case 'stories': return storiesTree();
+    case 'stories': return storiesTree(path);
     default: return [];
   }
 }

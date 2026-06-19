@@ -8,9 +8,7 @@
   import { post } from '$lib/api.js';
   import { askNewPersona } from '$lib/newpersona.svelte.js';
   import { treeFor } from '$lib/nav.svelte.js';
-  import TreeNav from '$lib/components/TreeNav.svelte';
   import ActivityMenu from '$lib/components/ActivityMenu.svelte';
-  import DetailsMenu from '$lib/components/DetailsMenu.svelte';
   import Lightbox from '$lib/components/Lightbox.svelte';
   import ConfirmModal from '$lib/components/ConfirmModal.svelte';
   import NewPersonaModal from '$lib/components/NewPersonaModal.svelte';
@@ -18,41 +16,42 @@
 
   let { children } = $props();
 
+  // ── all $state declarations first ──
   let showActivity = $state(false);
-  let showDetails = $state(false);
-  const closeMenus = () => { showActivity = false; showDetails = false; };
+  let openDrop = $state(null); // { id, el } — which subnav dropdown is open
+
+  // ── derived ──
+  let path = $derived($page.url.pathname);
+  let search = $derived($page.url.search || '');
+  let section = $derived(path.split('/')[1] || '');
+  let tree = $derived(new Set(['characters', 'stories', 'images']).has(section) ? treeFor(section, path) : []);
+  let activeHref = $derived(path + search);
 
   let comfyUp = $derived(app.health?.comfyui?.up);
   let runpodConfigured = $derived(app.health?.runpod?.configured ?? false);
   let runpodEnabled = $derived(app.health?.runpod?.enabled ?? true);
   let running = $derived(app.activity?.running || 0);
 
+  // ── helpers ──
+  function closeMenus() { showActivity = false; openDrop = null; }
+
   async function toggleRunpod() {
-    const next = !runpodEnabled;
-    await post('/runpod/enabled', { enabled: next });
+    await post('/runpod/enabled', { enabled: !runpodEnabled });
     await refreshHealth();
   }
-  let path = $derived($page.url.pathname);
-  let search = $derived($page.url.search || '');
-  const isActive = (id) => path === `/${id}` || path.startsWith(`/${id}/`);
 
-  // Major categories — a left icon rail (ComfyUI / VS Code style). The rail picks
-  // a section; TreeNav (the panel) shows that section's folder tree.
   const nav = [
     { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
-    { id: 'stories', label: 'Stories', icon: '📖', href: '/stories' },
-    { id: 'images', label: 'Images', icon: '🖼', href: '/images/graph' },
-    { id: 'settings', label: 'Settings', icon: '⚙', href: '/settings' }
+    { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories' },
+    { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/graph' },
   ];
 
-  const TREE_SECTIONS = new Set(['characters', 'stories', 'images', 'settings']);
-  let section = $derived(path.split('/')[1] || '');
+  const isActive = (id) => path === `/${id}` || path.startsWith(`/${id}/`);
 
-  // Cache the full last route per section (path + query) so jumping between
-  // sections returns to the exact pane — query-driven state like ?c=… or ?section=…
   const LS_LAST = 'loom.lastRoute';
   const ls = (fn, d) => { try { return typeof localStorage !== 'undefined' ? fn() : d; } catch { return d; } };
   let lastRoute = $state(ls(() => JSON.parse(localStorage.getItem(LS_LAST) || '{}'), {}));
+
   afterNavigate(({ to }) => {
     const seg = to?.url?.pathname?.split('/')[1];
     if (seg) {
@@ -60,24 +59,36 @@
       ls(() => localStorage.setItem(LS_LAST, JSON.stringify(lastRoute)));
     }
   });
+
   function go(n) { goto(lastRoute[n.id] || n.href); }
 
-  let activeLabel = $derived(nav.find((n) => isActive(n.id))?.label || '');
-  // The tree for the active section. `treeFor` reads store state, so it stays live
-  // (character/story counts, wizard progress) — wrap in $derived so it recomputes.
-  let tree = $derived(TREE_SECTIONS.has(section) ? treeFor(section) : []);
-  let activeHref = $derived(path + search);   // include query so ?section= config leaves match
-
-  // Honor programmatic deep-links (e.g. Train → Settings) as route navigations.
+  // Programmatic deep-link from child components (e.g. Train → Settings).
   $effect(() => { if (app.nav.screen) { const s = app.nav.screen; app.nav.screen = null; goto(`/${s}`); } });
 
-  let timer, atimer, ptimer;
+  // ── subnav dropdown ──
+  function toggleDrop(id, e) {
+    e.stopPropagation();
+    const el = e.currentTarget.closest('.snwrap');
+    openDrop = openDrop?.id === id ? null : { id, el };
+  }
 
-  // One-shot first-view persona gate: if you have no persona (or none selected)
-  // when the app loads, prompt you to describe yourself before anything else.
-  // The persona is who *you* are — now the player identity the story director
-  // narrates to, not just the legacy-chat {{user}}. Guarded by a module-level
-  // flag so it fires at most once per page session, never nagging on reloads.
+  $effect(() => {
+    const drop = openDrop;
+    if (!drop) return;
+    const handler = (e) => { if (!drop.el?.contains(e.target)) openDrop = null; };
+    const t = setTimeout(() => document.addEventListener('mousedown', handler), 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', handler); };
+  });
+
+  function nodeActive(n) {
+    if (n.header || n.picker) return false;
+    if (n.children) return n.children.some(nodeActive);
+    if (!n.href) return false;
+    if (n.match === 'exact') return activeHref === n.href;
+    return activeHref === n.href || activeHref.startsWith(n.href + '/') || activeHref.startsWith(n.href + '?');
+  }
+
+  // ── persona gate ──
   let personaGateRan = false;
   async function maybePromptPersona() {
     if (personaGateRan) return;
@@ -86,20 +97,18 @@
                  !app.personas.some((p) => p.id === app.activePersona);
     if (!need) return;
     const res = await askNewPersona();
-    if (!res) return;                       // dismissed — non-blocking, "You" fallback
+    if (!res) return;
     const r = await post('/personas', { name: res.name, description: res.description });
-    if (r.data?.key) {
-      setActivePersona(r.data.key);
-      await refreshPersonas();
-    }
+    if (r.data?.key) { setActivePersona(r.data.key); await refreshPersonas(); }
   }
 
+  let timer, atimer, ptimer;
   onMount(async () => {
     await refreshAll();
     await refreshActivity();
-    await migratePersonas();   // one-shot: legacy localStorage personas → server YAML
-    await refreshPersonas();   // then load the server-backed list into the shared store
-    void maybePromptPersona(); // overlay the gate on the Library (no await — don't block the UI)
+    await migratePersonas();
+    await refreshPersonas();
+    void maybePromptPersona();
     timer = setInterval(refreshHealth, 6000);
     atimer = setInterval(refreshActivity, 3000);
     ptimer = startPruneTimer();
@@ -109,52 +118,78 @@
 
 <svelte:window onclick={closeMenus} />
 
-<div class="app">
-  <!-- icon rail: major categories -->
-  <nav class="rail">
+<div class="shell">
+
+  <!-- ── top bar: section switcher + status tools ── -->
+  <header class="topbar">
     <div class="mark" aria-hidden="true"></div>
-    <div class="railnav">
-      {#each nav.filter((n) => n.id !== 'settings') as n (n.id)}
-        <button class="railbtn" class:on={isActive(n.id)} onclick={() => go(n)} title={n.label}>
-          <span class="ricon">{n.icon}</span><span class="rlabel">{n.label}</span>
+
+    <nav class="topnav">
+      {#each nav as n (n.id)}
+        <button class="navbtn" class:on={isActive(n.id)} onclick={() => go(n)}>
+          <span class="nicon">{n.icon}</span>
+          <span class="nlabel">{n.label}</span>
         </button>
       {/each}
-    </div>
-    <div class="railfoot">
+    </nav>
+
+    <div class="topright">
       <div class="actwrap">
         <button class="ico" class:busy={running > 0}
           onclick={(e) => { e.stopPropagation(); const v = !showActivity; closeMenus(); showActivity = v; }}
-          title="Live workloads + ComfyUI" aria-label="Activity">
+          title="Live workloads" aria-label="Activity">
           ⚡{#if running > 0}<span class="badge">{running}</span>{/if}
         </button>
         {#if showActivity}<ActivityMenu onnavigate={(s) => { if (s) goto(`/${s}`); showActivity = false; }} />{/if}
       </div>
-      <div class="actwrap">
-        <button class="ico" onclick={(e) => { e.stopPropagation(); const v = !showDetails; closeMenus(); showDetails = v; }}
-          title="Active models" aria-label="Active models">ⓘ</button>
-        {#if showDetails}<DetailsMenu />{/if}
-      </div>
       {#if runpodConfigured}
         <button class="rptoggle" class:rpon={runpodEnabled} onclick={toggleRunpod}
-          title={runpodEnabled ? 'RunPod active — click to run locally' : 'Running locally — click to use RunPod'}>
-          <span class="rpicon">☁</span>
-        </button>
+          title={runpodEnabled ? 'RunPod active — click to run locally' : 'Running locally — click to use RunPod'}>☁</button>
       {/if}
-      <span class="cdot {comfyUp ? 'up' : 'down'}" title={comfyUp ? 'ComfyUI live' : 'ComfyUI off'}></span>
-      <button class="railbtn sm" class:on={isActive('settings')} onclick={() => go(nav[4])} title="Settings">
-        <span class="ricon">⚙</span>
-      </button>
+      <a href="/settings/system" class="cdot {comfyUp ? 'up' : 'down'}" title={comfyUp ? 'ComfyUI live — click for system info' : 'ComfyUI off — click for system info'}></a>
     </div>
-  </nav>
+  </header>
 
-  <!-- panel: the active section's folder tree (real TreeNav, solid-fill active) -->
+  <!-- ── subnav: section tree as a horizontal bar ── -->
   {#if tree.length}
-    <aside class="panel">
-      <div class="phead">{activeLabel}</div>
-      <div class="ptree">
-        <TreeNav nodes={tree} activeHref={activeHref} />
-      </div>
-    </aside>
+    <nav class="subnav">
+      {#each tree as node (node.id)}
+        {#if node.children?.length}
+          <div class="snwrap">
+            <button class="snbtn drop" class:on={nodeActive(node)} class:picker={node.picker}
+                    onclick={(e) => toggleDrop(node.id, e)}>
+              {node.label} <span class="sarr" class:up={openDrop?.id === node.id}>▾</span>
+            </button>
+            {#if openDrop?.id === node.id}
+              <div class="sdrop" role="menu">
+                {#each node.children as child (child.id)}
+                  {#if child.header}
+                    <div class="sdhead">{child.label}</div>
+                  {:else if child.children?.length}
+                    <a href={child.href} class="sditem parent" class:on={nodeActive(child)}
+                       role="menuitem" onclick={() => (openDrop = null)}>
+                      {child.icon ? child.icon + ' ' : ''}{child.label}
+                    </a>
+                    {#each child.children as leaf (leaf.id)}
+                      <a href={leaf.href} class="sditem leaf" class:on={nodeActive(leaf)}
+                         role="menuitem" onclick={() => (openDrop = null)}>
+                        {leaf.icon ? leaf.icon + ' ' : ''}{leaf.label}
+                      </a>
+                    {/each}
+                  {:else}
+                    <a href={child.href} class="sditem" class:on={nodeActive(child)}
+                       role="menuitem" onclick={() => (openDrop = null)}>{child.label}</a>
+                  {/if}
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {:else}
+          <a href={node.href} class="snbtn" class:on={nodeActive(node)}
+             class:dimmed={node.dimmed} class:done={node.done}>{node.label}</a>
+        {/if}
+      {/each}
+    </nav>
   {/if}
 
   <main>{@render children()}</main>
@@ -166,61 +201,102 @@
 <TagGraphModal />
 
 <style>
-  .app { display: flex; height: 100vh; }
+  .shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
-  /* icon rail */
-  .rail {
-    width: 72px; flex: none; display: flex; flex-direction: column; align-items: center; gap: 4px;
-    padding: 12px 6px 10px; background: #12151d; border-right: 1px solid var(--border);
+  /* ── top bar ── */
+  .topbar {
+    flex: none; height: 48px;
+    display: flex; align-items: center; gap: 0; padding: 0 14px;
+    background: #12151d; border-bottom: 1px solid var(--border);
   }
-  .mark { width: 24px; height: 24px; border-radius: 7px; transform: rotate(45deg); margin-bottom: 10px;
-          background: linear-gradient(135deg, var(--accent), #9a6dff); }
-  .railnav { display: flex; flex-direction: column; gap: 4px; width: 100%; }
-  .railbtn {
-    width: 100%; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 9px 2px;
-    border: 0; background: none; color: var(--muted); border-radius: 10px; cursor: pointer;
+  .mark {
+    width: 22px; height: 22px; border-radius: 6px; transform: rotate(45deg); flex: none; margin-right: 16px;
+    background: linear-gradient(135deg, var(--accent), #9a6dff);
   }
-  .railbtn:hover { color: var(--text); background: var(--elev); }
-  .railbtn.on { color: #fff; background: var(--elev-2); }
-  .ricon { font-size: 19px; line-height: 1; }
-  .rlabel { font-size: 10px; font-weight: 600; letter-spacing: .2px; }
-  .railbtn.sm { padding: 8px 2px; } .railbtn.sm .ricon { font-size: 16px; }
-  .railfoot { margin-top: auto; display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 8px; }
+
+  .topnav { display: flex; align-items: center; gap: 2px; }
+  .navbtn {
+    display: flex; align-items: center; gap: 6px; padding: 6px 13px;
+    border: 0; background: none; color: var(--muted); border-radius: 8px;
+    cursor: pointer; font-size: 13px; font-weight: 600; line-height: 1;
+    transition: color .12s, background .12s;
+  }
+  .navbtn:hover { color: var(--text); background: var(--elev); }
+  .navbtn.on { color: #fff; background: var(--elev-2); }
+  .nicon { font-size: 15px; line-height: 1; }
+
+  .topright { margin-left: auto; display: flex; align-items: center; gap: 8px; }
 
   .actwrap { position: relative; }
-  .actwrap :global(.menu) { top: auto; bottom: 0; left: calc(100% + 8px); right: auto; }
+  .actwrap :global(.menu) { top: calc(100% + 6px); right: 0; left: auto; bottom: auto; }
+
   .ico {
-    position: relative; width: 34px; height: 34px; display: grid; place-items: center; padding: 0;
-    font-size: 15px; border: 1px solid var(--border);
-    background: var(--elev); color: var(--muted);
+    position: relative; width: 32px; height: 32px; display: grid; place-items: center; padding: 0;
+    font-size: 15px; border: 1px solid var(--border); border-radius: 8px;
+    background: var(--elev); color: var(--muted); cursor: pointer;
   }
   .ico:hover { color: var(--text); background: var(--elev-2); }
-  .ico.busy { color: var(--accent); border-color: rgba(109, 140, 255, .4); background: rgba(109, 140, 255, .1); }
+  .ico.busy { color: var(--accent); border-color: rgba(109,140,255,.4); background: rgba(109,140,255,.1); }
   .ico .badge {
     position: absolute; top: -5px; right: -5px; min-width: 16px; height: 16px; padding: 0 4px;
     border-radius: 999px; background: var(--accent); color: #0b0e14; font-size: 11px; font-weight: 800;
     display: grid; place-items: center;
   }
-  .cdot { width: 8px; height: 8px; border-radius: 50%; }
+  .rptoggle {
+    width: 32px; height: 32px; display: grid; place-items: center; padding: 0; font-size: 15px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--elev); color: var(--muted); cursor: pointer;
+  }
+  .rptoggle:hover { color: var(--text); background: var(--elev-2); }
+  .rptoggle.rpon { color: #5ba3f5; border-color: rgba(91,163,245,.4); background: rgba(91,163,245,.12); }
+  .cdot { width: 8px; height: 8px; border-radius: 50%; flex: none; cursor: pointer; }
   .cdot.up { background: var(--good); }
   .cdot.down { background: var(--bad); }
 
-  .rptoggle {
-    width: 34px; height: 34px; display: grid; place-items: center; padding: 0;
-    border: 1px solid var(--border); border-radius: 8px;
-    background: var(--elev); color: var(--muted); cursor: pointer; transition: all .15s;
+  /* ── subnav ── */
+  .subnav {
+    flex: none; height: 38px;
+    display: flex; align-items: center; gap: 2px; padding: 0 14px;
+    background: #13161e; border-bottom: 1px solid var(--border);
   }
-  .rptoggle:hover { color: var(--text); background: var(--elev-2); }
-  .rptoggle.rpon { color: #5ba3f5; border-color: rgba(91, 163, 245, .4); background: rgba(91, 163, 245, .12); }
-  .rpicon { font-size: 16px; line-height: 1; }
-
-  /* folder tree panel */
-  .panel {
-    width: 220px; flex: none; display: flex; flex-direction: column; padding: 12px 10px;
-    background: #13161e; border-right: 1px solid var(--border);
+  .snbtn {
+    display: inline-flex; align-items: center; gap: 5px; padding: 5px 12px;
+    border: none; border-radius: 7px; background: none;
+    font-size: 13px; font-weight: 600; color: var(--muted);
+    cursor: pointer; text-decoration: none; line-height: 1;
+    transition: color .12s, background .12s;
   }
-  .phead { font-size: 14px; font-weight: 680; color: #fff; padding: 2px 8px 12px; }
-  .ptree { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+  .snbtn:hover { color: var(--text); background: var(--elev); }
+  .snbtn.on { color: #fff; background: var(--elev-2); }
+  .snbtn.dimmed { opacity: 0.4; }
+  .snbtn.dimmed:hover { opacity: 0.7; }
+  .snbtn.done { color: var(--good); }
+  .snbtn.picker { font-weight: 700; }
+  .snwrap { position: relative; }
+  .sarr { font-size: 10px; transition: transform .15s; display: inline-block; }
+  .sarr.up { transform: rotate(180deg); }
 
-  main { flex: 1; min-width: 0; position: relative; display: flex; flex-direction: column; overflow: auto; }
+  .sdrop {
+    position: absolute; top: calc(100% + 4px); left: 0; z-index: 50;
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.4);
+    padding: 4px; min-width: 160px; max-height: 70vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .sdhead {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+    color: var(--faint); padding: 8px 10px 3px; user-select: none;
+  }
+  .sditem {
+    display: block; padding: 7px 12px; border-radius: 6px;
+    font-size: 13px; font-weight: 500; color: var(--muted);
+    text-decoration: none; white-space: nowrap;
+    transition: color .1s, background .1s;
+  }
+  .sditem:hover { color: var(--text); background: var(--elev); }
+  .sditem.on { color: #fff; background: var(--elev-2); }
+  .sditem.parent { font-weight: 600; }
+  .sditem.leaf { padding-left: 22px; font-size: 12.5px; }
+
+  /* ── content ── */
+  main { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
 </style>

@@ -182,67 +182,61 @@
   </section>
 
   <!-- Row 3: Trainer -->
-  <div class="row2">
-    <section class="card">
-      <div class="card-head">
-        <h3>Trainer</h3>
-        {#if trainer}
-          {#if trainer.installed}<span class="pill ok">ready</span>{:else}<span class="pill bad">not ready</span>{/if}
+  <section class="card">
+    <div class="card-head">
+      <h3>Trainer</h3>
+      {#if trainer}
+        {#if trainer.installed}<span class="pill ok">ready</span>{:else}<span class="pill bad">not ready</span>{/if}
+      {/if}
+      {#if tmsg}<span class="status-lbl" class:ok={tmsg.ok}>{tmsg.text}</span>{/if}
+    </div>
+
+    <div class="trainer-grid">
+      <!-- Left: install -->
+      <div class="tcol">
+        <label>CUDA build</label>
+        <select bind:value={cuda}>
+          <option value="auto">Auto{gpu?.cuda ? ` → ${gpu.cuda}` : ''}</option>
+          <option value="cu128">cu128 (Blackwell / RTX 50-series)</option>
+          <option value="cu124">cu124 (RTX 20–40 series)</option>
+          <option value="cu121">cu121 (older)</option>
+        </select>
+        {#if trainer && !trainer.installed && trainer.issues?.length}
+          <div class="note">{trainer.issues[0]}</div>
         {/if}
-      </div>
-      <p class="hint mt0">kohya sd-scripts in a dedicated Python 3.11 venv. A several-GB CUDA PyTorch download, matched to your GPU.</p>
-      {#if trainer && !trainer.installed && trainer.issues?.length}
-        <div class="note">{trainer.issues[0]}</div>
-      {/if}
-
-      <label>CUDA build</label>
-      <select bind:value={cuda}>
-        <option value="auto">Auto{gpu?.cuda ? ` → ${gpu.cuda}` : ''}</option>
-        <option value="cu128">cu128 (Blackwell / RTX 50-series)</option>
-        <option value="cu124">cu124 (RTX 20–40 series)</option>
-        <option value="cu121">cu121 (older)</option>
-      </select>
-      {#if gpu?.gpu}<p class="hint">Detected: <strong>{gpu.gpu}</strong> → recommends <strong>{gpu.cuda}</strong>.</p>{/if}
-
-      <div class="actions">
-        <button onclick={repair} disabled={sbusy}>{sbusy ? 'Setting up…' : (trainer?.installed ? 'Reinstall trainer' : 'Install trainer')}</button>
-        {#if sbusy}<button class="ghost sm" onclick={cancelSetup} disabled={scancelling}>{scancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
-      </div>
-      <p class="hint">Terminal: <code>pwsh {trainer?.setup_script} -Recreate -Configure</code></p>
-      {#if smsg}<div class:err={smsg.err} class="msg">{smsg.text}</div>{/if}
-
-      {#if sbusy || slog.length}
-        <div class="run">
-          <div class="prow">
-            <div class="bar" class:indet={spct === null}><span style={spct !== null ? `width:${spct}%` : ''}></span></div>
-            <div class="pmeta">{spct !== null ? `${spct}%` : (sbusy ? 'working…' : (sstatus || ''))}</div>
-          </div>
-          <pre class="log" bind:this={slogEl}>{slog.join('\n')}</pre>
+        <div class="actions">
+          <button onclick={repair} disabled={sbusy}>{sbusy ? 'Setting up…' : (trainer?.installed ? 'Reinstall' : 'Install trainer')}</button>
+          {#if sbusy}<button class="ghost sm" onclick={cancelSetup} disabled={scancelling}>{scancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
         </div>
-      {/if}
-    </section>
-
-    <section class="card">
-      <div class="card-head"><h3>Trainer paths</h3></div>
-      <p class="hint mt0">Where sd-scripts lives and where it reads checkpoints / writes LoRAs. Blank folders fall back to ComfyUI's own (<code>models/checkpoints</code> &amp; <code>models/loras</code>).</p>
-
-      <label>sd-scripts folder</label>
-      <input bind:value={tcfg.sd_scripts_dir} placeholder="C:\…\sd-scripts" />
-
-      <label>venv python <span class="dim">(blank = autodetect)</span></label>
-      <input bind:value={tcfg.python} placeholder="…\sd-scripts\venv\Scripts\python.exe" />
-
-      <label>Checkpoints folder <span class="dim">(blank = ComfyUI's)</span></label>
-      <input bind:value={tcfg.checkpoints_dir} placeholder={trainer?.checkpoints_dir_resolved || 'auto'} />
-
-      <label>LoRA output folder <span class="dim">(blank = ComfyUI's)</span></label>
-      <input bind:value={tcfg.loras_dir} placeholder={trainer?.loras_out_dir || 'auto'} />
-
-      <div class="actions">
-        <span class:ok={tmsg?.ok} class="msg">{tmsg?.text || 'Auto-saves'}</span>
+        {#if smsg}<div class:err={smsg.err} class="msg">{smsg.text}</div>{/if}
       </div>
-    </section>
-  </div>
+
+      <!-- Right: paths -->
+      <div class="tcol">
+        <label>sd-scripts folder</label>
+        <input bind:value={tcfg.sd_scripts_dir} placeholder="C:\…\sd-scripts" />
+
+        <label>venv python <span class="dim">(blank = autodetect)</span></label>
+        <input bind:value={tcfg.python} placeholder="…\venv\Scripts\python.exe" />
+
+        <label>Checkpoints <span class="dim">(blank = ComfyUI's)</span></label>
+        <input bind:value={tcfg.checkpoints_dir} placeholder={trainer?.checkpoints_dir_resolved || 'auto'} />
+
+        <label>LoRA output <span class="dim">(blank = ComfyUI's)</span></label>
+        <input bind:value={tcfg.loras_dir} placeholder={trainer?.loras_out_dir || 'auto'} />
+      </div>
+    </div>
+
+    {#if sbusy || slog.length}
+      <div class="run">
+        <div class="prow">
+          <div class="bar" class:indet={spct === null}><span style={spct !== null ? `width:${spct}%` : ''}></span></div>
+          <div class="pmeta">{spct !== null ? `${spct}%` : (sbusy ? 'working…' : (sstatus || ''))}</div>
+        </div>
+        <pre class="log" bind:this={slogEl}>{slog.join('\n')}</pre>
+      </div>
+    {/if}
+  </section>
 
 </div>
 
@@ -285,6 +279,7 @@
   .dot.busy             { background: var(--warn); color: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
   .slight.down          { background: var(--bad); color: var(--bad); }
   .status-lbl { font-size: 12px; color: var(--muted); }
+  .status-lbl.ok { color: var(--good); }
   @keyframes pulse { 50% { opacity: .3; } }
 
   /* key-value rows (Environment / Backend) */
@@ -319,7 +314,10 @@
   .pill.bad { background: rgba(255, 122, 122, .14); color: var(--bad); }
   .note { font-size: 12.5px; color: var(--bad); margin: 8px 0; line-height: 1.5; }
 
-  label { display: block; font-size: 12px; color: var(--muted); margin: 14px 0 4px; }
+  .trainer-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 32px; margin-top: 4px; }
+  .tcol { display: flex; flex-direction: column; }
+
+  label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
   .dim { color: var(--faint, var(--muted)); }
   input { width: 100%; }
   select { width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--elev); color: var(--text); border: 1px solid var(--border); }

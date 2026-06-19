@@ -35,7 +35,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
 
     # 2. base-image prompt (grounds the look to tags)
     emit({"type": "phase", "label": "Composing the base prompt"})
-    from loom.pipeline import compose_base_prompt
+    from loom.stories.pipeline import compose_base_prompt
     from loom.server.services import config_files
     _bp_cfg = ctx.load_story_builder()
     _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
@@ -79,7 +79,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
 
     # 4. persona-driven expressions + body language
     emit({"type": "phase", "label": "Composing expressions + poses"})
-    from loom.pipeline import compose_expressions, compose_poses, compose_outfit_prompt
+    from loom.stories.pipeline import compose_expressions, compose_poses, compose_outfit_prompt
     _w_cfg = ctx.load_story_builder()
     _w_prov = ctx.author_provider(config_files._stage_model(_w_cfg, "wardrobe"))
     exprs = compose_expressions(_w_prov, persona)

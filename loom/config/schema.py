@@ -175,6 +175,31 @@ class Storyboard(BaseModel):
     beats: list[Beat] = Field(default_factory=list)
 
 
+class ArcBeat(BaseModel):
+    """A chapter node within an arc. `next` is a list of ArcBeat ids (enables branching/merging)."""
+    id: str
+    title: str = ""
+    summary: str = ""
+    emotional_core: str = ""
+    hook: str = ""
+    location: str = ""
+    scene_prompt: str = ""
+    characters: list[str] = Field(default_factory=list)
+    next: list[str] = Field(default_factory=list)
+
+
+class Arc(BaseModel):
+    """One dramatic unit within a book — a self-contained mini-arc with its own ending."""
+    id: str
+    name: str
+    mini_ending: str = ""         # what this arc leaves the protagonist with
+    dramatic_function: str = ""   # e.g. "Introduction — You · Need · Go"
+    cast: list[str] = Field(default_factory=list)   # character keys active in this arc
+    nodes: dict[str, ArcBeat] = Field(default_factory=dict)
+    start: str = ""               # id of the first ArcBeat node
+    order: int = 0
+
+
 class Story(BaseModel):
     name: str
     premise: str = ""                        # one-paragraph synopsis
@@ -189,6 +214,8 @@ class Story(BaseModel):
     start: str | None = None                 # starting location id
     background: str | None = None            # cover / default background
     fields: dict[str, Any] = Field(default_factory=dict)  # source card key, creator…
+    intended_ending: str = ""     # the agreed book ending (first-class, drives arc generation)
+    arcs: list[Arc] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def _check_start(self) -> "Story":

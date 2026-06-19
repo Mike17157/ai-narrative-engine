@@ -39,6 +39,24 @@
     });
   }
 
+  // Rehydrate the grid from on-disk cached renders. The backend persists each
+  // render keyed by (workflow, lora), so switching workflows shows that
+  // workflow's cached shots and "Render all" only fills what's missing.
+  const cacheImg = (n) => `/api/loras/triage-cache/img?scope=${encodeURIComponent(baseModel)}&lora=${encodeURIComponent(n)}`;
+  let hydratedFor = $state('');
+  $effect(() => {
+    const bm = baseModel;
+    if (!bm || !triageItems.length || bm === hydratedFor) return;
+    hydratedFor = bm;
+    for (const it of triageItems) { it.img = null; it.status = 'idle'; it.pct = null; }
+    (async () => {
+      let cached = {};
+      try { cached = (await get(`/loras/triage-cache?scope=${encodeURIComponent(bm)}`)).loras || {}; } catch { return; }
+      if (bm !== baseModel) return; // workflow changed mid-fetch
+      for (const it of triageItems) if (cached[it.name]) { it.img = cacheImg(it.name); it.status = 'done'; }
+    })();
+  });
+
   async function renderOne(item) {
     if (!selBase) { item.status = 'nockpt'; return; }
     item.status = 'gen'; item.pct = null; item.img = null;
@@ -46,9 +64,11 @@
     // inject the LoRA into the real workflow (split-loader aware).
     const minimal = !!selBase.checkpoint;
     const url = minimal ? '/api/loras/triage-render' : '/api/lora/sample';
+    const w = +triageWeight || 0.8;
+    const cache = { scope: baseModel, lora: item.name, prompt: img.testPrompt, weight: w };
     const body = minimal
-      ? { checkpoint: selBase.checkpoint, lora: item.name, weight: +triageWeight || 0.8, prompt: img.testPrompt }
-      : { model: baseModel, loras: [{ name: item.name, weight: +triageWeight || 0.8 }], prompt: img.testPrompt };
+      ? { checkpoint: selBase.checkpoint, lora: item.name, weight: w, prompt: img.testPrompt, cache }
+      : { model: baseModel, loras: [{ name: item.name, weight: w }], prompt: img.testPrompt, cache };
     try {
       const res = await fetch(url, {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -109,7 +129,7 @@
 
   <div class="trow" style="grid-template-columns: 1.4fr 3fr 90px;">
     <div><label>Workflow</label><Combobox items={baseItems} value={baseModel} placeholder="workflow…" onpick={(v) => (baseModel = v)} /></div>
-    <div><label>Test prompt <span class="sub">— shared with every LoRA test</span></label><input bind:value={img.testPrompt} placeholder="1girl, solo, standing…" /></div>
+    <div><label>Test prompt <span class="sub">— shared with every LoRA test</span></label><textarea class="tp" rows="2" bind:value={img.testPrompt} placeholder="1girl, solo, standing…"></textarea></div>
     <div><label>Weight</label><ScrubInput step={0.01} min={0} max={2} bind:value={triageWeight} title="drag ↕ or click to type" /></div>
   </div>
   <div class="trow2">
@@ -125,7 +145,7 @@
       {#each g.items as it (it.name)}
         <div class="cell" class:classified={it.type && it.type !== 'skip'}>
           <div class="thumb">
-            {#if it.img}<button class="imgbtn" onclick={() => openLightbox(it.img, it.name)} title="click to enlarge"><img src={it.img} alt={it.name} /></button>
+            {#if it.img}<button class="imgbtn" onclick={() => openLightbox(it.img, it.name)} title="click to enlarge"><img src={it.img} alt={it.name} /></button><button class="rerender" onclick={() => renderOne(it)} title="re-render with current prompt/weight" aria-label="Re-render">↻</button>
             {:else if it.status === 'gen'}<div class="ph">{it.pct !== null ? it.pct + '%' : '…'}</div>
             {:else if it.status === 'err'}<div class="ph err" title={it.err || ''}>failed</div>
             {:else if it.status === 'nockpt' || !selBase}<div class="ph err" title="pick a workflow above">no base</div>
@@ -157,14 +177,20 @@
   .famhead .famx { font-size: 10px; font-weight: 600; color: #c9a6ff; background: rgba(124,109,255,.12); border-radius: 999px; padding: 1px 8px; text-transform: uppercase; letter-spacing: .3px; }
   .allchk { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--muted); margin-left: auto; }
   .allchk input { width: auto; }
-  .trow { display: grid; gap: 12px; margin-bottom: 10px; }
+  .trow { display: grid; gap: 12px; margin-bottom: 10px; align-items: start; }
   .trow label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 4px; }
+  .trow .tp { width: 100%; resize: vertical; font: inherit; line-height: 1.4; }
   .trow2 { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
   .m { font-size: 12.5px; color: var(--muted); }
   .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 14px; }
   .cell { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px; background: var(--elev); }
   .cell.classified { border-color: var(--accent); }
-  .thumb { aspect-ratio: 1; width: 100%; border-radius: 7px; overflow: hidden; background: var(--panel); display: grid; place-items: center; }
+  .thumb { position: relative; aspect-ratio: 1; width: 100%; border-radius: 7px; overflow: hidden; background: var(--panel); display: grid; place-items: center; }
+  .rerender { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
+              border-radius: 6px; border: none; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; line-height: 1; cursor: pointer;
+              opacity: 0; transition: opacity .12s; box-shadow: none; }
+  .thumb:hover .rerender { opacity: 1; }
+  .rerender:hover { background: var(--accent); }
   .imgbtn { padding: 0; border: none; background: none; box-shadow: none; cursor: zoom-in; display: block; width: 100%; height: 100%; }
   .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .ph { color: var(--faint); font-size: 13px; width: 100%; height: 100%; display: grid; place-items: center; background: none; border: none; }

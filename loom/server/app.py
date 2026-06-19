@@ -22,6 +22,7 @@ from ..connections import ConnectionStore
 
 from .context import AppContext
 from .index_html import INDEX_HTML
+from ..stories import router as stories  # story domain lives in loom/stories/, not routers/
 from .routers import (
     characters,
     comfy,
@@ -31,7 +32,6 @@ from .routers import (
     personas,
     scenarios,
     server,
-    stories,
     tags,
     trainer,
     workflow,

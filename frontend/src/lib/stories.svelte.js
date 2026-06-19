@@ -15,6 +15,8 @@ const blankWizard = () => ({
   locations: null,         // [{ id, name, description, background_prompt }]
   start: null,
   cast: null,              // [{ name, persona, appearance, role, base_prompt, primary }] — protagonist first
+  intended_ending: '',     // destination locked in during workshop phase 1
+  arcs: [],                // [{id, name, mini_ending, dramatic_function, cast, rationale}]
 });
 
 // Wizard draft persists across reloads (a model error / refresh mid-build keeps work).
@@ -164,14 +166,71 @@ export async function genCharacters() {
   } else { wz.error = r.data?.error || 'character extraction failed'; job.status = 'error'; }
 }
 
+export async function suggestArcs(intendedEnding, messages) {
+  const wz = w();
+  wz.busy = true; wz.error = null;
+  try {
+    const res = await fetch('/api/stories/workshop/arcs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        character: wz.character,
+        messages,
+        intended_ending: intendedEnding,
+        story_cast: [],
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data?.arcs) {
+      wz.intended_ending = intendedEnding;
+      wz.arcs = data.arcs;
+    } else {
+      wz.error = data?.error || 'arc suggestion failed';
+    }
+  } catch (e) {
+    wz.error = String(e);
+  } finally {
+    wz.busy = false;
+  }
+}
+
+export async function expandArc(storyKey, arcId, onDelta, onArc) {
+  const res = await fetch(`/api/stories/${storyKey}/arc/${arcId}/expand`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  const reader = res.body.getReader();
+  const dec = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let i;
+    while ((i = buf.indexOf('\n\n')) >= 0) {
+      const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
+      const dataLine = chunk.split('\n').find(l => l.startsWith('data:'));
+      if (!dataLine) continue;
+      try {
+        const ev = JSON.parse(dataLine.slice(5).trim());
+        if (ev.type === 'delta') onDelta?.(ev.text);
+        else if (ev.type === 'arc') onArc?.(ev);
+      } catch { /* skip malformed */ }
+    }
+  }
+}
+
 export async function saveStory() {
   const wz = w();
   stories.saving = true; wz.error = null;
   const r = await post('/stories', {
     name: wz.name, premise: wz.board?.premise || '', tone: wz.board?.tone || '',
-    themes: wz.board?.themes || [], storyboard: { logline: wz.board?.logline || '', beats: wz.board?.beats || [] },
+    themes: wz.board?.themes || [],
+    storyboard: { logline: wz.board?.logline || '', beats: wz.board?.beats || [], heart: wz.board?.heart || '' },
     locations: wz.locations || [], start: wz.start,
     cast: wz.cast || [], source_character: wz.character,
+    intended_ending: wz.intended_ending || '',
+    arcs: wz.arcs || [],
   });
   stories.saving = false;
   if (r.data?.ok) {

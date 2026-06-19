@@ -104,7 +104,7 @@ def register(app, ctx):
         if body.get("compose"):
             ctx.ensure_fleshed(key)          # thin seed → disciplined prose first
             c = ctx.base_settings.characters.get(key)
-            from loom.pipeline import compose_poses as _compose_poses
+            from loom.stories.pipeline import compose_poses as _compose_poses
             from ..services import config_files as _cfiles
             _w_cfg = ctx.load_story_builder()
             _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe"))
@@ -503,7 +503,7 @@ def register(app, ctx):
             ctx.ensure_fleshed(key)
             c = ctx.base_settings.characters.get(key)
             from ..services.prompts import _persona_text
-            from loom.pipeline import compose_affect_range as _compose_affect_range
+            from loom.stories.pipeline import compose_affect_range as _compose_affect_range
             from ..services import config_files as _cfiles
             nsfw = bool(body.get("nsfw"))
             _emo_cfg = ctx.load_story_builder()
@@ -764,7 +764,7 @@ def register(app, ctx):
             return JSONResponse({"error": "no such outfit"}, status_code=404)
         # Use the brief concept (if stored) as the seed — not the full prose prompt.
         brief_concept = outfit.get("concept") or ""
-        from loom.pipeline import compose_outfit_prompt as _compose_outfit_prompt
+        from loom.stories.pipeline import compose_outfit_prompt as _compose_outfit_prompt
         from ..services import config_files as _cfiles
         _w_cfg = ctx.load_story_builder()
         _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe",
@@ -867,7 +867,7 @@ def register(app, ctx):
         await run_in_threadpool(ctx.ensure_fleshed, key)
         ch = ctx.base_settings.characters.get(key)
         fields = ch.fields or {}
-        from loom.pipeline import compose_base_prompt as _compose_base_prompt
+        from loom.stories.pipeline import compose_base_prompt as _compose_base_prompt
         from ..services import config_files as _cfiles
         _bp_cfg = ctx.load_story_builder()
         _bp_prov = ctx.author_provider(_cfiles._stage_model(_bp_cfg, "base_image",
@@ -1047,7 +1047,7 @@ def register(app, ctx):
         the persona when absent.  With `replace: true` existing outfits (and their sprite
         directories) are deleted first and the persona-derived prompt caches are cleared so
         everything is recomposed fresh."""
-        from ..services.wardrobe import apply_manifest
+        from loom.stories.pipeline import apply_manifest
         if ctx.base_settings.characters.get(key) is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
         try:

@@ -52,7 +52,7 @@
 
 <div class="tprompt">
   <label for="tp">Test prompt <span class="lo">— shared across classify, stack test, and generation</span></label>
-  <input id="tp" bind:value={img.testPrompt} placeholder="1girl, solo, standing…" />
+  <textarea id="tp" rows="3" bind:value={img.testPrompt} placeholder="1girl, solo, standing…"></textarea>
 </div>
 
 <div class="tabs">
@@ -101,6 +101,7 @@
 <style>
   .tprompt { margin-bottom: 14px; }
   .tprompt label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 5px; }
+  .tprompt textarea { width: 100%; resize: vertical; min-height: 56px; font: inherit; line-height: 1.45; }
   .lo { color: var(--faint); }
 
   .tabs { display: flex; gap: 0; margin-bottom: 18px; border-bottom: 1px solid var(--border-soft); }

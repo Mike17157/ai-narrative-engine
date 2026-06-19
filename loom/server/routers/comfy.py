@@ -537,15 +537,40 @@ def register(app, ctx):
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
 
+        from ..services import triage_cache
+        cache = body.get("cache") or None
+
         async def events():
             try:
                 async for ev in stream_generate(base, graph, "9", 240):
+                    if cache and ev.get("type") == "image" and (ev.get("images") or []):
+                        try:
+                            triage_cache.save_render(ctx.root, cache.get("scope", ""), cache.get("lora", ""),
+                                                     ev["images"][0], prompt=cache.get("prompt", ""), weight=cache.get("weight"))
+                        except Exception:  # noqa: BLE001 — caching is best-effort
+                            pass
                     yield f"data: {json.dumps(ev)}\n\n"
             except Exception as exc:  # noqa: BLE001
                 yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
             yield 'data: {"type": "done"}\n\n'
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.get("/api/loras/triage-cache")
+    def triage_cache_list(scope: str = ""):
+        """Cached single-LoRA triage renders for a workflow scope — lets the
+        Classify grid rehydrate instead of re-rendering on every visit."""
+        from ..services import triage_cache
+        return {"loras": triage_cache.list_renders(ctx.root, scope)}
+
+    @app.get("/api/loras/triage-cache/img")
+    def triage_cache_img(scope: str = "", lora: str = ""):
+        from fastapi.responses import FileResponse, Response
+        from ..services import triage_cache
+        p = triage_cache.render_path(ctx.root, scope, lora)
+        if p is None:
+            return Response(status_code=404)
+        return FileResponse(p, media_type="image/png")
 
     @app.delete("/api/loras/file")
     def delete_lora_file(name: str):

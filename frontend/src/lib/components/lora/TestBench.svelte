@@ -85,7 +85,7 @@
     <button class="ghost" onclick={tagify} disabled={tagifying || !sceneNL.trim()}>{tagifying ? 'Generating…' : 'Scene → tags'}</button>
   </div>
   <label>Prompt / tags <span class="lo">— shared with the test grid above; routing matches it and the image renders it</span></label>
-  <input bind:value={img.testPrompt} placeholder="1girl, armor, moonlight, … (or generate from a scene above)" />
+  <textarea class="tp" rows="3" bind:value={img.testPrompt} placeholder="1girl, armor, moonlight, … (or generate from a scene above)"></textarea>
   <div class="trow2">
     <button class="ghost" onclick={resolve} disabled={!testStack}>Resolve</button>
     <button onclick={render} disabled={!resolved || rendering}>{rendering ? 'Rendering…' : 'Render'}</button>
@@ -126,6 +126,7 @@
   .lo { color: var(--faint); text-transform: none; letter-spacing: 0; }
   .trow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 10px; }
   .tf label, .card > label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 4px; }
+  .card > .tp { width: 100%; resize: vertical; font: inherit; line-height: 1.45; margin-bottom: 2px; }
   .scenerow { display: flex; gap: 10px; align-items: center; }
   .scenerow input { flex: 1; min-width: 0; }
   .trow2 { display: flex; gap: 10px; align-items: center; margin-top: 10px; }

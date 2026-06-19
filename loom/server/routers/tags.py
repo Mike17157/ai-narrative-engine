@@ -199,7 +199,7 @@ def register(app, ctx):
         stories built before the tag rule). Stateless: takes {text, kind} and returns
         {tags}. kind='scene' formats as a no-humans scenery plate; anything else as a
         character/subject tag list. Uses the active author model."""
-        from ...scenario.builder import _APPEARANCE_RULE, _TAG_RULE
+        from ...stories.pipeline._helpers import _APPEARANCE_RULE, _TAG_RULE
 
         body = body or {}
         text = (body.get("text") or "").strip()

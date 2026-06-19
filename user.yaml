@@ -1,69 +1,33 @@
-# Loom user configuration.
-#
-# Two things live here: who *you* are in a chat (the persona the characters see —
-# SillyTavern's "user persona"), and where your local tools and files are.
-# Identity/preferences and machine paths, in one place.
-
 profile:
   name: Michael
   email: michael.codeguy@gmail.com
-  # How you're represented to characters in chat. Leave blank for a neutral user.
-  persona: ""
-
-# Defaults the CLI / future UI fall back to. Note chat_model and image_model are
-# independent keys — selecting one never implies the other.
+  persona: ''
 defaults:
-  pipeline: chat            # plain streaming chat; works with any connected model
+  pipeline: chat
   character: aria
-  chat_model: opus          # overridden by your active Connection
-  image_model: anima        # overridden by your active Connection
-
+  chat_model: opus
+  image_model: anima
 comfyui:
   base_url: http://127.0.0.1:8188
-
-  # Let Loom launch ComfyUI headless when it isn't already running. Loom only
-  # ever stops an instance it started — your own running ComfyUI is never killed.
   managed: true
-  # Launch paths are autodetected for a ComfyUI Desktop install. Set these only
-  # to override (e.g. a portable/git install, or a RunPod where you'd instead
-  # set managed: false and point base_url at the pod).
   python: null
   main_py: null
   base_directory: null
   startup_timeout_s: 180
-
-  # ComfyUI's own models directory — the source of truth for weights. Loom passes
-  # model *names* over HTTP; ComfyUI loads the actual files from here. The project
-  # keeps only models/manifest.yaml (the bill-of-materials), not copies.
-  models_path: 'C:\Users\micha\Documents\ComfyUI\models'
-
-# RunPod configuration for dynamic GPU scaling
+  models_path: C:\Users\micha\Documents\ComfyUI\models
 runpod:
-  # Leave blank — this file is tracked in git. Put the real key in .env (gitignored)
-  # as RUNPOD_API_KEY, which overrides this value at runtime.
-  api_key: ""
-  # Serverless ComfyUI endpoint id. When set, batch renders fan out to this
-  # auto-scaling endpoint (no pods to manage). RUNPOD_ENDPOINT_ID overrides it.
-  serverless_endpoint_id: ""
-  # Image queue settings (pod-scaling fallback when no serverless endpoint is set)
-  images_per_instance: 10  # Allocate this many images per GPU instance
-  min_instances: 1         # Minimum instances to keep running
-  max_instances: 10        # Maximum instances to spin up
-  # Default template/configuration for new instances
-  template_id: null        # RunPod GPU template ID (optional, uses default if null)
-  # Launch paths are autodetected for a ComfyUI Desktop install. Set these only
-  # to override (e.g. a portable/git install, or a RunPod where you'd instead
-  # set managed: false and point base_url at the pod).
+  api_key: ''
+  serverless_endpoint_id: ''
+  images_per_instance: 10
+  min_instances: 1
+  max_instances: 10
+  template_id: null
   python: null
   main_py: null
   base_directory: null
   startup_timeout_s: 180
-
-  # ComfyUI's own models directory — the source of truth for weights. Loom passes
-  # model *names* over HTTP; ComfyUI loads the actual files from here. The project
-  # keeps only models/manifest.yaml (the bill-of-materials), not copies.
-  models_path: 'C:\Users\micha\Documents\ComfyUI\models'
-
+  models_path: C:\Users\micha\Documents\ComfyUI\models
+  enabled: true
 paths:
   workflows: ./workflows
   models: ./models

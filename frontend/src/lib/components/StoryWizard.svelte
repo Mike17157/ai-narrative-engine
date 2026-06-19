@@ -42,6 +42,16 @@
     at('storyboard');
   }
 
+  function workshopConfirmArcs({ intended_ending, arcs }) {
+    // Arc structure confirmed — store on wizard state, then kick off storyboard gen.
+    wz.intended_ending = intended_ending;
+    wz.arcs = arcs;
+    workshopOpen = false;
+    // Use the ending text as the premise seed for storyboard generation.
+    genStoryboard(intended_ending);
+    at('storyboard');
+  }
+
   function workshopSkip() {
     workshopOpen = false;
     start();
@@ -77,6 +87,7 @@
           charName={wz.charName}
           onGenerate={workshopGenerate}
           onSkip={workshopSkip}
+          onConfirmArcs={workshopConfirmArcs}
         />
         <div class="acts" style="margin-top:8px">
           <button class="ghost" onclick={() => (workshopOpen = false)}>← Back to setup</button>

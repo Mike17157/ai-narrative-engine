@@ -35,6 +35,17 @@ export async function put(path, body) {
   return { ok: r.ok, status: r.status, data };
 }
 
+export async function patch(path, body) {
+  const r = await fetch('/api' + path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: body === undefined ? undefined : JSON.stringify(body)
+  });
+  let data = null;
+  try { data = await r.json(); } catch { /* no body */ }
+  return { ok: r.ok, status: r.status, data };
+}
+
 export async function del(path) {
   const r = await fetch('/api' + path, { method: 'DELETE' });
   return r.json();
