@@ -1,9 +1,11 @@
 <script>
   import { charName } from '$lib/characters.svelte.js';
-  import { stories, deleteStory, regenStory, expandArc, loadStory } from '$lib/stories.svelte.js';
+  import { stories, deleteStory, regenStory, expandArc, loadStory, setStoryMode, persistCurrent } from '$lib/stories.svelte.js';
   import { patch } from '$lib/api.js';
   import ChapterCard from '$lib/components/ChapterCard.svelte';
   import SceneModal  from '$lib/components/SceneModal.svelte';
+  import ArcModal    from '$lib/components/ArcModal.svelte';
+  import StorySettingsModal from '$lib/components/StorySettingsModal.svelte';
   import StoryGraph  from '$lib/components/StoryGraph.svelte';
 
   let st = $derived(stories.current);
@@ -18,10 +20,40 @@
   // Cast picker state
   let castPickerArcId = $state(null);  // arc id whose picker is open
 
-  // Per-arc view toggle: 'list' | 'graph'
-  let arcView = $state({});
-  function arcViewOf(id) { return arcView[id] || 'list'; }
-  function setArcView(id, v) { arcView = { ...arcView, [id]: v }; }
+  // Whole-story canvas mode (persisted in the store): 'graph' | 'list'
+  let mode = $derived(stories.view[st?.key]?.mode || 'graph');
+
+  // Arc-details modal
+  let arcModal = $state(null);   // { arcIdx }
+  function openArcModal(arcIdx) { arcModal = { arcIdx }; }
+  function closeArcModal() { arcModal = null; }
+  async function handleArcSave(updated) {
+    if (!arcModal || !stories.current?.arcs) return;
+    const idx = arcModal.arcIdx;
+    const arc = stories.current.arcs[idx];
+    stories.current.arcs[idx] = { ...arc, ...updated };
+    arcModal = null;
+    await patch(`/stories/${st.key}/arc/${arc.id}`, {
+      name: updated.name, dramatic_function: updated.dramatic_function,
+      mini_ending: updated.mini_ending, rationale: updated.rationale,
+    });
+  }
+  // Story-settings modal (title / premise / tone / cast / locations / chapters)
+  let settingsOpen = $state(false);
+
+  // Click a card on the canvas → open the chapter modal. Flat-beat stories use a
+  // synthetic '_board' arc, so route those to the storyboard.beats list instead.
+  function selectGraphNode(data) {
+    if (data.arcId === '_board') {
+      const i = parseInt(String(data.nodeId).slice(1), 10);
+      const beat = stories.current?.storyboard?.beats?.[i];
+      if (beat) regenModal = { flat: true, beatIdx: i, chapter: beat, chapterIdx: i };
+      return;
+    }
+    const arc = stories.current?.arcs?.[data.arcIdx];
+    const node = arc?.nodes?.[data.nodeId];
+    if (node) openRegenModal(arc, data.arcIdx, node, -1);
+  }
 
   // Primary character key (always locked in every arc)
   let primaryCharKey = $derived(
@@ -90,11 +122,18 @@
   }
   function closeRegenModal() { regenModal = null; }
   function handleRegenSave(updated) {
-    if (!regenModal || !stories.current?.arcs) return;
-    const arc = stories.current.arcs[regenModal.arcIdx];
-    if (!arc?.nodes) return;
-    // nodes is a dict — update by key directly
-    arc.nodes[regenModal.nodeId] = { ...arc.nodes[regenModal.nodeId], ...updated };
+    if (!regenModal) return;
+    if (regenModal.flat) {
+      const beats = stories.current?.storyboard?.beats;
+      if (beats?.[regenModal.beatIdx]) {
+        beats[regenModal.beatIdx] = { ...beats[regenModal.beatIdx], ...updated };
+        persistCurrent();
+      }
+      regenModal = null;
+      return;
+    }
+    const arc = stories.current?.arcs?.[regenModal.arcIdx];
+    if (arc?.nodes) arc.nodes[regenModal.nodeId] = { ...arc.nodes[regenModal.nodeId], ...updated };  // nodes is a dict
     regenModal = null;
   }
 </script>
@@ -103,6 +142,14 @@
 
   <!-- Actions row -->
   <div class="vacts">
+    {#if st.arcs?.length || st.storyboard?.beats?.length}
+      <div class="view-toggle">
+        <button class="vt-btn" class:active={mode === 'graph'} onclick={() => setStoryMode(st.key, 'graph')} title="Map view">⊞ Map</button>
+        <button class="vt-btn" class:active={mode === 'list'} onclick={() => setStoryMode(st.key, 'list')} title="List view">☰ List</button>
+      </div>
+    {/if}
+    <span class="sp"></span>
+    <button class="ghost sm" onclick={() => settingsOpen = true}>✎ Edit</button>
     <button class="ghost sm" onclick={() => regenStory(st)}>↻ Regenerate</button>
     <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
   </div>
@@ -143,8 +190,11 @@
     </div>
   {/if}
 
-  <!-- ── Arc sections ─────────────────────────────────────────────────── -->
-  {#if st.arcs?.length}
+  <!-- ── Whole-story canvas, or per-arc / flat list ───────────────────── -->
+  {#if st.arcs?.length || st.storyboard?.beats?.length}
+    {#if mode === 'graph'}
+      <StoryGraph story={st} storyKey={st.key} onSelectNode={selectGraphNode} onSelectArc={openArcModal} />
+    {:else if st.arcs?.length}
     <div class="arc-sections">
       {#each st.arcs as arc, arcIdx}
         {@const nodes = walkNodes(arc)}
@@ -156,14 +206,8 @@
             {#if arc.dramatic_function}
               <span class="chip df">{arc.dramatic_function}</span>
             {/if}
+            <button class="arc-edit" onclick={() => openArcModal(arcIdx)} title="Edit arc details">✎</button>
             <span class="sp"></span>
-            <!-- View toggle (only when chapters exist) -->
-            {#if nodes.length}
-              <div class="view-toggle">
-                <button class="vt-btn" class:active={arcViewOf(arc.id) === 'list'} onclick={() => setArcView(arc.id, 'list')} title="List view">☰</button>
-                <button class="vt-btn" class:active={arcViewOf(arc.id) === 'graph'} onclick={() => setArcView(arc.id, 'graph')} title="Graph view">⊞</button>
-              </div>
-            {/if}
             <!-- Cast chips — protagonist locked, others removable -->
             {#each (arc.cast || []) as ckey}
               <span class="chip cast-chip" class:locked={ckey === primaryCharKey} title={ckey === primaryCharKey ? 'Protagonist — always present' : ckey}>
@@ -202,26 +246,15 @@
 
           <!-- Arc body: chapters or expand button -->
           {#if nodes.length}
-            {#if arcViewOf(arc.id) === 'graph'}
-              <StoryGraph
-                {arc}
-                onRegenNode={(nodeId) => {
-                  const nodeMap = arc.nodes || {};
-                  const node = nodeMap[nodeId];
-                  if (node) openRegenModal(arc, arcIdx, node, -1);
-                }}
-              />
-            {:else}
-              <div class="chapter-list">
-                {#each nodes as node, chIdx}
-                  <ChapterCard
-                    chapter={node}
-                    index={chIdx}
-                    onRegen={() => openRegenModal(arc, arcIdx, node, chIdx)}
-                  />
-                {/each}
-              </div>
-            {/if}
+            <div class="chapter-list">
+              {#each nodes as node, chIdx}
+                <ChapterCard
+                  chapter={node}
+                  index={chIdx}
+                  onRegen={() => openRegenModal(arc, arcIdx, node, chIdx)}
+                />
+              {/each}
+            </div>
           {:else if expandingArc === arc.id}
             <!-- Streaming preview while expanding -->
             <div class="expand-stream">
@@ -245,9 +278,8 @@
         </div>
       {/each}
     </div>
-
-  <!-- ── Fallback: flat beat list (old stories without arcs) ──────────── -->
-  {:else if st.storyboard?.beats?.length}
+    {:else}
+    <!-- Flat-beat stories (no arcs): simple chapter list -->
     <h4>Chapters <span class="lo">— {st.storyboard.beats.length} beats</span></h4>
     <ol class="beats">
       {#each st.storyboard.beats as b, i}
@@ -261,19 +293,41 @@
         </li>
       {/each}
     </ol>
+    {/if}
   {/if}
 
 </div></div>
 
-<!-- SceneModal for chapter regen within arc -->
+<!-- SceneModal for chapter editing + per-location background generation -->
 {#if regenModal}
   <SceneModal
     chapter={regenModal.chapter}
     index={regenModal.chapterIdx}
     board={st.storyboard || {}}
     charKey={primaryCharKey}
+    storyKey={st.key}
+    locations={st.locations || []}
     onSave={handleRegenSave}
+    onBgPicked={() => loadStory(st.key)}
     onClose={closeRegenModal}
+  />
+{/if}
+
+<!-- Story-settings modal (replaces the old Edit tab) -->
+{#if settingsOpen}
+  <StorySettingsModal onClose={() => { settingsOpen = false; }} />
+{/if}
+
+<!-- ArcModal for arc-detail editing + expansion -->
+{#if arcModal && st.arcs?.[arcModal.arcIdx]}
+  {@const arc = st.arcs[arcModal.arcIdx]}
+  <ArcModal
+    {arc}
+    index={arcModal.arcIdx}
+    expanded={!!Object.keys(arc.nodes || {}).length}
+    onSave={handleArcSave}
+    onExpand={() => { closeArcModal(); handleExpand(arc); }}
+    onClose={closeArcModal}
   />
 {/if}
 
@@ -283,8 +337,14 @@
   .col  { display: flex; flex-direction: column; gap: 14px; }
 
   /* ── Actions ──────────────────────────────────────────────────────────────── */
-  .vacts { display: flex; gap: 8px; justify-content: flex-end; }
+  .vacts { display: flex; gap: 8px; align-items: center; }
   .del:hover { color: var(--bad, #ff7a7a); border-color: var(--bad, #ff7a7a); filter: none; }
+  .arc-edit {
+    width: 22px; height: 22px; flex: none; padding: 0; border-radius: 6px;
+    background: var(--elev); border: 1px solid var(--border-soft); color: var(--faint);
+    font-size: 11px; line-height: 1; cursor: pointer; box-shadow: none;
+  }
+  .arc-edit:hover { color: var(--accent); border-color: var(--accent); filter: none; }
 
   /* ── Heart callout ────────────────────────────────────────────────────────── */
   .heart-callout {

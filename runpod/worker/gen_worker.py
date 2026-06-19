@@ -67,6 +67,11 @@ NODE_REPO: dict[str, tuple[str, str]] = {
     "BboxDetectorSEGS": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
     "SegmDetectorSEGS": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
     "ImpactSimpleDetectorSEGS": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
+    "ImpactSwitch": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
+    "PreviewBridge": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
+    "SEGSPreview": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
+    "MaskToSEGS": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
+    "EmptySegs": ("https://github.com/ltdrdata/ComfyUI-Impact-Pack.git", "Impact-Pack"),
     # ComfyUI-Impact-Subpack — must be a TOP-LEVEL sibling in custom_nodes/ (not nested inside Impact-Pack)
     "UltralyticsDetectorProvider": ("https://github.com/ltdrdata/ComfyUI-Impact-Subpack.git", "Impact-Subpack"),
     # ComfyUI_IPAdapter_plus
@@ -75,8 +80,60 @@ NODE_REPO: dict[str, tuple[str, str]] = {
     "IPAdapterModelLoader": ("https://github.com/cubiq/ComfyUI_IPAdapter_plus.git", "IPAdapter_plus"),
     "IPAdapterUnifiedLoader": ("https://github.com/cubiq/ComfyUI_IPAdapter_plus.git", "IPAdapter_plus"),
     "IPAdapter": ("https://github.com/cubiq/ComfyUI_IPAdapter_plus.git", "IPAdapter_plus"),
-    # ComfyUI-Easy-Use (prefix)
+    # ComfyUI-Easy-Use (prefix) — easy imageRemBg, easy loraStackApply, easy showAnything…
     "easy *": ("https://github.com/yolain/ComfyUI-Easy-Use.git", "Easy-Use"),
+    # rgthree-comfy — Context / Context Big / Seed / KSampler Config (the Anima
+    # All-In-One master workflow routes model+clip+vae+conditioning through these).
+    "Context (rgthree)": ("https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
+    "Context Big (rgthree)": ("https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
+    "Seed (rgthree)": ("https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
+    "KSampler Config (rgthree)": ("https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
+    "Image Comparer (rgthree)": ("https://github.com/rgthree/rgthree-comfy.git", "rgthree-comfy"),
+    # KJNodes — Get/Set virtual globals, switches, primitives, math, compile patches.
+    "GetNode": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "SetNode": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "ComfySwitchNode": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "LazySwitchKJ": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "GetImageSize": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "ImageScaleToTotalPixels": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "PathchSageAttentionKJ": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "TorchCompileModelAdvanced": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "ModelPatchTorchSettings": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "PrimitiveStringMultiline": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "PrimitiveInt": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "PrimitiveFloat": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    "PrimitiveBoolean": ("https://github.com/kijai/ComfyUI-KJNodes.git", "KJNodes"),
+    # ComfyMath — ComfyMathExpression
+    "ComfyMathExpression": ("https://github.com/evanspearman/ComfyMath.git", "ComfyMath"),
+    # WAS Node Suite — StringConcatenate, Masks Combine Batch
+    "StringConcatenate": ("https://github.com/WASasquatch/was-node-suite-comfyui.git", "was-node-suite"),
+    "Masks Combine Batch": ("https://github.com/WASasquatch/was-node-suite-comfyui.git", "was-node-suite"),
+    # pysssss Custom Scripts — ShowText
+    "ShowText|pysssss": ("https://github.com/pythongosssss/ComfyUI-Custom-Scripts.git", "pysssss-Custom-Scripts"),
+    # crystian Image Saver + its sampler/scheduler/unet selector nodes
+    "Image Saver": ("https://github.com/crystian/ComfyUI_Comfyroll_CustomNodes.git", "Comfyroll-CustomNodes"),
+    "Sampler Selector (Image Saver)": ("https://github.com/crystian/ComfyUI_Comfyroll_CustomNodes.git", "Comfyroll-CustomNodes"),
+    "Scheduler Selector (Image Saver)": ("https://github.com/crystian/ComfyUI_Comfyroll_CustomNodes.git", "Comfyroll-CustomNodes"),
+    "UNet loader with Name (Image Saver)": ("https://github.com/crystian/ComfyUI_Comfyroll_CustomNodes.git", "Comfyroll-CustomNodes"),
+    # ComfyUI-Lora-Manager — Lora Stacker (the master's preset-style routing point)
+    "Lora Stacker (LoraManager)": ("https://github.com/willmiao/ComfyUI-Lora-Manager.git", "Lora-Manager"),
+    # ComfyUI-Spectrum-SDXL — SpectrumSDXL sampling-acceleration patch
+    "SpectrumSDXL": ("https://github.com/ruwwww/comfyui-spectrum-sdxl.git", "Spectrum-SDXL"),
+    # ComfyUI_UltimateSDUpscale
+    "UltimateSDUpscale": ("https://github.com/ssannels/ComfyUI_UltimateSDUpscale.git", "UltimateSDUpscale"),
+    # Anima-specific patches used by the All-In-One master workflow.
+    "AnimaLLLiteApply": ("https://github.com/kohya-ss/ComfyUI-Anima-LLLite.git", "Anima-LLLite"),
+    # NOTE on intentionally-absent packs (left for --online / manual resolution):
+    #  - Merge Strings v2 [RvTools] / Lora Stack to String [RvTools]: the
+    #    rvage/ComfyUI-RvTools repo is deprecated/removed. These only feed the
+    #    prompt-merge chain, which Loom overwrites at injection — off the active path.
+    #  - NAIARequestRandomWithOverride: a NovelAI random-artist node
+    #    (bedovyy/ComfyUI_NAIDGenerator, needs a NAI account). Off the active path
+    #    for local Anima rendering (same prompt-merge branch as RvTools).
+    #  - SAM3_Detect: a NATIVE core node in current ComfyUI (no pack needed), NOT
+    #    the custom node the ComfyUI-Manager online map wrongly suggests. Requires
+    #    the sam3.1 weights under checkpoints/. Guarded in _FORBIDDEN_REPOS so the
+    #    online resolver never tries to clone comfyanonymous/ComfyUI for it.
 }
 
 # Authoritative map of which (class_type, input_key) pairs actually LOAD a
@@ -89,6 +146,9 @@ LOADER_INPUTS: dict[tuple[str, str], str] = {
     ("CheckpointLoaderSimple", "ckpt_name"): "checkpoints",
     ("CheckpointLoader", "ckpt_name"): "checkpoints",
     ("UNETLoader", "unet_name"): "diffusion_models",
+    # Image Saver's UNet variant reads the same input; without this the Anima
+    # UNet would be mis-flagged as a phantom weight and never reach the volume.
+    ("UNet loader with Name (Image Saver)", "unet_name"): "diffusion_models",
     ("LoraLoader", "lora_name"): "loras",
     ("LoraLoaderModelOnly", "lora_name"): "loras",
     ("VAELoader", "vae_name"): "vae",
@@ -124,8 +184,21 @@ def model_dir(ct: str, key: str) -> str | None:
     return LOADER_INPUTS.get((ct, key))
 
 
+# Repos the ComfyUI-Manager online map returns that are NOT real custom-node
+# packs — cloning any of these into custom_nodes/ is wrong or harmful. The map
+# is community-maintained and carries false positives (e.g. it maps some node
+# class names to comfyanonymous/ComfyUI itself). We refuse these on install and
+# report them as UNRESOLVED so the real pack is found by hand.
+_FORBIDDEN_REPOS = {
+    "https://github.com/comfyanonymous/ComfyUI",
+    "https://github.com/comfyanonymous/ComfyUI.git",
+}
+
+
 def online_resolve(unknown: set[str]) -> dict[str, str]:
-    """Best-effort: map remaining node classes to repos via ComfyUI-Manager's DB."""
+    """Best-effort: map remaining node classes to repos via ComfyUI-Manager's DB.
+    Drops the known false-positive repos in _FORBIDDEN_REPOS (they'd clone core
+    ComfyUI into custom_nodes, which breaks the install)."""
     import urllib.request
     url = "https://raw.githubusercontent.com/ltdrdata/ComfyUI-Manager/main/extension-node-map.json"
     try:
@@ -135,11 +208,59 @@ def online_resolve(unknown: set[str]) -> dict[str, str]:
         return {}
     found = {}
     for repo, payload in data.items():
+        if repo in _FORBIDDEN_REPOS:
+            continue
         classes = payload[0] if isinstance(payload, list) and payload else []
         for ct in unknown:
             if ct in classes:
                 found[ct] = repo if repo.endswith(".git") else repo + ".git"
     return found
+
+
+def _repo_dir_name(repo_url: str) -> str:
+    """The custom_nodes/ folder name a repo clones into (last URL segment, no .git)."""
+    return repo_url.rsplit("/", 1)[-1].removesuffix(".git")
+
+
+def install_local(repos: dict[str, str], comfy_base: Path) -> int:
+    """Git-clone every resolved custom-node pack into ``<comfy_base>/custom_nodes/``,
+    then install each pack's Python requirements. Already-present packs are skipped
+    (refreshed with git pull). Returns the number of packs newly installed.
+
+    This is the LOCAL install path (the mirror of the worker Dockerfile): point it
+    at your ComfyUI base directory and the Anima All-In-One master workflow's packs
+    land where ComfyUI scans them, so the workflow runs without a RunPod round-trip.
+    """
+    import subprocess
+    custom_nodes = comfy_base / "custom_nodes"
+    if not custom_nodes.is_dir():
+        sys.exit(f"not a ComfyUI base dir (no custom_nodes/ found): {comfy_base}")
+    installed = 0
+    print(f"\n==> installing {len(repos)} pack(s) into {custom_nodes} ...\n")
+    for url in sorted(repos):
+        name = _repo_dir_name(url)
+        target = custom_nodes / name
+        if target.is_dir():
+            # Already there — fast-forward so the latest node defs are in place.
+            print(f"  ~ {name}: present, pulling latest")
+            subprocess.run(["git", "-C", str(target), "pull", "--ff-only"],
+                           capture_output=True)
+            continue
+        print(f"  + {name}: cloning")
+        rc = subprocess.run(["git", "clone", "--depth", "1", url, str(target)]).returncode
+        if rc != 0:
+            print(f"    FAILED to clone {url}")
+            continue
+        installed += 1
+        # Install this pack's Python deps (best-effort; never fatal — a missing
+        # optional dep shouldn't abort the whole install).
+        req = target / "requirements.txt"
+        if req.is_file():
+            py = sys.executable
+            subprocess.run([py, "-m", "pip", "install", "-r", str(req)],
+                           capture_output=True)
+    print(f"\nDone. {installed} new pack(s) installed; restart ComfyUI to load them.")
+    return installed
 
 
 def main() -> None:
@@ -148,6 +269,15 @@ def main() -> None:
     ap.add_argument("--models-dir", default=DEFAULT_MODELS_DIR)
     ap.add_argument("--base-tag", default="3.6.0-base", help="runpod-worker-comfy base image tag")
     ap.add_argument("--online", action="store_true", help="resolve unknown nodes via ComfyUI-Manager DB")
+    ap.add_argument("--install-local", metavar="COMFY_BASE",
+                    help=("install the resolved custom-node packs directly into a LOCAL ComfyUI "
+                          "install (path to its base dir, the one containing custom_nodes/), "
+                          "instead of just writing the worker Dockerfile. Skips packs already "
+                          "present. Requires --online to resolve everything (else warns on gaps)."))
+    ap.add_argument("--allow-unresolved", action="store_true",
+                    help=("with --install-local, proceed even if some nodes have no known repo "
+                          "(they're reported but not installed). Use when the unresolved nodes are "
+                          "off the active render path or get bypassed by prompt injection."))
     args = ap.parse_args()
 
     files = ([WORKFLOWS / f"{w}.json" for w in args.workflows] if args.workflows
@@ -281,6 +411,25 @@ WORKDIR /
         print(f"\n  UNRESOLVED custom nodes ({len(unresolved)}) — add to NODE_REPO (or re-run with --online):")
         for u in sorted(unresolved):
             print(f"    - {u}")
+
+    if args.install_local:
+        # Installing locally needs every pack resolved — force online if anything
+        # is still unknown so we don't ship a half-working install.
+        if unresolved and not args.online:
+            print("\n  --install-local: forcing --online to resolve remaining nodes...")
+            for ct, repo in online_resolve(unresolved).items():
+                repos[repo] = repo.rsplit("/", 1)[-1].removesuffix(".git")
+                unresolved.discard(ct)
+        if unresolved:
+            msg = (f"\n--install-local: {len(unresolved)} node(s) unresolved (no safe repo): "
+                   f"{', '.join(sorted(unresolved))}")
+            if args.allow_unresolved:
+                print(msg + "\n  (--allow-unresolved) proceeding without them.")
+            else:
+                sys.exit(msg + "\n  Add them to NODE_REPO, or pass --allow-unresolved to skip them.")
+        install_local(repos, Path(args.install_local))
+        return
+
     print("\nNext: build & push the image, then `python runpod/worker/upload_models.py`.")
 
 

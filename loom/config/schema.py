@@ -62,12 +62,8 @@ class Character(BaseModel):
     name: str
     # The persona — *who the character is*, independent of any situation. Rendered
     # as the system prompt for chat steps that opt in via `{{ character.system }}`.
-    # The situational framing (setting, opening, world) lives on a Scenario, not
-    # here: a character is reusable across many scenarios.
     system: str = ""
-    # Optional first message / greeting to seed a fresh session. DEPRECATED as a
-    # situational field — the opening line now lives on a Scenario; kept for
-    # back-compat / characters with no scenario.
+    # Optional first message / greeting to seed a fresh session.
     greeting: str | None = None
     # Free-form extra fields a pipeline template may reference
     # (appearance blurb for image prompts, speaking style, etc.).
@@ -97,35 +93,13 @@ class Persona(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
-# Scenarios — *the experience*: a setting a cast of characters is dropped into.
-# This is the other half of the split: character cards (effectively "book
-# experiences") conflate who-they-are with the-situation; a Scenario owns the
-# situation (setting text, opening lines, world lorebook, the cast) so one
-# character can be reused across many scenarios and vice versa.
+# CastMember — shared by Stories (the authored experiences that actually play).
+# A character is reusable across many stories and vice versa.
 # --------------------------------------------------------------------------- #
 class CastMember(BaseModel):
     character: str               # key into the characters registry
     primary: bool = False        # the focal character (persona/portraits anchor)
     outfit: str | None = None    # optional: which portrait outfit they wear here
-
-
-class Scenario(BaseModel):
-    name: str
-    # The situational framing — world state, premise, where/when. Composed into
-    # the chat system prompt at run time (not baked into any character).
-    setting: str = ""
-    # Opening lines (the card's first_mes + alternate_greetings); the chat seeds a
-    # fresh session from one of these.
-    openings: list[str] = Field(default_factory=list)
-    # The world lorebook (SillyTavern `character_book` shape, kept verbatim for
-    # fidelity — entries + keyword routing).
-    lorebook: dict[str, Any] = Field(default_factory=dict)
-    # Who is in this scenario. One entry is usually `primary: true`.
-    cast: list[CastMember] = Field(default_factory=list)
-    # A background image asset for the experience (optional; future: music, tone).
-    background: str | None = None
-    # Lossless extras (creator notes, tags, source spec, V3 assets…).
-    fields: dict[str, Any] = Field(default_factory=dict)
 
 
 # --------------------------------------------------------------------------- #
@@ -382,7 +356,6 @@ class Settings(BaseModel):
     # Who *you* are in the chat (the {{user}} side). One YAML per persona under
     # configs/personas/. SillyTavern-style: a picture + description used as you.
     personas: dict[str, Persona] = Field(default_factory=dict)
-    scenarios: dict[str, Scenario] = Field(default_factory=dict)
     stories: dict[str, Story] = Field(default_factory=dict)
     pipelines: dict[str, Pipeline] = Field(default_factory=dict)
     # The self-contained LoRA subsystem: typed library + named, routable stacks.
@@ -407,16 +380,8 @@ class Settings(BaseModel):
                         f"pipeline '{pname}' step '{step.id}' is a {step.type} step but model "
                         f"'{step.model}' is kind '{model.kind}' (expected '{expected}')"
                     )
-        # A scenario's cast may only reference characters that exist (a dangling
-        # reference would surface as an empty persona mid-chat — fail loudly here).
-        for sname, scenario in self.scenarios.items():
-            for member in scenario.cast:
-                if member.character not in self.characters:
-                    raise ValueError(
-                        f"scenario '{sname}' casts unknown character '{member.character}'"
-                    )
-        # Same for stories: the cast roster must be real characters (presence is
-        # dynamic at run time, so there's no per-location cast to check).
+        # The story cast roster must be real characters (presence is dynamic at
+        # run time, so there's no per-location cast to check).
         for tname, story in self.stories.items():
             for member in story.cast:
                 if member.character not in self.characters:

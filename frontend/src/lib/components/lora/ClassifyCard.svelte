@@ -6,12 +6,12 @@
   import { get } from '$lib/api.js';
   import { img } from '$lib/images.svelte.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
-  import { openLightbox } from '$lib/lightbox.svelte.js';
   import Combobox from '$lib/components/Combobox.svelte';
   import ScrubInput from '$lib/components/ScrubInput.svelte';
   import {
     loraLib, famOf, famLabel, compat, baseFamMap,
   } from '$lib/lora-library.svelte.js';
+  import ImgCard from '$lib/components/ImgCard.svelte';
 
   let triageWeight = $state(0.8);
   let triageItems = $state([]);   // every lora: {name, fam, img, status, pct, type}
@@ -143,15 +143,23 @@
     <div class="famhead">{g.label} <span class="famn">{g.items.length}</span>{#if g.id !== wfFam}<span class="famx">cross-family</span>{/if}</div>
     <div class="grid">
       {#each g.items as it (it.name)}
-        <div class="cell" class:classified={it.type && it.type !== 'skip'}>
+        <div class="cell" class:classified={it.type && it.type !== 'skip'}
+          draggable="true"
+          ondragstart={(e) => { e.dataTransfer.setData('text/plain', JSON.stringify({type:'lora', name: it.name})); e.dataTransfer.effectAllowed = 'copy'; }}
+        >
           <div class="thumb">
-            {#if it.img}<button class="imgbtn" onclick={() => openLightbox(it.img, it.name)} title="click to enlarge"><img src={it.img} alt={it.name} /></button><button class="rerender" onclick={() => renderOne(it)} title="re-render with current prompt/weight" aria-label="Re-render">↻</button>
-            {:else if it.status === 'gen'}<div class="ph">{it.pct !== null ? it.pct + '%' : '…'}</div>
-            {:else if it.status === 'err'}<div class="ph err" title={it.err || ''}>failed</div>
-            {:else if it.status === 'nockpt' || !selBase}<div class="ph err" title="pick a workflow above">no base</div>
-            {:else}<button class="ph go" onclick={() => renderOne(it)} title="render this one">▶</button>{/if}
+            <ImgCard
+              src={it.img}
+              caption={it.name}
+              onRegen={selBase ? () => renderOne(it) : null}
+              busy={it.status === 'gen'}
+            />
           </div>
-          <div class="cap" title={it.name}><span class="ach">{famLabel()[it.fam] || it.fam}</span><span class="fn">{it.name.split(/[\\/]/).pop()}</span></div>
+          <div class="cap" title={it.name}>
+            <span class="ach">{famLabel()[it.fam] || it.fam}</span>
+            <span class="fn">{it.name.split(/[\\/]/).pop()}</span>
+            {#if it.status === 'err'}<span class="cerr" title={it.err || ''}>!</span>{/if}
+          </div>
           <div class="types">
             {#each ['detail', 'theme', 'character', 'skip'] as t}
               <button class="tbtn {t}" class:on={it.type === t} onclick={() => classify(it, t)}>{t === 'character' ? 'char' : t}</button>
@@ -182,22 +190,14 @@
   .trow .tp { width: 100%; resize: vertical; font: inherit; line-height: 1.4; }
   .trow2 { display: flex; gap: 10px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
   .m { font-size: 12.5px; color: var(--muted); }
-  .grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 14px; margin-top: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-top: 14px; }
   .cell { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border-soft); border-radius: 10px; padding: 8px; background: var(--elev); }
   .cell.classified { border-color: var(--accent); }
-  .thumb { position: relative; aspect-ratio: 1; width: 100%; border-radius: 7px; overflow: hidden; background: var(--panel); display: grid; place-items: center; }
-  .rerender { position: absolute; top: 4px; right: 4px; width: 22px; height: 22px; padding: 0; display: grid; place-items: center;
-              border-radius: 6px; border: none; background: rgba(0,0,0,.55); color: #fff; font-size: 13px; line-height: 1; cursor: pointer;
-              opacity: 0; transition: opacity .12s; box-shadow: none; }
-  .thumb:hover .rerender { opacity: 1; }
-  .rerender:hover { background: var(--accent); }
-  .imgbtn { padding: 0; border: none; background: none; box-shadow: none; cursor: zoom-in; display: block; width: 100%; height: 100%; }
-  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-  .ph { color: var(--faint); font-size: 13px; width: 100%; height: 100%; display: grid; place-items: center; background: none; border: none; }
-  .ph.err { color: var(--bad); } .ph.go { cursor: pointer; font-size: 20px; color: var(--muted); } .ph.go:hover { color: var(--accent); background: var(--elev-2); }
+  .thumb { position: relative; aspect-ratio: 1; width: 100%; border-radius: 7px; overflow: hidden; }
   .cap { display: flex; align-items: center; gap: 5px; font-size: 11px; margin: 7px 0 6px; min-width: 0; }
   .cap .fn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ach { flex: none; font-size: 9.5px; color: var(--faint); background: var(--panel); border: 1px solid var(--border-soft); border-radius: 4px; padding: 0 4px; }
+  .cerr { flex: none; font-size: 10px; font-weight: 700; color: var(--bad); background: rgba(255,60,60,.12); border-radius: 4px; padding: 0 4px; }
   .types { display: grid; grid-template-columns: repeat(4, 1fr) 24px; gap: 3px; margin-top: auto; }
   .tbtn { font-size: 10px; padding: 4px 0; border-radius: 6px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; white-space: nowrap; min-width: 0; overflow: hidden; }
   .tbtn:hover { color: var(--text); }

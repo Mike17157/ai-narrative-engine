@@ -17,7 +17,7 @@ from pathlib import Path
 
 import yaml
 
-from .schema import Character, LoraConfig, ModelDef, Persona, Pipeline, Scenario, Settings, Story, UserConfig
+from .schema import Character, LoraConfig, ModelDef, Persona, Pipeline, Settings, Story, UserConfig
 
 
 def _read_yaml(path: Path) -> dict:
@@ -52,13 +52,6 @@ def load_settings(root: str | Path) -> Settings:
         for path in sorted(persona_dir.glob("*.yaml")):
             personas[path.stem] = Persona(**_read_yaml(path))
 
-    # scenarios/*.yaml — one Scenario per file (the situational half of the split).
-    scenarios: dict[str, Scenario] = {}
-    scen_dir = configs / "scenarios"
-    if scen_dir.is_dir():
-        for path in sorted(scen_dir.glob("*.yaml")):
-            scenarios[path.stem] = Scenario(**_read_yaml(path))
-
     # stories/*.yaml — multi-scene story experiences authored by the Story Builder.
     stories: dict[str, Story] = {}
     story_dir = configs / "stories"
@@ -81,7 +74,7 @@ def load_settings(root: str | Path) -> Settings:
 
     # Settings' validators cross-check every step→model reference here.
     return Settings(models=models, characters=characters, personas=personas,
-                    scenarios=scenarios, stories=stories, pipelines=pipelines, loras=loras)
+                    stories=stories, pipelines=pipelines, loras=loras)
 
 
 def load_user(root: str | Path) -> UserConfig:

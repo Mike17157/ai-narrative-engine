@@ -384,7 +384,7 @@ def register(app, ctx):
         provider, model_id = ctx.image_provider((body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        render_prompt = f"{outfit.get('prompt','')}, {expr_tags}, {ctx.pose_tags(key, emotion)}, {_PORTRAIT_FRAMING}"
+        render_prompt = f"{outfit.get('prompt','')}, {expr_tags}, {ctx.pose_tags(key, emotion, outfit_id=oid)}, {_PORTRAIT_FRAMING}"
         try:
             from ...comfy.server import get_server
             get_server(provider.base_url).ensure_up()
@@ -685,8 +685,8 @@ def register(app, ctx):
                 for emo in EMOTION_KEYS:
                     expr = canon.get(emo) or (o.get("expression_prompts") or {}).get(emo) or emo
                     # Unified outfits already embed appearance — skip the separate appearance prefix.
-                    base_parts = (attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if is_unified \
-                        else (appearance, attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo))
+                    base_parts = (attire, expr, ctx.pose_tags(key, emo, outfit_id=oid), ctx.pose_framing(emo)) if is_unified \
+                        else (appearance, attire, expr, ctx.pose_tags(key, emo, outfit_id=oid), ctx.pose_framing(emo))
                     prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
                         ", ".join(p for p in base_parts if p))))
 
@@ -987,16 +987,15 @@ def register(app, ctx):
     @app.delete("/api/characters/{key}")
     def delete_character(key: str):
         """Delete a character (yaml + avatar/ref + portraits). First strips it from
-        every scenario/story cast so the config still validates on reload."""
+        every story cast so the config still validates on reload."""
         import shutil
         safe = re.sub(r"[^\w\-]+", "", key)
         cdir = ctx.char_dir()
         if not (cdir / f"{safe}.yaml").is_file():
             return JSONResponse({"error": "no such character"}, status_code=404)
-        # remove cast references in scenarios + stories (don't delete those files)
-        for d in (ctx.scenario_dir(), ctx.story_dir()):
-            if not d.is_dir():
-                continue
+        # remove cast references in stories (don't delete those files)
+        d = ctx.story_dir()
+        if d.is_dir():
             for p in d.glob("*.yaml"):
                 try:
                     doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}

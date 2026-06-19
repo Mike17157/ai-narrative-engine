@@ -100,7 +100,7 @@
         <label>Source character</label>
         <Combobox items={charItems} value={wz.character} placeholder="character…"
           onpick={(v) => { wz.character = v; wz.charName = charItems.find((c) => c.value === v)?.label || wz.charName; if (!wz.name) wz.name = wz.charName; }} />
-        <p class="cfghint lo">Each stage's model &amp; system prompt are configured in <a href="/settings/story-gen?section=storyboard">Settings ▸ Story pipeline</a>.</p>
+        <p class="cfghint lo">Each stage's model &amp; system prompt are configured in <a href="/settings/story-gen?section=storyboard">Stories ▸ Pipeline</a>.</p>
         <div class="acts">
           <button class="ghost" onclick={cancelWizard}>Cancel</button>
           <button class="ghost" onclick={openWorkshop} disabled={!wz.character}>Workshop first…</button>

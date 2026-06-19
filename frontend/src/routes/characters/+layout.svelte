@@ -3,7 +3,8 @@
   import { chars, loadChars } from '$lib/characters.svelte.js';
 
   let { children } = $props();
-  // The folder tree (Selected / Browse / Import) is rendered by the root layout's TreeNav.
+  // The subnav (Selected / Browse / Import / Personas) is rendered by the root
+  // layout's horizontal bar from charactersTree() (lib/nav.svelte.js).
   onMount(loadChars);
 </script>
 

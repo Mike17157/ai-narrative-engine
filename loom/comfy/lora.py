@@ -41,7 +41,8 @@ async def stream_batch(
     done = 0
     for row, prompt in enumerate(prompts):
         for col in range(variations):
-            graph = randomize_seeds(provider._inject(prompt, None))
+            graph, _out = provider._inject(prompt, None)
+            graph = randomize_seeds(graph)
             got = False
             async for ev in stream_generate(base_url, graph, output_node, timeout):
                 if ev["type"] == "progress":

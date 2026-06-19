@@ -19,9 +19,16 @@ from typing import Any
 # LoRA chain hangs off.
 _CKPT_TYPES = ("CheckpointLoaderSimple", "CheckpointLoader", "CheckpointLoaderSimpleShared")
 # Split loaders (Anima/DiT, Flux, …): MODEL and CLIP come from separate nodes.
-_UNET_TYPES = ("UNETLoader", "UnetLoaderGGUF")
+# Includes the Image Saver variant that also emits the filename (used by the
+# Anima All-In-One master workflow).
+_UNET_TYPES = ("UNETLoader", "UnetLoaderGGUF", "UNet loader with Name (Image Saver)")
 _CLIP_TYPES = ("CLIPLoader", "DualCLIPLoader", "TripleCLIPLoader",
                "CLIPLoaderGGUF", "DualCLIPLoaderGGUF")
+# Nodes that apply a whole LoRA stack at once (ComfyUI_essentials). Like a
+# LoraLoader they emit MODEL (slot 0) + CLIP (slot 1), so a LoraLoader chain can
+# hang off them — the master workflow's preset-style stack thus becomes the base
+# that Loom's resolved stack layers on top of.
+_LORA_APPLY_TYPES = ("easy loraStackApply",)
 
 
 def resolve_stack(
@@ -118,16 +125,27 @@ def inject_models(
     if loras is None:
         return g
 
-    # MODEL/CLIP sources: bundled checkpoint provides both; otherwise UNet + CLIP.
-    if ckpt:
+    loaders = [nid for nid, n in g.items() if n.get("class_type") in ("LoraLoader", "LoraLoaderModelOnly")]
+    # easy loraStackApply nodes act as a single LoRA application point (MODEL+CLIP
+    # out, same slots as a LoraLoader). When present, they are the chain tail.
+    stack_applies = [nid for nid, n in g.items() if n.get("class_type") in _LORA_APPLY_TYPES]
+
+    # MODEL/CLIP sources. A bundled checkpoint provides both; otherwise UNet +
+    # CLIP. But an easy loraStackApply node — which sits AFTER the loaders and
+    # applies the preset-style stack — is the true chain source when present:
+    # its MODEL (0) / CLIP (1) outputs carry the post-stack model, and any new
+    # LoraLoader chain must hang off them, not off a raw loader that the stack
+    # node itself consumes.
+    if stack_applies:
+        sa = stack_applies[0]
+        base_model, base_clip = [sa, 0], [sa, 1]
+    elif ckpt:
         base_model, base_clip = [ckpt, 0], [ckpt, 1]
     elif unet:
         base_model = [unet, 0]
         base_clip = [clip, 0] if clip else None
     else:
         return g  # nothing to hang LoRAs off
-
-    loaders = [nid for nid, n in g.items() if n.get("class_type") in ("LoraLoader", "LoraLoaderModelOnly")]
 
     # The chain tail = a loader whose MODEL output no other loader consumes.
     referenced = {
@@ -138,6 +156,12 @@ def inject_models(
     if loaders:
         tails = [nid for nid in loaders if nid not in referenced]
         tail = tails[0] if tails else loaders[-1]
+        old_model_src, old_clip_src = [tail, 0], [tail, 1]
+    elif stack_applies:
+        # No LoraLoader chain — the stack-apply node is the tail. Its MODEL (0)
+        # and CLIP (1) outputs are the base a fresh LoraLoader chain hangs off.
+        # The stack-apply itself is NOT removed (it carries the preset styles).
+        tail = stack_applies[0]
         old_model_src, old_clip_src = [tail, 0], [tail, 1]
     else:
         old_model_src, old_clip_src = list(base_model), (list(base_clip) if base_clip else None)

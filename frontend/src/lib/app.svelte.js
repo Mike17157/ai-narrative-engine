@@ -49,8 +49,8 @@ export function setActiveImage(key) {
   ls(() => localStorage.setItem(LS_ACTIVE_IMAGE, app.activeImage), null);
 }
 
-// Section folder-nav is now driven by TreeNav + per-section tree definitions
-// (lib/nav.svelte.js) rendered by the root layout — no global subnav singleton.
+// Section subnav is driven by per-section tree definitions (lib/nav.svelte.js)
+// rendered by the root layout as a horizontal bar — no global subnav singleton.
 
 // Client-side workload tracking — renders/generation the browser drives. Each entry
 // shows in the Activity card with progress + an "Open" link to where the output landed.

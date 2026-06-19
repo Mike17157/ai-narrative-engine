@@ -248,31 +248,53 @@ def register(app, ctx):
             # kept as the seed fed into the composer.
             cast = [{**base, "primary": True}] + [{**n, "primary": False} for n in npcs]
             from concurrent.futures import ThreadPoolExecutor
-            from .pipeline import compose_base_prompt as _compose_base_prompt
+            from .pipeline import (compose_base_prompt as _compose_base_prompt,
+                                   compose_expressions as _compose_expressions,
+                                   compose_affect_range as _compose_affect_range)
             _bp_cfg = ctx.load_story_builder()
             _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+            _emo_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "emotion"))
             _bp_sys = (_bp_cfg.get("systems") or {})
 
-            def _bp(item):
+            def _enrich(item):
                 idx, p = item
+                persona = p.get("persona", "")
+                base_prompt, height_cm = "", None
+                expressions: dict = {}
+                affect: dict = {}
                 try:
-                    r = _compose_base_prompt(_bp_prov, p.get("name", ""), p.get("persona", ""),
+                    r = _compose_base_prompt(_bp_prov, p.get("name", ""), persona,
                                              p.get("appearance", ""), p.get("role", ""),
                                              systems=_bp_sys)
-                    if not isinstance(r, dict):
-                        return (idx, "", None)
-                    return (idx, r.get("prompt", ""), (r.get("features") or {}).get("height_cm"))
+                    if isinstance(r, dict):
+                        base_prompt = r.get("prompt", "")
+                        height_cm = (r.get("features") or {}).get("height_cm")
                 except Exception:  # noqa: BLE001
-                    return (idx, "", None)
+                    pass
+                try:
+                    expressions = _compose_expressions(_emo_prov or _bp_prov, persona)
+                except Exception:  # noqa: BLE001
+                    pass
+                try:
+                    affect = _compose_affect_range(_emo_prov or _bp_prov, persona,
+                                                   systems=_bp_sys)
+                except Exception:  # noqa: BLE001
+                    pass
+                return (idx, base_prompt, height_cm, expressions, affect)
 
             with ThreadPoolExecutor(max_workers=min(len(cast), 6)) as ex:
-                bps = {idx: (pr, h) for idx, pr, h in ex.map(_bp, list(enumerate(cast)))}
+                enriched = {idx: (bp, h, exprs, aff)
+                            for idx, bp, h, exprs, aff in ex.map(_enrich, list(enumerate(cast)))}
             for idx, member in enumerate(cast):
-                pr, h = bps.get(idx, ("", None))
-                if pr:
-                    member["base_prompt"] = pr
+                bp, h, exprs, aff = enriched.get(idx, ("", None, {}, {}))
+                if bp:
+                    member["base_prompt"] = bp
                 if h:
                     member["height_cm"] = h
+                if exprs:
+                    member["expressions"] = exprs
+                if isinstance(aff, dict) and aff.get("range"):
+                    member["affect"] = aff
             return {"cast": cast}
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
@@ -812,6 +834,43 @@ def register(app, ctx):
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
+    # ── Draft persistence ────────────────────────────────────────────────────── #
+    # Drafts store the full wizard state server-side so in-progress stories
+    # survive localStorage clearing and show up in the library.
+
+    def _drafts_dir():
+        return ctx.story_dir() / "drafts"
+
+    @app.post("/api/stories/draft")
+    def save_draft(body: dict):
+        import uuid as _uuid
+        from datetime import datetime, timezone
+        d = body or {}
+        raw_id = d.get("id") or f"draft_{_uuid.uuid4().hex[:8]}"
+        safe_id = re.sub(r"[^\w\-]+", "", raw_id)
+        drafts = _drafts_dir()
+        drafts.mkdir(parents=True, exist_ok=True)
+        d["id"] = safe_id
+        d["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        (drafts / f"{safe_id}.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+        return {"ok": True, "id": safe_id}
+
+    @app.get("/api/stories/draft/{draft_id}")
+    def get_draft(draft_id: str):
+        safe_id = re.sub(r"[^\w\-]+", "", draft_id)
+        p = _drafts_dir() / f"{safe_id}.json"
+        if not p.exists():
+            return JSONResponse({"error": "not found"}, status_code=404)
+        return json.loads(p.read_text(encoding="utf-8"))
+
+    @app.delete("/api/stories/draft/{draft_id}")
+    def delete_draft(draft_id: str):
+        safe_id = re.sub(r"[^\w\-]+", "", draft_id)
+        p = _drafts_dir() / f"{safe_id}.json"
+        if p.exists():
+            p.unlink()
+        return {"ok": True}
+
     @app.post("/api/stories")
     def save_story(body: dict):
         """Materialize an accepted draft: create Character files for proposed NPCs,
@@ -914,6 +973,18 @@ def register(app, ctx):
             k = ctx.write_npc(member, story_key=skey, base_prompt=bps.get(idx, ""))
             created.append(k)
             cast.append({"character": k, "primary": is_primary})
+            # Seed the portrait manifest with emotions generated during character extraction —
+            # this runs before wardrobe planning so affect.range is ready for outfit-pose generation.
+            seed: dict = {}
+            if isinstance(member.get("expressions"), dict) and member["expressions"]:
+                seed["expressions"] = member["expressions"]
+            if isinstance(member.get("affect"), dict) and member["affect"].get("range"):
+                seed["affect"] = member["affect"]
+            if seed:
+                try:
+                    _apply_manifest(ctx, k, seed, compose_persona=False)
+                except Exception:  # noqa: BLE001
+                    pass
 
         # Locations are self-contained neutral places — no cast remapping needed.
         locations = []
@@ -992,6 +1063,20 @@ def register(app, ctx):
         out.sort(key=lambda s: s["_mtime"], reverse=True)  # newest first
         for s in out:
             s.pop("_mtime", None)
+        # Append in-progress drafts (newest first).
+        drafts = _drafts_dir()
+        if drafts.is_dir():
+            draft_list = []
+            for p in drafts.glob("*.json"):
+                try:
+                    d = json.loads(p.read_text(encoding="utf-8"))
+                    draft_list.append({**d, "draft": True, "_mtime": p.stat().st_mtime})
+                except Exception:
+                    pass
+            draft_list.sort(key=lambda x: x.get("_mtime", 0), reverse=True)
+            for d in draft_list:
+                d.pop("_mtime", None)
+            out = draft_list + out
         return out
 
     @app.get("/api/stories/{key}")
@@ -1156,21 +1241,71 @@ def register(app, ctx):
                 shutil.rmtree(ctx.portrait_dir(ck), ignore_errors=True)
             ctx.reload_settings()
 
-            # Auto-plan wardrobes for every new cast member so the wardrobe view is
-            # immediately populated when the user arrives at the cast page.
-            emit({"type": "phase", "label": "Planning wardrobes…"})
+            # Auto-plan wardrobes using scene-based reasoning — one call per location.
+            emit({"type": "phase", "label": "Planning scene wardrobes…"})
             try:
                 w_prov, w_sys = ctx.builder_ctx({}, "wardrobe")
                 if w_prov is not None:
+                    from .pipeline import plan_story_wardrobe as _plan_story_wardrobe
+                    from .pipeline.wardrobe import compose_outfit_prompt as _cop
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
                     full_story = st.model_dump()
+                    name_to_key_regen = {}
+                    cast_details_regen = []
                     for ckey in created:
+                        ch_r = ctx.base_settings.characters.get(ckey)
+                        if ch_r is None:
+                            continue
+                        name_to_key_regen[ch_r.name.lower()] = ckey
+                        cast_details_regen.append({
+                            "name": ch_r.name,
+                            "persona": ch_r.system or "",
+                            "appearance": (ch_r.fields or {}).get("appearance", ""),
+                            "key": ckey,
+                        })
+                    scene_plans = _plan_story_wardrobe(
+                        w_prov, story=full_story, cast=cast_details_regen,
+                        systems=w_sys, on_event=emit)
+                    all_w: list[dict] = []
+                    for scene in scene_plans:
+                        for o in scene.get("outfits") or []:
+                            cn = (o.get("character") or "").lower()
+                            ck = name_to_key_regen.get(cn) or next(
+                                (k for n, k in name_to_key_regen.items()
+                                 if cn and (cn in n or n in cn)), None)
+                            if not ck:
+                                continue
+                            ch_r = ctx.base_settings.characters.get(ck)
+                            all_w.append({
+                                **o,
+                                "name": o.get("outfit_name") or o.get("name") or "Outfit",
+                                "_char_key": ck,
+                                "_persona": (ch_r.system or "") if ch_r else "",
+                                "_appearance": ((ch_r.fields or {}).get("appearance", "")) if ch_r else "",
+                            })
+                    def _ref(o):
+                        try:
+                            r = _cop(w_prov, o["_persona"], o["_appearance"],
+                                     o.get("name", ""), o.get("concept") or "")
+                            if r.get("attire"):
+                                o["attire_prompt"] = r["attire"]
+                                o["unified"] = r.get("unified", False)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        return o
+                    if all_w:
+                        with _TPE(max_workers=min(len(all_w), 8)) as _ex:
+                            all_w = list(_ex.map(_ref, all_w))
+                    by_char_regen: dict[str, list] = {}
+                    for o in all_w:
+                        by_char_regen.setdefault(o["_char_key"], []).append(o)
+                    for ckey, woutfits in by_char_regen.items():
                         if cancelled():
                             break
-                        ch = ctx.base_settings.characters.get(ckey)
-                        if ch is None:
-                            continue
-                        emit({"type": "phase", "label": f"Planning {ch.name}'s wardrobe"})
-                        _plan_and_apply(ctx, w_prov, ckey, ch, full_story, w_sys, emit=emit, replace=True)
+                        ch_r = ctx.base_settings.characters.get(ckey)
+                        emit({"type": "phase", "label": f"Applying {ch_r.name if ch_r else ckey}'s wardrobe"})
+                        _apply_manifest(ctx, ckey, {"outfits": woutfits, "replace": True},
+                                        provider=w_prov)
             except Exception as exc:  # noqa: BLE001
                 emit({"type": "phase", "label": f"Wardrobe planning skipped ({exc})"})
 
@@ -1333,8 +1468,15 @@ def register(app, ctx):
 
     @app.post("/api/stories/{key}/plan-wardrobe-all")
     async def story_plan_wardrobe_all(key: str, body: dict):
-        """Plan + SAVE (replace) the wardrobe for EVERY cast member, STREAMED as one job. Plans
-        only — renders no sprites; the user renders those per-character afterward. Returns {job}."""
+        """Plan + SAVE (replace) wardrobe for ALL cast members via scene-based reasoning.
+
+        One LLM call per location, covering all characters present. Outfits are only generated
+        for major story events that genuinely warrant a costume change.
+        Plans only — renders no sprites; the user renders those per-character afterward.
+        Returns {job}."""
+        from .pipeline import plan_story_wardrobe as _plan_story_wardrobe
+        from .pipeline.wardrobe import compose_outfit_prompt as _compose_outfit_prompt
+
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -1342,24 +1484,109 @@ def register(app, ctx):
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
         story = st.model_dump()
-        members = [m.character for m in st.cast]
+
+        # Build name→key mapping and cast detail list for the scene planner.
+        name_to_key: dict[str, str] = {}
+        cast_details: list[dict] = []
+        for m in st.cast:
+            ch = ctx.base_settings.characters.get(m.character)
+            if ch is None:
+                continue
+            name_to_key[ch.name.lower()] = m.character
+            cast_details.append({
+                "name": ch.name,
+                "persona": ch.system or "",
+                "appearance": (ch.fields or {}).get("appearance", ""),
+                "key": m.character,
+            })
 
         def work(emit, cancelled):
+            emit({"type": "phase", "label": "Planning scene wardrobes…"})
+            scene_plans = _plan_story_wardrobe(provider, story=story, cast=cast_details,
+                                               systems=systems, on_event=emit)
+
+            # Flatten all outfits and tag with resolved character key.
+            all_outfits: list[dict] = []
+            for scene in scene_plans:
+                for o in scene.get("outfits") or []:
+                    char_name = (o.get("character") or "").lower()
+                    char_key = name_to_key.get(char_name)
+                    if not char_key:
+                        # Fuzzy fallback: find the closest name.
+                        char_key = next(
+                            (k for n, k in name_to_key.items()
+                             if char_name and (char_name in n or n in char_name)),
+                            None,
+                        )
+                    if char_key is None:
+                        continue
+                    char = ctx.base_settings.characters.get(char_key)
+                    all_outfits.append({
+                        **o,
+                        "name": o.get("outfit_name") or o.get("name") or "Outfit",
+                        "_char_key": char_key,
+                        "_persona": (char.system or "") if char else "",
+                        "_appearance": ((char.fields or {}).get("appearance", "")) if char else "",
+                    })
+
+            if not all_outfits:
+                emit({"type": "phase",
+                      "label": "No outfit changes needed — no major events warrant new attire."})
+                return {"ok": True, "planned": 0}
+
+            # Refine every outfit into unified prose in parallel.
+            emit({"type": "phase", "label": f"Refining {len(all_outfits)} outfits…"})
+
+            from concurrent.futures import ThreadPoolExecutor
+
+            def _refine(o):
+                try:
+                    r = _compose_outfit_prompt(
+                        provider, o["_persona"], o["_appearance"],
+                        o.get("name", ""), o.get("concept") or "",
+                    )
+                    if r.get("attire"):
+                        o["attire_prompt"] = r["attire"]
+                        o["unified"] = r.get("unified", False)
+                except Exception:  # noqa: BLE001
+                    pass
+                emit({"type": "item", "name": o.get("name", "outfit"),
+                      "text": o.get("attire_prompt") or o.get("concept", "")})
+                return o
+
+            with ThreadPoolExecutor(max_workers=min(len(all_outfits), 8)) as ex:
+                refined = list(ex.map(_refine, all_outfits))
+
+            if cancelled():
+                return {"ok": True, "planned": 0}
+
+            # Group by character key and apply to each manifest.
+            by_char: dict[str, list[dict]] = {}
+            for o in refined:
+                by_char.setdefault(o["_char_key"], []).append(o)
+
+            emit({"type": "phase", "label": "Saving wardrobes…"})
             planned = 0
-            for ckey in members:
+            for char_key, outfits in by_char.items():
                 if cancelled():
                     break
-                ch = ctx.base_settings.characters.get(ckey)
-                if ch is None:
-                    continue
-                emit({"type": "phase", "label": f"Planning {ch.name}'s wardrobe"})
+                ch = ctx.base_settings.characters.get(char_key)
+                name = ch.name if ch else char_key
+                emit({"type": "phase", "label": f"Applying {name}'s wardrobe"})
                 try:
-                    outfits = _plan_and_apply(ctx, provider, ckey, ch, story, systems,
-                                              emit=emit, replace=True)
+                    # Preserve expressions/affect that were seeded at character-extraction time —
+                    # replace=True would normally clear them, so we re-pass them explicitly.
+                    cur = ctx.portrait_manifest(char_key)
+                    manifest_body: dict = {"outfits": outfits, "replace": True}
+                    if cur.get("expression_prompts"):
+                        manifest_body["expressions"] = cur["expression_prompts"]
+                    if isinstance(cur.get("affect"), dict) and cur["affect"].get("range"):
+                        manifest_body["affect"] = cur["affect"]
+                    _apply_manifest(ctx, char_key, manifest_body, provider=provider)
                     planned += 1
-                    emit({"type": "item", "name": ch.name, "text": f"{len(outfits)} outfits"})
-                except Exception as exc:  # noqa: BLE001 — one character failing must not sink the rest
-                    emit({"type": "phase", "label": f"{ch.name} skipped ({exc})"})
+                    emit({"type": "item", "name": name, "text": f"{len(outfits)} outfits"})
+                except Exception as exc:  # noqa: BLE001
+                    emit({"type": "phase", "label": f"{name} skipped ({exc})"})
             return {"ok": True, "planned": planned}
 
         job = _start_stream_job("wardrobe", "Plan all wardrobes", st.name,

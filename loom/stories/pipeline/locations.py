@@ -1,8 +1,8 @@
-"""Step 02 — Locations: extract neutral background locations from the storyboard."""
+"""Locations: extract distinct neutral background locations from the storyboard."""
 
 from __future__ import annotations
 
-from ._helpers import LOCATIONS_SCHEMA, _call, _sys, _slug
+from ._helpers import LOCATIONS_SCHEMA, _call, _slug, _sys
 
 
 def extract_locations(provider, *, board: dict, systems: dict | None = None) -> dict:
@@ -15,7 +15,7 @@ def extract_locations(provider, *, board: dict, systems: dict | None = None) -> 
     out = _call(provider, _sys(systems or {}, "locations"),
                 f"LOGLINE: {board.get('logline','')}\nTONE: {board.get('tone','')}\n"
                 f"PLACES THE STORY VISITS:\n{place_lines}\n\n"
-                f"Consolidate these into a tight set of KEENLY DISTINCT neutral locations.",
+                "Consolidate these into a tight set of KEENLY DISTINCT neutral locations.",
                 LOCATIONS_SCHEMA, "locations")
 
     locations, id_map = [], {}
@@ -29,7 +29,7 @@ def extract_locations(provider, *, board: dict, systems: dict | None = None) -> 
                           "description": loc.get("description", ""),
                           "background_prompt": loc.get("background_prompt", "")})
     raw_start = (out.get("start") or "").lower()
-    start = id_map.get(raw_start) or next((l["id"] for l in locations
-                                           if l["id"] == out.get("start")), None) \
-        or (locations[0]["id"] if locations else None)
+    start = id_map.get(raw_start) or next(
+        (l["id"] for l in locations if l["id"] == out.get("start")), None
+    ) or (locations[0]["id"] if locations else None)
     return {"start": start, "locations": locations}

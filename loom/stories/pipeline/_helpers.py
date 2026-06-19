@@ -75,6 +75,24 @@ WARDROBE_SCHEMA = {
     },
 }
 
+SCENE_WARDROBE_SCHEMA = {
+    "type": _OBJ, "additionalProperties": False, "required": ["outfits"],
+    "properties": {
+        "outfits": _arr({"type": _OBJ, "additionalProperties": False,
+                         "required": ["character", "outfit_name", "concept", "event"],
+                         "properties": {
+                             "character": {"type": "string",
+                                           "description": "The character's name exactly as given."},
+                             "outfit_name": {"type": "string",
+                                             "description": "Short label, e.g. 'Evening Gown', 'Combat Uniform'."},
+                             "concept": {"type": "string",
+                                         "description": "3-10 word visual sketch of key garment(s) and palette."},
+                             "event": {"type": "string",
+                                       "description": "The specific chapter or story event that requires this outfit."},
+                         }}),
+    },
+}
+
 
 # ---------------------------------------------------------------------------
 # Image-prompt format rules
@@ -144,6 +162,24 @@ DEFAULT_SYSTEMS = {
         "this story — the thing it is ACTUALLY about beneath the plot. Not a theme word, not a "
         "summary: a resonant sentence that could open a book. Ask yourself: what does a person "
         "discover, lose, choose, or become here? Write that as the HEART line.\n\n"
+        "WHAT MAKES IT DEEP — the protagonist is a real, contradictory person, not a role. Find "
+        "their WANT (what they actively chase) and their deeper NEED (what they must face to grow); "
+        "the gap between the two IS the arc. Anchor both in a WOUND — the old hurt, fear or belief "
+        "that explains why they are the way they are.\n\n"
+        "CONFLICT MUST BE HUMAN AND INEVITABLE. It comes from people with incompatible wants, values "
+        "and fears colliding under pressure — never from contrivance, coincidence, or a cardboard "
+        "villain. Everyone who opposes the protagonist has their own legitimate logic and is the hero "
+        "of their own story. The strongest conflict has no clean villain, only people who cannot all "
+        "get what they want.\n\n"
+        "EVERY CHAPTER MUST COST SOMETHING. A door closes, a trust frays, a truth can't be untold, a "
+        "win is paid for. Consequences PERSIST and compound into later chapters — wounds don't vanish, "
+        "choices echo. Let the protagonist be wrong, afraid, petty AND kind; let small human moments "
+        "(a joke, a habit, an unexpected tenderness) live even in the darkest stretch — that contrast "
+        "is where humanity shows.\n\n"
+        "REFUSE CLICHÉ. No chosen-one shortcuts, no tidy wish-fulfilment, no problem solved by luck, "
+        "no character who exists only to serve the plot. Earn every turn through character and "
+        "consequence. The ending must CHANGE the protagonist — they are not who they were when it "
+        "began, and getting there cost them something real.\n\n"
         "DRAMATIC STRUCTURE: lay out 6-12 chapters covering the full arc — setup, inciting "
         "incident, rising complication, midpoint turn, crisis, climax, resolution. Adapt as needed, "
         "but every chapter must have a DEFINITE FUNCTION in the arc.\n\n"
@@ -234,7 +270,8 @@ DEFAULT_SYSTEMS = {
         "  >**<Name>: <age> years old**\n"
         "  ### **<Name>'s Appearance** — physical look in prose, with '*   **Hair & Eyes:**' and "
         "'*   **Attire:**' detail lines.\n"
-        "  ### **<Name>'s Personality** — traits, virtues, flaws, contradictions, how they come across.\n"
+        "  ### **<Name>'s Personality** — traits, virtues, FLAWS that cost them, contradictions, the "
+        "WOUND beneath, and what they WANT versus what they NEED; how they actually come across.\n"
         "  ### **<Name>'s Background** — backstory, role in the world, key relationships.\n"
         "DISTILL the source faithfully: keep every established FACT, but normalize to JUST these "
         "sections at a MODERATE, consistent depth — the SAME format and length the supporting cast "
@@ -251,6 +288,18 @@ DEFAULT_SYSTEMS = {
     "characters": (
         "You are a character writer. For each supporting character from the storyboard, write a "
         "THOROUGH background usable as a chat character — rich and specific, not a one-liner.\n\n"
+        "WRITE THEM AS REAL PEOPLE, NOT FUNCTIONS. Every supporting character must be someone who "
+        "would exist with or without the plot. For each, make these concrete and specific:\n"
+        "  • a WANT they actively pursue in this story, and a private NEED or FEAR beneath it;\n"
+        "  • a WOUND or formative history that shaped who they are;\n"
+        "  • a CONTRADICTION — a way they defy the obvious read of them;\n"
+        "  • a FLAW that causes genuine friction with others, including the protagonist;\n"
+        "  • a distinct VOICE — how they actually speak, their rhythm and verbal habits;\n"
+        "  • a RELATIONSHIP to the protagonist with real texture — history, debt, warmth, rivalry, "
+        "tension — never a flat 'ally' or 'enemy'.\n"
+        "They have loyalties, opinions and an inner life of their own. Take any archetype and DEEPEN "
+        "or SUBVERT it — the loyal friend who quietly resents, the mentor who's afraid, the rival "
+        "who's right. No cardboard; no character who is only one thing.\n\n"
         "MATCH THE BASE CHARACTER CARD: a BASE CHARACTER CARD for the main character is provided "
         "below. Write each supporting character's `persona` in the IDENTICAL structure, the SAME "
         "section headings, and the SAME level of depth as that base card — so the whole cast shares "
@@ -278,6 +327,30 @@ DEFAULT_SYSTEMS = {
         "(Emotional expressions are a fixed canonical taxonomy handled separately — do not plan them here.)\n"
         "Keep this pass FAST AND LIGHT — resist the urge to detail accessories or colours beyond "
         "what names the outfit."
+    ),
+    "scene_wardrobe": (
+        "You are a character art director deciding what characters WEAR in each location of a visual "
+        "novel. You are given one specific location, the chapters that take place there, and the cast "
+        "present.\n\n"
+        "YOUR ONLY JOB: decide which MAJOR EVENTS in this location JUSTIFY a distinct outfit for which "
+        "characters. Be selective — most chapters do NOT warrant a costume change. An outfit change is "
+        "justified ONLY when the story clearly calls for it:\n"
+        "  • a formal ceremony or high-stakes social event (gala, audience, trial)\n"
+        "  • a disguise, infiltration, or identity change\n"
+        "  • a significant time-skip where daily attire has changed\n"
+        "  • physical transformation (injury, armour up, stripped of rank)\n"
+        "  • a clearly distinct social context (going from street clothes to uniform, battle gear, "
+        "    swimwear, nightwear)\n\n"
+        "DO NOT generate an outfit for every chapter. Shared background characters wearing 'everyday "
+        "clothes' do NOT need an entry — only include an outfit when the SPECIFIC EVENT makes it "
+        "visually significant.\n\n"
+        "For EACH justified outfit:\n"
+        "  • `character` — the character's name exactly as listed\n"
+        "  • `outfit_name` — a short descriptive label (e.g. 'Reception Gown', 'Combat Fatigues')\n"
+        "  • `concept` — 3-10 word visual sketch: key garment(s) + palette ONLY\n"
+        "  • `event` — the SPECIFIC chapter or story beat that requires this look\n\n"
+        "Multiple characters can share an event. One event can justify multiple different outfits for "
+        "different characters. Return an EMPTY outfits array if no events justify a change."
     ),
     "base_image": (
         "You are a character art director. Read the character and fill EVERY field of the "

@@ -17,6 +17,7 @@ const blankWizard = () => ({
   cast: null,              // [{ name, persona, appearance, role, base_prompt, primary }] — protagonist first
   intended_ending: '',     // destination locked in during workshop phase 1
   arcs: [],                // [{id, name, mini_ending, dramatic_function, cast, rationale}]
+  draftId: null,           // server-side draft ID once persisted
 });
 
 // Wizard draft persists across reloads (a model error / refresh mid-build keeps work).
@@ -28,6 +29,23 @@ function loadDraft() {
     return d ? { ...blankWizard(), ...d, busy: false, streaming: false } : null;
   } catch { return null; }
 }
+
+// Per-story canvas view state (graph pan/zoom + list-vs-graph mode), persisted
+// so swapping story stages and reloading keeps your place. Keyed by story key.
+const VIEW_LS = 'loom.storyView';
+function loadView() {
+  if (!browser) return {};
+  try { return JSON.parse(localStorage.getItem(VIEW_LS) || '{}') || {}; } catch { return {}; }
+}
+function saveView() {
+  if (!browser) return;
+  try { localStorage.setItem(VIEW_LS, JSON.stringify(stories.view)); } catch { /* quota / disabled */ }
+}
+function viewFor(key) { return (stories.view[key] ||= { mode: 'graph', viewport: null }); }
+export function storyMode(key) { return viewFor(key).mode; }
+export function setStoryMode(key, mode) { viewFor(key).mode = mode; saveView(); }
+export function storyViewport(key) { return viewFor(key).viewport; }
+export function setStoryViewport(key, vp) { viewFor(key).viewport = vp; saveView(); }
 
 // AbortController for the in-flight step (kept out of reactive state).
 let abortCtl = null;
@@ -41,6 +59,7 @@ export const stories = $state({
   list: [],
   wizard: loadDraft() || blankWizard(),
   current: null,           // the loaded story for /stories/[key]
+  view: loadView(),        // { [key]: { mode, viewport } } — canvas state, persisted
   editing: null,           // editable clone of `current` (the edit page)
   textModels: [],          // for per-stage model pickers (config/wizard)
   imageModels: [],         // scene workflows (backgrounds)
@@ -68,8 +87,60 @@ export function startWizard(character, charName, model = '') {
   stories.msg = null;
   goto('/stories/new');
 }
-export function cancelWizard() { stories.wizard = blankWizard(); goto('/stories'); }
+export function cancelWizard() {
+  const id = stories.wizard.draftId;
+  stories.wizard = blankWizard();
+  goto('/stories');
+  if (id) del(`/stories/draft/${id}`).catch(() => {});
+}
+
+// Reset wizard state without navigating (used when discarding a draft from the library).
+export function resetWizard() { stories.wizard = blankWizard(); }
+
 export function gotoStep(n) { if (n < stories.wizard.step) stories.wizard.step = n; } // only go back
+
+// ── Server-side draft persistence ─────────────────────────────────────────── //
+// Auto-saves the full wizard state whenever the character is set, debounced to
+// avoid hammering the server on every keystroke.
+let _draftTimer = null;
+async function _flushDraft() {
+  const wz = stories.wizard;
+  if (!wz.character) return;
+  const body = {
+    ...(wz.draftId ? { id: wz.draftId } : {}),
+    step: wz.step,
+    name: wz.name || wz.charName || '',
+    premise: wz.board?.premise || '',
+    character: wz.character,
+    charName: wz.charName,
+    board: wz.board,
+    locations: wz.locations,
+    start: wz.start,
+    cast: wz.cast,
+    intended_ending: wz.intended_ending,
+    arcs: wz.arcs,
+  };
+  const r = await post('/stories/draft', body);
+  if (r.data?.id && !wz.draftId) stories.wizard.draftId = r.data.id;
+}
+function scheduleDraftSave() {
+  clearTimeout(_draftTimer);
+  _draftTimer = setTimeout(_flushDraft, 1500);
+}
+
+// Load a draft from the server and restore wizard state so the user can continue.
+export async function resumeDraft(id) {
+  const r = await get(`/stories/draft/${id}`);
+  if (!r?.character) return;
+  stories.wizard = {
+    ...blankWizard(),
+    ...r,
+    busy: false, streaming: false, streamText: '', error: null,
+  };
+  const step = r.step ?? 0;
+  const stepRoutes = ['setup', 'storyboard', 'scenes', 'characters'];
+  goto(`/stories/new/${stepRoutes[step] || 'setup'}`);
+}
 
 const w = () => stories.wizard;
 function reqBody(extra = {}) { return { character: w().character, ...extra }; }  // per-stage cfg is server-side
@@ -236,9 +307,11 @@ export async function saveStory() {
   if (r.data?.ok) {
     stories.msg = { ok: true, text: `✓ Saved “${wz.name}”` + (r.data.created_characters?.length ? ` (+${r.data.created_characters.length} NPCs)` : '') };
     const storyKey = r.data.key;
+    const draftId = wz.draftId;
     // Reload chars too: the story's freshly-generated cast must be in chars.list or every
     // charName(key) lookup falls back to the raw key (e.g. “riley_costello”).
     await Promise.all([loadStories(), loadChars()]);
+    if (draftId) del(`/stories/draft/${draftId}`).catch(() => {});
     stories.wizard = blankWizard();
     // Kick off wardrobe planning immediately — navigate to cast so the user sees progress.
     let wardrobeJob = null;
@@ -298,6 +371,13 @@ function editPayload(e) {
   return { name: e.name, premise: e.premise, tone: e.tone, themes: e.themes,
            storyboard: e.storyboard, cast: e.cast, locations: e.locations, start: e.start };
 }
+
+// Persist edits made directly to the loaded story (e.g. a flat-beat card edited
+// from the graph modal) without going through the full edit clone.
+export async function persistCurrent() {
+  const e = stories.current; if (!e) return;
+  try { await put(`/stories/${e.key}`, editPayload(e)); } catch { /* keep local */ }
+}
 export function scheduleEditSave() { clearTimeout(editSaveTimer); editSaveTimer = setTimeout(autoSaveEdit, 700); }
 async function autoSaveEdit() {
   const e = stories.editing; if (!e) return;
@@ -345,6 +425,15 @@ if (browser) {
     $effect(() => {
       JSON.stringify(stories.wizard);
       try { localStorage.setItem(DRAFT_LS, JSON.stringify(stories.wizard)); } catch { /* quota */ }
+    });
+    // Auto-save to server when a character is selected (debounced 1.5 s).
+    $effect(() => {
+      const wz = stories.wizard;
+      if (!wz.character) return;
+      // Track fields that warrant a server re-save.
+      JSON.stringify({ step: wz.step, name: wz.name, premise: wz.board?.premise,
+                       board: wz.board, locations: wz.locations, cast: wz.cast });
+      scheduleDraftSave();
     });
   });
 }

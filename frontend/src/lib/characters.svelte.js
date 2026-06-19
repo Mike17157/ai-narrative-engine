@@ -15,7 +15,7 @@ export async function loadChars() { chars.list = await get('/characters'); }
 export const prettyKey = (k) => (k || '').replace(/[_-]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 export const charName = (k) => chars.list.find((c) => c.key === k)?.name || prettyKey(k);
 
-// Delete a character (also strips it from any story/scenario cast server-side).
+// Delete a character (also strips it from any story cast server-side).
 export async function deleteChar(key) {
   await del(`/characters/${key}`);
   await loadChars();

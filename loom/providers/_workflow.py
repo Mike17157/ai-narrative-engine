@@ -140,6 +140,54 @@ def find_load_image_node(graph: dict) -> str | None:
                  if isinstance(n, dict) and n.get("class_type") == "LoadImage"), None)
 
 
+def apply_output_variant(graph: dict, output_node: str | None,
+                         variant: str | None) -> str | None:
+    """Return the node id whose images Loom should collect, applying an optional
+    output ``variant`` by splicing a post-process node after the render.
+
+    Variants (collapsing the old anima / anima_cutout / anima_background graphs
+    into one workflow + this switch):
+
+    - ``full`` / None : unchanged — collect from ``output_node`` as-is.
+    - ``cutout``       : append an ``easy imageRemBg`` (Inspyrenet) fed by the
+                         rendered image, so the subject is segmented out of the
+                         busy background. Returns the new node id. Mirrors the
+                         trailing node the dedicated anima_cutout graph carried.
+
+    The variant node is spliced onto the *image* feeding the current output
+    node (a SaveImage/Image Saver's images input), so the cutout derives from
+    the same pixels the saver would store.
+    """
+    if not variant or variant == "full" or not output_node:
+        return output_node
+
+    if variant != "cutout":
+        return output_node  # unknown variant — no-op, keep the base output
+
+    saver = graph.get(output_node)
+    if not isinstance(saver, dict):
+        return output_node
+    # Find the IMAGE feeding the saver (SaveImage.images / Image Saver.images).
+    images_src = saver.get("inputs", {}).get("images")
+    if not isinstance(images_src, list):
+        return output_node  # can't find a source image → leave as-is
+
+    new_id = "loom_cutout"
+    graph[new_id] = {
+        "class_type": "easy imageRemBg",
+        "inputs": {
+            "images": images_src,
+            "rem_mode": "Inspyrenet",
+            "image_output": "Save",
+            "save_prefix": "loom",
+            "add_background": "none",
+        },
+        "_meta": {"title": "Remove background (Inspyrenet → transparent)"},
+    }
+    return new_id
+
+
+
 def inject(
     workflow: dict,
     inputs: dict[str, dict],

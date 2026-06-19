@@ -451,7 +451,7 @@ def register(app, ctx):
             provider = ComfyUIProvider(opts)
             provider.workflow = inject_models(provider.workflow, checkpoint, loras)
             await run_in_threadpool(get_server(provider.base_url).ensure_up)
-            graph = provider._inject(prompt, negative)
+            graph, out_node = provider._inject(prompt, negative)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
 
@@ -460,7 +460,8 @@ def register(app, ctx):
 
         async def events():
             try:
-                async for ev in stream_generate(provider.base_url, graph, provider.output_node, provider.timeout_s):
+                collect_from = out_node or provider.output_node
+                async for ev in stream_generate(provider.base_url, graph, collect_from, provider.timeout_s):
                     if cache and ev.get("type") == "image" and (ev.get("images") or []):
                         try:
                             triage_cache.save_render(ctx.root, cache.get("scope", ""), cache.get("lora", ""),

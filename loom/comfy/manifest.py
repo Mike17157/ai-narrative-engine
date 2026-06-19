@@ -30,6 +30,8 @@ CLASS_LOADERS: dict[str, tuple[str, str]] = {
     "UpscaleModelLoader": ("model_name", "upscale_models"),
     "CLIPLoader": ("clip_name", "text_encoders"),
     "UNETLoader": ("unet_name", "diffusion_models"),
+    # Image Saver's UNet variant also emits the filename; reads the same input.
+    "UNet loader with Name (Image Saver)": ("unet_name", "diffusion_models"),
     "ControlNetLoader": ("control_net_name", "controlnet"),
     "UltralyticsDetectorProvider": ("model_name", "ultralytics"),
     "SAMLoader": ("model_name", "sams"),

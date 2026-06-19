@@ -1,0 +1,2195 @@
+{
+  "919": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s890__857",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Context Big (rgthree)"
+    }
+  },
+  "921": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "s1541__1545",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "GetImageSize"
+    }
+  },
+  "184": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": [
+        "403",
+        0
+      ],
+      "string_b": [
+        "404",
+        0
+      ],
+      "delimiter": ""
+    },
+    "_meta": {
+      "title": "StringConcatenate"
+    }
+  },
+  "935": {
+    "class_type": "Scheduler Selector (Image Saver)",
+    "inputs": {
+      "scheduler": [
+        "919",
+        14
+      ]
+    },
+    "_meta": {
+      "title": "Scheduler Selector (Image Saver)"
+    }
+  },
+  "793": {
+    "class_type": "Sampler Selector (Image Saver)",
+    "inputs": {
+      "sampler_name": [
+        "919",
+        13
+      ]
+    },
+    "_meta": {
+      "title": "Sampler Selector (Image Saver)"
+    }
+  },
+  "1267": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": "",
+      "string_b": "",
+      "delimiter": ", "
+    },
+    "_meta": {
+      "title": "StringConcatenate"
+    }
+  },
+  "775": {
+    "class_type": "Image Saver",
+    "inputs": {
+      "images": [
+        "s1541__1545",
+        0
+      ],
+      "filename": [
+        "1221",
+        0
+      ],
+      "path": [
+        "1560",
+        0
+      ],
+      "steps": [
+        "919",
+        9
+      ],
+      "cfg": [
+        "919",
+        11
+      ],
+      "sampler_name": [
+        "793",
+        1
+      ],
+      "scheduler_name": [
+        "935",
+        1
+      ],
+      "positive": [
+        "1267",
+        0
+      ],
+      "negative": [
+        "184",
+        0
+      ],
+      "seed_value": [
+        "919",
+        8
+      ],
+      "width": [
+        "921",
+        0
+      ],
+      "height": [
+        "921",
+        1
+      ],
+      "additional_hashes": [
+        "1675",
+        0
+      ],
+      "modelname": "",
+      "widget_15": true,
+      "widget_16": 0,
+      "widget_17": 1,
+      "widget_18": 0,
+      "widget_19": "%Y-%m-%d-%H%M%S",
+      "widget_20": false,
+      "widget_21": true,
+      "widget_22": "F0B9072AA778",
+      "widget_23": true,
+      "widget_24": true,
+      "widget_25": false,
+      "widget_26": "",
+      "extension": "png"
+    },
+    "_meta": {
+      "title": "Image Saver"
+    }
+  },
+  "1560": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_b": "V19",
+      "string_a": "",
+      "delimiter": "\\"
+    },
+    "_meta": {
+      "title": "filename"
+    }
+  },
+  "1221": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "delimiter": "style_",
+      "string_a": "_%time",
+      "string_b": ""
+    },
+    "_meta": {
+      "title": "filename"
+    }
+  },
+  "1744": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "widget_1": "image",
+      "image": "OIP.webp"
+    },
+    "_meta": {
+      "title": "LoadImage"
+    }
+  },
+  "401": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "(newest:0.6), masterpiece, best quality, (score_8:0.65), (score_7:0.7), (highres, absurdres, very aesthetic:0.8), "
+    },
+    "_meta": {
+      "title": "positive_2"
+    }
+  },
+  "404": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "(chibi:1.1), toddler, (mature female:0.8), petite, sweat"
+    },
+    "_meta": {
+      "title": "negative_extra"
+    }
+  },
+  "1248": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "text": "<lora:anima-rl-v0.1:0.20>"
+    },
+    "_meta": {
+      "title": "Lora Stacker (LoraManager)"
+    }
+  },
+  "403": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "worst quality, low quality, score_1, score_2, score_3, (simple background, outside border, white border), (ai-generated), unfinished, work-in-progress, construction lines, blank, letterboxed, blurry, jpeg artifacts, sepia, mutated, mutated digits, missing fingers, extra digit, fewer digits, artistic error, unusual anatomy, (watermark, patreon username, web address, patreon logo, weibo username, weibo logo, watermark:1.25), multiple views, (anime screenshot:0.75), monochrome, distorted anatomy, anime coloring, comic, western comics \\(style\\), furry, english text, anatomically incorrect, spot color, doodle on background,  "
+    },
+    "_meta": {
+      "title": "negative"
+    }
+  },
+  "1787": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_m4me_v2.1-epoch20:0.80>, <lora:anima_kn0r_v1.0-epoch26:0.80> <lora:anima_mik4p1_v1.0-epoch20:0.45> <lora:anima_p0t7s_v1.1-epoch16:0.85> <lora:yzsss_anima1.0_v0.2:0.35> <lora:anima_4rkj4ck_v1.0-epoch26:0.75> <lora:ogipote-NL:0.50>"
+    },
+    "_meta": {
+      "title": "style_7"
+    }
+  },
+  "1251": {
+    "class_type": "ImpactSwitch",
+    "inputs": {
+      "input1": [
+        "1244",
+        0
+      ],
+      "select": [
+        "1193",
+        0
+      ],
+      "input2": [
+        "1578",
+        0
+      ],
+      "input3": [
+        "1580",
+        0
+      ],
+      "input4": [
+        "1248",
+        0
+      ],
+      "input5": [
+        "1651",
+        0
+      ],
+      "input6": [
+        "1654",
+        0
+      ],
+      "input7": [
+        "1787",
+        0
+      ],
+      "input8": [
+        "1805",
+        0
+      ],
+      "sel_mode": false
+    },
+    "_meta": {
+      "title": "ImpactSwitch"
+    }
+  },
+  "1244": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_qr4k_v1.0-epoch14:0.40> <lora:anima_fr9t_v1.1:0.65><lora:anima_m4me_v2.1-epoch20:0.95> <lora:anima_p4t1s1y_v2.2-epoch36:0.60> <lora:ogipote-NL:0.25>"
+    },
+    "_meta": {
+      "title": "style_1"
+    }
+  },
+  "1578": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_qr4k_v1.0-epoch14:0.65> <lora:anima_fr8t_v1.3-epoch32:0.85> <lora:anima_ru60d_v1.0-epoch24:0.50> <lora:anima_fr9t_v1.1:1.00> <lora:anima_my8t_v1.1-epoch24:0.65>"
+    },
+    "_meta": {
+      "title": "style_2"
+    }
+  },
+  "1580": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_qr4k_v1.0-epoch14:0.80> <lora:anima_fr8t_v1.3-epoch32:0.75> <lora:anima_ru60d_v1.0-epoch24:0.65> <lora:anima_fr9t_v1.1:0.85> <lora:anima_p4t1s1y_v2.2-epoch36:0.65>"
+    },
+    "_meta": {
+      "title": "style_3"
+    }
+  },
+  "1583": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_m4me_v2.1-epoch20:0.95>, <lora:anima_fr9t_v1.1:0.85><lora:anima_qr4k_v1.0-epoch14:0.55> <lora:anima_ru60d_v1.0-epoch24:0.70> <lora:anima_ci10ranko_v1.0-epoch28:0.75> <lora:anima_p4t1s1y_v2.2-epoch36:0.55>"
+    },
+    "_meta": {
+      "title": "style_4"
+    }
+  },
+  "1651": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_m4me_v2.1-epoch20:0.92>, <lora:anima_p0t7s_v1.1-epoch16:0.71> <lora:yzsss_anima1.0_v0.2:0.24> <lora:anima_4rkj4ck_v1.0-epoch26:0.68> <lora:anima_p4t1s1y_v2.2-epoch36:0.60> <lora:anima_mi1k_v1.3-epoch16:0.42> <lora:anima_k1m2b_v1.0-epoch24:0.48> <lora:anima_my8t_v1.1-epoch24:0.80>"
+    },
+    "_meta": {
+      "title": "style_5"
+    }
+  },
+  "1654": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_m4me_v2.1-epoch20:1.00>, <lora:anima_p0t7s_v1.1-epoch16:0.42> <lora:anima_4rkj4ck_v1.0-epoch26:0.61> <lora:anima_p4t1s1y_v2.2-epoch36:0.46> <lora:anima_k1m2b_v1.0-epoch24:0.38> <lora:anima_my8t_v1.1-epoch24:0.59> <lora:anima_fr8t_v1.3-epoch32:0.71>"
+    },
+    "_meta": {
+      "title": "style_6"
+    }
+  },
+  "1193": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "widget_1": "fixed",
+      "value": 8
+    },
+    "_meta": {
+      "title": "profile select"
+    }
+  },
+  "1805": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "lora_stack": [
+        "1248",
+        0
+      ],
+      "text": "<lora:anima_m4me_v2.1-epoch20:0.90>, <lora:anima_p0t7s_v1.1-epoch16:0.68> <lora:yzsss_anima1.0_v0.2:0.33> <lora:anima_4rkj4ck_v1.0-epoch26:0.73> <lora:anima_p4t1s1y_v2.2-epoch36:0.70> <lora:anima_mi1k_v1.3-epoch16:0.57> <lora:anima_k1m2b_v1.0-epoch24:0.50>"
+    },
+    "_meta": {
+      "title": "style_8"
+    }
+  },
+  "1336": {
+    "class_type": "Seed (rgthree)",
+    "inputs": {
+      "widget_1": "",
+      "widget_2": "",
+      "widget_3": "okay",
+      "seed": 42
+    },
+    "_meta": {
+      "title": "Seed (rgthree)"
+    }
+  },
+  "1748": {
+    "class_type": "PreviewBridge",
+    "inputs": {
+      "images": [
+        "s1633__1611",
+        0
+      ],
+      "widget_1": false,
+      "image": "always"
+    },
+    "_meta": {
+      "title": "PreviewBridge"
+    }
+  },
+  "145": {
+    "class_type": "Seed (rgthree)",
+    "inputs": {
+      "widget_1": "",
+      "widget_2": "",
+      "widget_3": "",
+      "seed": 39
+    },
+    "_meta": {
+      "title": "Seed (rgthree)"
+    }
+  },
+  "1675": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "Anima All in One workflow:ABF728C1DDE9"
+    },
+    "_meta": {
+      "title": "Hash"
+    }
+  },
+  "s1508__1506": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1530__1526",
+        0
+      ],
+      "switch": "",
+      "on_true": ""
+    },
+    "_meta": {
+      "title": "Use Detailer"
+    }
+  },
+  "s1541__1533": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "values.a": [
+        "s1541__1531",
+        0
+      ],
+      "values.b": [
+        "s1541__1535",
+        0
+      ],
+      "values.c": [
+        "s1541__1534",
+        0
+      ],
+      "expression": "a + b",
+      "values": ""
+    },
+    "_meta": {
+      "title": "W 타일크기"
+    }
+  },
+  "s1541__1536": {
+    "class_type": "UpscaleModelLoader",
+    "inputs": {
+      "model_name": "2x-AnimeSharpV4_Fast_RCAN_PU.safetensors"
+    },
+    "_meta": {
+      "title": "UpscaleModelLoader"
+    }
+  },
+  "s1541__1545": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1508__1506",
+        0
+      ],
+      "on_true": [
+        "s1541__1538",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Using USDU"
+    }
+  },
+  "s1541__1542": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1541__1539",
+        1
+      ],
+      "on_true": [
+        "s1541__1540",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use DCW"
+    }
+  },
+  "s1541__1540": {
+    "class_type": "DCWModelPatch",
+    "inputs": {
+      "model": [
+        "s1541__1539",
+        1
+      ],
+      "lambda_l": 0.05,
+      "lambda_h": 0.01,
+      "dcw_enabled": true,
+      "alpha_l": 0,
+      "alpha_h": false,
+      "cwm_enabled": true,
+      "smc_preset": "Off",
+      "smc_lambda": 6.0,
+      "smc_k": 0.1
+    },
+    "_meta": {
+      "title": "DCWModelPatch"
+    }
+  },
+  "s1541__1543": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1541__1542",
+        0
+      ],
+      "on_true": [
+        "s1541__1544",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use Spectrum"
+    }
+  },
+  "s1541__1539": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s890__857",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Context Big (rgthree)"
+    }
+  },
+  "s1541__1546": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 4,
+      "widget_1": "fixed"
+    },
+    "_meta": {
+      "title": "PrimitiveInt"
+    }
+  },
+  "s1541__1547": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "values.a": [
+        "s1541__1539",
+        10
+      ],
+      "values.b": [
+        "s1541__1546",
+        0
+      ],
+      "expression": "a + b",
+      "values": ""
+    },
+    "_meta": {
+      "title": "ComfyMathExpression"
+    }
+  },
+  "s1541__1544": {
+    "class_type": "SpectrumSDXL",
+    "inputs": {
+      "model": [
+        "s1541__1542",
+        0
+      ],
+      "stop_caching_step": [
+        "s1541__1547",
+        1
+      ],
+      "steps": [
+        "s1541__1539",
+        10
+      ],
+      "w": 1.0,
+      "m": 1,
+      "lam": 2,
+      "window_size": 1,
+      "flex_window": 2.0,
+      "warmup_steps": 0
+    },
+    "_meta": {
+      "title": "SpectrumSDXL"
+    }
+  },
+  "s1541__1532": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "values.a": [
+        "s1541__1531",
+        1
+      ],
+      "values.b": [
+        "s1541__1535",
+        0
+      ],
+      "values.c": [
+        "s1541__1534",
+        0
+      ],
+      "expression": "a + b",
+      "values": ""
+    },
+    "_meta": {
+      "title": "H 타일크기"
+    }
+  },
+  "s1541__1531": {
+    "class_type": "GetImageSize",
+    "inputs": {
+      "image": [
+        "s1508__1506",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "GetImageSize"
+    }
+  },
+  "s1541__1535": {
+    "class_type": "PrimitiveFloat",
+    "inputs": {
+      "value": 1.5
+    },
+    "_meta": {
+      "title": "배율 설정"
+    }
+  },
+  "s1541__1534": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 2,
+      "widget_1": "fixed"
+    },
+    "_meta": {
+      "title": "한 변당 나눌 갯수"
+    }
+  },
+  "s1541__1538": {
+    "class_type": "UltimateSDUpscale",
+    "inputs": {
+      "image": [
+        "s1508__1506",
+        0
+      ],
+      "model": [
+        "s1541__1543",
+        0
+      ],
+      "positive": [
+        "s1541__1539",
+        4
+      ],
+      "negative": [
+        "s1541__1539",
+        5
+      ],
+      "vae": [
+        "s1541__1539",
+        3
+      ],
+      "upscale_model": [
+        "s1541__1536",
+        0
+      ],
+      "upscale_by": [
+        "s1541__1535",
+        0
+      ],
+      "seed": [
+        "s1541__1539",
+        8
+      ],
+      "steps": [
+        "s1541__1539",
+        10
+      ],
+      "cfg": [
+        "s1541__1539",
+        11
+      ],
+      "sampler_name": [
+        "s1541__1539",
+        13
+      ],
+      "tile_width": [
+        "s1541__1533",
+        1
+      ],
+      "tile_height": [
+        "s1541__1532",
+        1
+      ],
+      "scheduler": "simple",
+      "denoise": 0.2,
+      "mode_type": "Linear",
+      "mask_blur": 8,
+      "tile_padding": 32,
+      "widget_18": true,
+      "widget_19": false,
+      "widget_20": 1,
+      "seam_fix_mode": "None",
+      "seam_fix_denoise": 1.0,
+      "seam_fix_width": 64,
+      "seam_fix_mask_blur": 8,
+      "seam_fix_padding": 16,
+      "force_uniform_tiles": true,
+      "tiled_decode": false,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "UltimateSDUpscale"
+    }
+  },
+  "s893__891": {
+    "class_type": "CheckpointLoaderSimple",
+    "inputs": {
+      "ckpt_name": "sam3.1_multiplex_fp16.safetensors"
+    },
+    "_meta": {
+      "title": "SAM3 로드"
+    }
+  },
+  "s893__892": {
+    "class_type": "Context (rgthree)",
+    "inputs": {
+      "model": [
+        "s893__891",
+        0
+      ],
+      "clip": [
+        "s893__891",
+        1
+      ],
+      "vae": [
+        "s893__891",
+        2
+      ]
+    },
+    "_meta": {
+      "title": "ctx_SAM3"
+    }
+  },
+  "s1530__1512": {
+    "class_type": "StringConcatenate",
+    "inputs": {
+      "string_a": "face",
+      "string_b": "",
+      "delimiter": ":"
+    },
+    "_meta": {
+      "title": "부위 입력"
+    }
+  },
+  "s1530__1514": {
+    "class_type": "Context (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s893__892",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ctx_SAM3"
+    }
+  },
+  "s1530__1515": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "s1530__1514",
+        2
+      ],
+      "text": [
+        "s1530__1512",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "SAM3 DETECT 부위"
+    }
+  },
+  "s1530__1516": {
+    "class_type": "Masks Combine Batch",
+    "inputs": {
+      "masks": [
+        "s1530__1517",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Masks Combine Batch"
+    }
+  },
+  "s1530__1517": {
+    "class_type": "SAM3_Detect",
+    "inputs": {
+      "model": [
+        "s1530__1514",
+        1
+      ],
+      "image": [
+        "s1284__1465",
+        0
+      ],
+      "conditioning": [
+        "s1530__1515",
+        0
+      ],
+      "threshold": 0.5,
+      "refine_iterations": 2,
+      "individual_masks": false
+    },
+    "_meta": {
+      "title": "SAM3_Detect"
+    }
+  },
+  "s1530__1520": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s890__857",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ctx_ANIMA"
+    }
+  },
+  "s1530__1521": {
+    "class_type": "DCWModelPatch",
+    "inputs": {
+      "model": [
+        "s1530__1520",
+        1
+      ],
+      "lambda_l": 0.05,
+      "lambda_h": 0.01,
+      "dcw_enabled": true,
+      "alpha_l": 0.0,
+      "alpha_h": false,
+      "cwm_enabled": true,
+      "smc_preset": "Off",
+      "smc_lambda": 6.0,
+      "smc_k": 0.1
+    },
+    "_meta": {
+      "title": "DCWModelPatch"
+    }
+  },
+  "s1530__1522": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1530__1520",
+        1
+      ],
+      "on_true": [
+        "s1530__1521",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use DCW"
+    }
+  },
+  "s1530__1523": {
+    "class_type": "SpectrumSDXL",
+    "inputs": {
+      "model": [
+        "s1530__1522",
+        0
+      ],
+      "stop_caching_step": [
+        "s1530__1528",
+        1
+      ],
+      "steps": [
+        "s1530__1520",
+        10
+      ],
+      "w": 1.0,
+      "m": 1,
+      "lam": 2,
+      "window_size": 1,
+      "flex_window": 2.0,
+      "warmup_steps": 0
+    },
+    "_meta": {
+      "title": "SpectrumSDXL"
+    }
+  },
+  "s1530__1524": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1530__1522",
+        0
+      ],
+      "on_true": [
+        "s1530__1523",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use Spectrum"
+    }
+  },
+  "s1530__1527": {
+    "class_type": "DetailerForEach",
+    "inputs": {
+      "image": [
+        "s1284__1465",
+        0
+      ],
+      "segs": [
+        "s1530__1640",
+        0
+      ],
+      "model": [
+        "s1530__1524",
+        0
+      ],
+      "clip": [
+        "s1530__1520",
+        2
+      ],
+      "vae": [
+        "s1530__1520",
+        3
+      ],
+      "positive": [
+        "s1530__1520",
+        4
+      ],
+      "negative": [
+        "s1530__1520",
+        5
+      ],
+      "seed": [
+        "s1530__1520",
+        8
+      ],
+      "steps": [
+        "s1530__1520",
+        10
+      ],
+      "cfg": [
+        "s1530__1520",
+        11
+      ],
+      "sampler_name": [
+        "s1530__1520",
+        13
+      ],
+      "detailer_hook": "euler",
+      "scheduler_func_opt": "sgm_uniform",
+      "guide_size": 512,
+      "max_size": 1024,
+      "scheduler": "simple",
+      "denoise": 0.5,
+      "feather": 5,
+      "noise_mask": true,
+      "guide_size_for": true,
+      "force_inpaint": true,
+      "wildcard": "",
+      "cycle": 1
+    },
+    "_meta": {
+      "title": "얼굴 디테일러 (SEGS)"
+    }
+  },
+  "s1530__1528": {
+    "class_type": "ComfyMathExpression",
+    "inputs": {
+      "values.a": [
+        "s1530__1520",
+        10
+      ],
+      "values.b": [
+        "s1530__1529",
+        0
+      ],
+      "expression": "a + b",
+      "values": ""
+    },
+    "_meta": {
+      "title": "ComfyMathExpression"
+    }
+  },
+  "s1530__1529": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 3,
+      "widget_1": "fixed"
+    },
+    "_meta": {
+      "title": "PrimitiveInt"
+    }
+  },
+  "s1530__1518": {
+    "class_type": "MaskToSEGS",
+    "inputs": {
+      "mask": [
+        "s1530__1516",
+        0
+      ],
+      "combined": false,
+      "crop_factor": 3.0,
+      "bbox_fill": false,
+      "drop_size": 10,
+      "contour_fill": false
+    },
+    "_meta": {
+      "title": "MaskToSEGS"
+    }
+  },
+  "s1530__1640": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1530__1641",
+        0
+      ],
+      "on_true": [
+        "s1530__1518",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use Detailer"
+    }
+  },
+  "s1530__1641": {
+    "class_type": "EmptySegs",
+    "inputs": {},
+    "_meta": {
+      "title": "EmptySegs"
+    }
+  },
+  "s1530__1526": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1284__1465",
+        0
+      ],
+      "on_true": [
+        "s1530__1527",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use Detailer"
+    }
+  },
+  "s1284__1287": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "1748",
+        0
+      ],
+      "vae": [
+        "s1284__1286",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "VAEEncode"
+    }
+  },
+  "s1284__1466": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1284__1286",
+        8
+      ],
+      "on_true": [
+        "1336",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Using New Seed"
+    }
+  },
+  "s1284__1288": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "s1284__1353",
+        0
+      ],
+      "vae": [
+        "s1284__1286",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecode"
+    }
+  },
+  "s1284__1353": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "s1284__1276",
+        0
+      ],
+      "positive": [
+        "s1284__1325",
+        0
+      ],
+      "negative": [
+        "s1284__1326",
+        0
+      ],
+      "latent_image": [
+        "s1284__1568",
+        0
+      ],
+      "seed": [
+        "s1284__1466",
+        0
+      ],
+      "steps": [
+        "s1284__1286",
+        10
+      ],
+      "cfg": [
+        "s1284__1286",
+        11
+      ],
+      "sampler_name": [
+        "s1284__1286",
+        13
+      ],
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "s1284__1325": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "s1284__1286",
+        2
+      ],
+      "text": ""
+    },
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
+  },
+  "s1284__1326": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "s1284__1286",
+        2
+      ],
+      "text": ""
+    },
+    "_meta": {
+      "title": "CLIPTextEncode"
+    }
+  },
+  "s1284__1276": {
+    "class_type": "AnimaLLLiteApply",
+    "inputs": {
+      "model": [
+        "s1284__1754",
+        0
+      ],
+      "image": [
+        "1748",
+        0
+      ],
+      "mask": [
+        "1748",
+        1
+      ],
+      "lllite_name": 1,
+      "strength": 1.0,
+      "start_percent": 0.0,
+      "end_percent": 1.0,
+      "preserve_wrapper": true
+    },
+    "_meta": {
+      "title": "AnimaLLLiteApply"
+    }
+  },
+  "s1284__1756": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": [
+        "s890__1745",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Use Anima Mod Guidance"
+    }
+  },
+  "s1284__1754": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s890__1279",
+        0
+      ],
+      "on_true": [
+        "s1284__1751",
+        0
+      ],
+      "switch": [
+        "s1284__1756",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "s1284__1751": {
+    "class_type": "AnimaModGuidance",
+    "inputs": {
+      "model": [
+        "s890__1279",
+        0
+      ],
+      "clip": [
+        "s1284__1286",
+        2
+      ],
+      "positive": [
+        "s1284__1325",
+        0
+      ],
+      "negative": [
+        "s1284__1326",
+        0
+      ],
+      "quality_tags": [
+        "401",
+        0
+      ],
+      "mod_w_profile": "step_i8_skip27"
+    },
+    "_meta": {
+      "title": "AnimaModGuidance"
+    }
+  },
+  "s1284__1465": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "1748",
+        0
+      ],
+      "on_true": [
+        "s1284__1288",
+        0
+      ],
+      "switch": [
+        "s1284__1770",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Use LLLite"
+    }
+  },
+  "s1284__1770": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    },
+    "_meta": {
+      "title": "Use LLLite"
+    }
+  },
+  "s1284__1286": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s890__857",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Context Big (rgthree)"
+    }
+  },
+  "s1284__1568": {
+    "class_type": "SetLatentNoiseMask",
+    "inputs": {
+      "samples": [
+        "s1284__1287",
+        0
+      ],
+      "mask": [
+        "1748",
+        1
+      ]
+    },
+    "_meta": {
+      "title": "SetLatentNoiseMask"
+    }
+  },
+  "s900__895": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    },
+    "_meta": {
+      "title": "정사각형 전환"
+    }
+  },
+  "s900__119": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": [
+        "s900__894",
+        0
+      ],
+      "height": [
+        "s900__897",
+        0
+      ],
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "EmptyLatentImage"
+    }
+  },
+  "s900__897": {
+    "class_type": "LazySwitchKJ",
+    "inputs": {
+      "on_false": [
+        "s900__899",
+        0
+      ],
+      "on_true": [
+        "s900__740",
+        0
+      ],
+      "switch": [
+        "s900__895",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "H"
+    }
+  },
+  "s900__894": {
+    "class_type": "LazySwitchKJ",
+    "inputs": {
+      "on_false": [
+        "s900__898",
+        0
+      ],
+      "on_true": [
+        "s900__740",
+        0
+      ],
+      "switch": [
+        "s900__895",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "W"
+    }
+  },
+  "s900__896": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    },
+    "_meta": {
+      "title": "가로모드 전환"
+    }
+  },
+  "s900__898": {
+    "class_type": "LazySwitchKJ",
+    "inputs": {
+      "on_false": [
+        "s900__445",
+        0
+      ],
+      "on_true": [
+        "s900__446",
+        0
+      ],
+      "switch": [
+        "s900__896",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "W"
+    }
+  },
+  "s900__899": {
+    "class_type": "LazySwitchKJ",
+    "inputs": {
+      "on_false": [
+        "s900__446",
+        0
+      ],
+      "on_true": [
+        "s900__445",
+        0
+      ],
+      "switch": [
+        "s900__896",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "H"
+    }
+  },
+  "s900__740": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 1280,
+      "widget_1": "fixed"
+    },
+    "_meta": {
+      "title": "정사각"
+    }
+  },
+  "s900__445": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 1024,
+      "widget_1": "fixed"
+    },
+    "_meta": {
+      "title": "짧은 변"
+    }
+  },
+  "s900__446": {
+    "class_type": "PrimitiveInt",
+    "inputs": {
+      "value": 1536,
+      "widget_1": "fixed"
+    },
+    "_meta": {
+      "title": "긴 변"
+    }
+  },
+  "s1736__1743": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s900__119",
+        0
+      ],
+      "on_true": [
+        "s1736__1740",
+        0
+      ],
+      "switch": [
+        "s1736__1737",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "s1736__1741": {
+    "class_type": "ImageScaleToTotalPixels",
+    "inputs": {
+      "image": [
+        "1744",
+        0
+      ],
+      "upscale_method": "nearest-exact",
+      "megapixels": 1,
+      "resolution_steps": 1
+    },
+    "_meta": {
+      "title": "ImageScaleToTotalPixels"
+    }
+  },
+  "s1736__1740": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "s1736__1741",
+        0
+      ],
+      "vae": [
+        "s1736__1746",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAEEncode"
+    }
+  },
+  "s1736__1746": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "s1736__1737": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": false
+    },
+    "_meta": {
+      "title": "PrimitiveBoolean"
+    }
+  },
+  "s890__905": {
+    "class_type": "KSampler Config (rgthree)",
+    "inputs": {
+      "steps_total": 29,
+      "refiner_step": 16,
+      "cfg": 5,
+      "sampler_name": "er_sde",
+      "scheduler": "sgm_uniform"
+    },
+    "_meta": {
+      "title": "KSampler Config (rgthree)"
+    }
+  },
+  "s890__159": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "VAELoader"
+    }
+  },
+  "s890__1365": {
+    "class_type": "UNet loader with Name (Image Saver)",
+    "inputs": {
+      "unet_name": "ANIMA\\anima_baseV10.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "UNet loader with Name (Image Saver)"
+    }
+  },
+  "s890__903": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "s890__1281",
+        1
+      ],
+      "text": ""
+    },
+    "_meta": {
+      "title": "아니마 긍정 프롬프트"
+    }
+  },
+  "s890__904": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "s890__1281",
+        1
+      ],
+      "text": [
+        "184",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "아니마 부정 프롬프트"
+    }
+  },
+  "s890__164": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "widget_2": "default",
+      "type": "stable_diffusion"
+    },
+    "_meta": {
+      "title": "CLIPLoader"
+    }
+  },
+  "s890__1278": {
+    "class_type": "ModelPatchTorchSettings",
+    "inputs": {
+      "model": [
+        "s890__1280",
+        0
+      ],
+      "enable_fp16_accumulation": false
+    },
+    "_meta": {
+      "title": "ModelPatchTorchSettings"
+    }
+  },
+  "s890__1280": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "s890__1281",
+        0
+      ],
+      "shift": 1.73
+    },
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "s890__1281": {
+    "class_type": "easy loraStackApply",
+    "inputs": {
+      "lora_stack": [
+        "1251",
+        0
+      ],
+      "model": [
+        "s890__1365",
+        0
+      ],
+      "optional_clip": [
+        "s890__164",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "easy loraStackApply"
+    }
+  },
+  "s890__857": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "model": [
+        "s890__1810",
+        0
+      ],
+      "clip": [
+        "s890__1281",
+        1
+      ],
+      "vae": [
+        "s890__159",
+        0
+      ],
+      "positive": [
+        "s890__903",
+        0
+      ],
+      "negative": [
+        "s890__904",
+        0
+      ],
+      "latent": [
+        "s1736__1743",
+        0
+      ],
+      "seed": [
+        "145",
+        0
+      ],
+      "steps": [
+        "s890__905",
+        0
+      ],
+      "step_refiner": [
+        "s890__905",
+        1
+      ],
+      "cfg": [
+        "s890__905",
+        2
+      ],
+      "sampler": [
+        "s890__905",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "ctx_ANIMA"
+    }
+  },
+  "s890__1745": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": true
+    },
+    "_meta": {
+      "title": "Use Anima Mod Guidance"
+    }
+  },
+  "s890__1725": {
+    "class_type": "AnimaModGuidance",
+    "inputs": {
+      "model": [
+        "s890__1279",
+        0
+      ],
+      "clip": [
+        "s890__164",
+        0
+      ],
+      "positive": [
+        "s890__903",
+        0
+      ],
+      "negative": [
+        "s890__904",
+        0
+      ],
+      "quality_tags": [
+        "401",
+        0
+      ],
+      "mod_w_profile": "step_i8_skip27"
+    },
+    "_meta": {
+      "title": "AnimaModGuidance"
+    }
+  },
+  "s890__1727": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s890__1279",
+        0
+      ],
+      "on_true": [
+        "s890__1725",
+        0
+      ],
+      "switch": [
+        "s890__1745",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "s890__1279": {
+    "class_type": "PathchSageAttentionKJ",
+    "inputs": {
+      "model": [
+        "s890__1278",
+        0
+      ],
+      "sage_attention": "disabled"
+    },
+    "_meta": {
+      "title": "PathchSageAttentionKJ"
+    }
+  },
+  "s890__1810": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s890__1727",
+        0
+      ],
+      "on_true": [
+        "s890__1727",
+        0
+      ],
+      "switch": [
+        "s890__1807",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "s890__1807": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": true
+    },
+    "_meta": {
+      "title": "Use TorchCompile"
+    }
+  },
+  "s1633__1611": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "s1633__1616",
+        0
+      ],
+      "vae": [
+        "s1633__1618",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecode"
+    }
+  },
+  "s1633__1612": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "s1633__1723",
+        0
+      ],
+      "positive": [
+        "s1633__1618",
+        4
+      ],
+      "negative": [
+        "s1633__1618",
+        5
+      ],
+      "latent_image": [
+        "s1633__1793",
+        0
+      ],
+      "seed": [
+        "s1633__1618",
+        8
+      ],
+      "steps": [
+        "s1633__1618",
+        10
+      ],
+      "cfg": [
+        "s1633__1618",
+        11
+      ],
+      "sampler_name": [
+        "s1633__1618",
+        13
+      ],
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "s1633__1790": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "s1634__1622",
+        0
+      ],
+      "vae": [
+        "s1633__1618",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "VAEDecode"
+    }
+  },
+  "s1633__1794": {
+    "class_type": "VAEEncode",
+    "inputs": {
+      "pixels": [
+        "s1633__1792",
+        0
+      ],
+      "vae": [
+        "s1633__1618",
+        3
+      ]
+    },
+    "_meta": {
+      "title": "VAEEncode"
+    }
+  },
+  "s1633__1618": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s890__857",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Context Big (rgthree)"
+    }
+  },
+  "s1633__1619": {
+    "class_type": "DCWModelPatch",
+    "inputs": {
+      "model": [
+        "s1633__1618",
+        1
+      ],
+      "lambda_l": 0.05,
+      "lambda_h": 0.01,
+      "dcw_enabled": true,
+      "alpha_l": 0.0,
+      "alpha_h": false,
+      "cwm_enabled": true,
+      "smc_preset": "Off",
+      "smc_lambda": 6.0,
+      "smc_k": 0.1
+    },
+    "_meta": {
+      "title": "DCWModelPatch"
+    }
+  },
+  "s1633__1723": {
+    "class_type": "DiTSpectrumPatch",
+    "inputs": {
+      "model": [
+        "s1633__1619",
+        0
+      ],
+      "steps": [
+        "s1633__1618",
+        10
+      ],
+      "window_size": 1.0,
+      "flex_window": 2.0,
+      "warmup_steps": 4,
+      "tail_actual_steps": 0,
+      "blend_w": 1.0,
+      "cheby_degree": 1,
+      "ridge_lambda": 10.0,
+      "enabled": true,
+      "history_size": false,
+      "one_sampler_only": false,
+      "verbose": false
+    },
+    "_meta": {
+      "title": "DiTSpectrumPatch"
+    }
+  },
+  "s1633__1616": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1634__1622",
+        0
+      ],
+      "on_true": [
+        "s1633__1612",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "Use HighRez"
+    }
+  },
+  "s1633__1792": {
+    "class_type": "ImageScaleBy",
+    "inputs": {
+      "image": [
+        "s1633__1790",
+        0
+      ],
+      "scale_by": 1.25,
+      "upscale_method": "nearest-exact"
+    },
+    "_meta": {
+      "title": "ImageScaleBy"
+    }
+  },
+  "s1633__1811": {
+    "class_type": "LatentUpscaleBy",
+    "inputs": {
+      "samples": [
+        "s1634__1622",
+        0
+      ],
+      "scale_by": 1.25,
+      "upscale_method": "nearest-exact"
+    },
+    "_meta": {
+      "title": "LatentUpscaleBy"
+    }
+  },
+  "s1633__1793": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1633__1811",
+        0
+      ],
+      "on_true": [
+        "s1633__1794",
+        0
+      ],
+      "switch": ""
+    },
+    "_meta": {
+      "title": "latent를 이미지로 변환"
+    }
+  },
+  "s1634__1624": {
+    "class_type": "Context Big (rgthree)",
+    "inputs": {
+      "base_ctx": [
+        "s890__857",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "Context Big (rgthree)"
+    }
+  },
+  "s1634__1759": {
+    "class_type": "PrimitiveFloat",
+    "inputs": {
+      "value": 1
+    },
+    "_meta": {
+      "title": "PrimitiveFloat"
+    }
+  },
+  "s1634__1760": {
+    "class_type": "PrimitiveFloat",
+    "inputs": {
+      "value": 0.5
+    },
+    "_meta": {
+      "title": "PrimitiveFloat"
+    }
+  },
+  "s1634__1758": {
+    "class_type": "ComfySwitchNode",
+    "inputs": {
+      "on_false": [
+        "s1634__1759",
+        0
+      ],
+      "on_true": [
+        "s1634__1760",
+        0
+      ],
+      "switch": [
+        "s1634__1757",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "ComfySwitchNode"
+    }
+  },
+  "s1634__1757": {
+    "class_type": "PrimitiveBoolean",
+    "inputs": {
+      "value": [
+        "s1736__1737",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "PrimitiveBoolean"
+    }
+  },
+  "s1634__1622": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "s1634__1721",
+        0
+      ],
+      "positive": [
+        "s1634__1624",
+        4
+      ],
+      "negative": [
+        "s1634__1624",
+        5
+      ],
+      "latent_image": [
+        "s1634__1624",
+        6
+      ],
+      "seed": [
+        "s1634__1624",
+        8
+      ],
+      "steps": [
+        "s1634__1624",
+        9
+      ],
+      "cfg": [
+        "s1634__1624",
+        11
+      ],
+      "sampler_name": [
+        "s1634__1624",
+        13
+      ],
+      "denoise": [
+        "s1634__1758",
+        0
+      ],
+      "scheduler": "simple"
+    },
+    "_meta": {
+      "title": "KSampler"
+    }
+  },
+  "s1634__1721": {
+    "class_type": "DiTSpectrumPatch",
+    "inputs": {
+      "model": [
+        "s1634__1626",
+        0
+      ],
+      "steps": [
+        "s1634__1624",
+        9
+      ],
+      "window_size": 1.0,
+      "flex_window": 2.0,
+      "warmup_steps": 3,
+      "tail_actual_steps": 0,
+      "blend_w": 1.0,
+      "cheby_degree": 1,
+      "ridge_lambda": 10.0,
+      "enabled": true,
+      "history_size": false,
+      "one_sampler_only": false,
+      "verbose": false
+    },
+    "_meta": {
+      "title": "DiTSpectrumPatch"
+    }
+  },
+  "s1634__1626": {
+    "class_type": "DCWModelPatch",
+    "inputs": {
+      "model": [
+        "s1634__1624",
+        1
+      ],
+      "lambda_l": 0.05,
+      "lambda_h": 0.01,
+      "dcw_enabled": true,
+      "alpha_l": 0.0,
+      "alpha_h": false,
+      "cwm_enabled": true,
+      "smc_preset": "Off",
+      "smc_lambda": 6.0,
+      "smc_k": 0.1
+    },
+    "_meta": {
+      "title": "DCWModelPatch"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "source": "animaAllInOne_v51.json",
+  "primary_sampler": "s1284__1353",
+  "positive_node": "s1284__1325",
+  "negative_node": "s1284__1326",
+  "output_node": "775",
+  "unet_node": "s890__1365",
+  "clip_node": "s890__164",
+  "vae_node": "s1736__1746",
+  "lora_anchor": "s890__1281",
+  "sampler_count": 3,
+  "note": "Flattened from the Anima All-In-One UI workflow. Loom injects the prompt at positive_node.text and collects images from output_node. inject_models rebuilds the LoRA chain at lora_anchor."
+}

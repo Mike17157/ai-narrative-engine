@@ -6,8 +6,6 @@ runpod_volume:
   diffusion_models: models/diffusion_models
   embeddings: models/embeddings
   loras: models/loras
-  sams: models/sams
   text_encoders: models/text_encoders
-  ultralytics_bbox: models/ultralytics/bbox
-  ultralytics_segm: models/ultralytics/segm
+  upscale_models: models/upscale_models
   vae: models/vae

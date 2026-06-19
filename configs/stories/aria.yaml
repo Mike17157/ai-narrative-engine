@@ -16,6 +16,7 @@ themes:
 - the vulnerability of connection
 - coastal melancholy
 storyboard:
+  heart: ''
   logline: An art student's perfectly curated chill life gets thrown off-balance when
     a bold, awkward beachside introduction spirals into a summer of unexpected connections
     and the terrifying, exhilarating question of what comes next.
@@ -33,6 +34,9 @@ storyboard:
     - Trish
     - Linda
     - Darek
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Debrief
     summary: Kaia endures the relentless post-mortem from Maya and Trish back at their
       blanket, dissecting every word you said. The turn is her admitting, reluctantly,
@@ -43,6 +47,9 @@ storyboard:
     - Kaia
     - Maya
     - Trish
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Coincidence
     summary: A planned "accidental" meet-up at a local boba shop near campus; Kaia
       tests your authenticity with weird questions and judges your drink order. The
@@ -52,6 +59,9 @@ storyboard:
     characters:
     - Kaia
     - '{{user}}'
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Beach House
     summary: You navigate the chaotic, intimate space of Kaia's home, meeting her
       as a host and artist amid her half-finished projects. The turn is a late-night,
@@ -65,6 +75,9 @@ storyboard:
     - Maya
     - Trish
     - assorted party guests
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Field Trip
     summary: Kaia, needing a break from her thesis, drags you on an "inspiration day"
       to Lands End. The stakes are showing a raw, un-performed version of herself.
@@ -74,6 +87,9 @@ storyboard:
     characters:
     - Kaia
     - '{{user}}'
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Interruption
     summary: A tense double-date setup by the friends at a noisy pier restaurant goes
       sideways, exposing the outside pressure on whatever you and Kaia are building.
@@ -86,6 +102,9 @@ storyboard:
     - Maya
     - Trish
     - their dates
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Radio Silence
     summary: A week of no contact; Kaia throws herself into her final project, wrestling
       with whether opening up was a mistake. The turn is Maya confronting her about
@@ -95,6 +114,9 @@ storyboard:
     characters:
     - Kaia
     - Maya
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Reckoning
     summary: 'You meet at the deserted beach at dusk, the location of your first encounter.
       Kaia, nervous but defiant, lays her cards on the table: she''s bad at this,
@@ -104,6 +126,9 @@ storyboard:
     characters:
     - Kaia
     - '{{user}}'
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The New Normal
     summary: 'A snapshot of the changed routine: studying together in coffee shops,
       helping her pack up her senior show, navigating the weirdness in front of her
@@ -113,6 +138,9 @@ storyboard:
     characters:
     - Kaia
     - '{{user}}'
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
   - title: The Send-Off
     summary: Kaia's graduation party at the beach house, a bittersweet celebration
       tinged with future anxieties. The turn is a moment alone where you both acknowledge
@@ -125,21 +153,31 @@ storyboard:
     - Maya
     - Trish
     - assorted friends
+    emotional_core: ''
+    hook: ''
+    scene_prompt: ''
 cast:
 - character: kaia_nakumura_2
   primary: true
+  outfit: null
 - character: maya_delgado
   primary: false
+  outfit: null
 - character: trish_okonkwo
   primary: false
+  outfit: null
 - character: linda_chen
   primary: false
+  outfit: null
 - character: darek_walczak
   primary: false
+  outfit: null
 - character: reyes
   primary: false
+  outfit: null
 - character: whitfield
   primary: false
+  outfit: null
 lorebook: {}
 locations:
 - id: ocean-beach-shoreline

@@ -40,12 +40,19 @@ class ComfyUIProvider:
         self.inputs: dict[str, dict] = options.get("inputs", {})
         self.output_node: str | None = options.get("output_node")
         self.timeout_s: float = float(options.get("timeout_s", 180))
+        # Output variant for the central master workflow: 'full' (default) collects
+        # the rendered image as-is; 'cutout' splices an Inspyrenet background
+        # remover after the render so the subject is segmented out. Collapses the
+        # old anima / anima_cutout separate graphs into one workflow + this switch.
+        self.output_variant: str | None = options.get("output_variant")
 
-    def _inject(self, prompt: str, negative_prompt: str | None, out_prefix: str | None = None,
-                latent: tuple[int, int] | None = None) -> dict:
+    def _inject(self, prompt: str, negative_prompt: str | None = None, out_prefix: str | None = None,
+                latent: tuple[int, int] | None = None) -> tuple[dict, str | None]:
         # Pure graph prep (prompt token, out_prefix, latent, negative, BREAK regions) is shared
         # with the RunPod serverless provider; see loom/providers/_workflow.py.
-        return _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent)
+        graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent)
+        out = _workflow.apply_output_variant(graph, self.output_node, self.output_variant)
+        return graph, out
 
     def _set_init_image(self, client: httpx.Client, graph: dict, image_bytes: bytes) -> None:
         """Upload a source image to ComfyUI and point the workflow's LoadImage node
@@ -79,7 +86,7 @@ class ComfyUIProvider:
 
         get_server(self.base_url).ensure_up()
 
-        graph = self._inject(prompt, negative_prompt, out_prefix, latent)
+        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent)
         with httpx.Client(base_url=self.base_url, timeout=60) as client:
             if init_image:
                 self._set_init_image(client, graph, init_image)
@@ -106,7 +113,8 @@ class ComfyUIProvider:
 
             history = self._await_history(client, prompt_id)
             outputs = history["outputs"]
-            node_ids = [self.output_node] if self.output_node else list(outputs.keys())
+            collect_from = out_node or self.output_node
+            node_ids = [collect_from] if collect_from else list(outputs.keys())
 
             images: list[bytes] = []
             for node_id in node_ids:

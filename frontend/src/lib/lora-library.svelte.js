@@ -4,9 +4,10 @@
 // Stacks, and Test all read — so this is one reactive source of truth rather
 // than prop-drilled two-way bindings across four cards.
 //
-// Sibling to lora.svelte.js (which owns the generation/dataset pipeline); the
-// two are intentionally separate — the library/stacks config is a different
-// concern from the batch-generation runtime state.
+// Sibling to lora.svelte.js (which owns the generation/dataset pipeline, now
+// driven from the Training section); the two are intentionally separate — the
+// library/stacks config is a different concern from the batch-generation runtime
+// state.
 import { post } from './api.js';
 
 export const loraLib = $state({

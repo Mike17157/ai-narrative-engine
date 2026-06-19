@@ -130,7 +130,8 @@ def register(app, ctx):
             # Fresh seed per render, exactly like the LoRA batch pipeline — otherwise
             # every test is the same fixed seed:0 roll (usually a mediocre one).
             latent = (body.width, body.height) if (body.width and body.height) else None
-            graph = randomize_seeds(provider._inject(prompt, None, latent=latent))
+            graph, out_node = provider._inject(prompt, None, latent=latent)
+            graph = randomize_seeds(graph)
             # img2img: upload the source image and point the LoadImage node at it
             # (no-op if the workflow has no LoadImage node).
             if body.init_image:
@@ -146,7 +147,8 @@ def register(app, ctx):
 
         async def events():
             try:
-                async for ev in stream_generate(provider.base_url, graph, provider.output_node, provider.timeout_s):
+                collect_from = out_node or provider.output_node
+                async for ev in stream_generate(provider.base_url, graph, collect_from, provider.timeout_s):
                     yield f"data: {json.dumps(ev)}\n\n"
             except Exception as exc:  # noqa: BLE001
                 yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"

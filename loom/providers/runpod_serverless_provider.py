@@ -53,6 +53,7 @@ class RunPodServerlessProvider:
         self.api_key: str = options.get("api_key", "")
         self.inputs: dict[str, dict] = options.get("inputs", {})
         self.output_node: str | None = options.get("output_node")
+        self.output_variant: str | None = options.get("output_variant")
         self.timeout_s: float = float(options.get("timeout_s", 600))
         self.poll_s: float = float(options.get("poll_s", 2))
 
@@ -90,6 +91,7 @@ class RunPodServerlessProvider:
         graph = _workflow.inject(
             self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent
         )
+        out_node = _workflow.apply_output_variant(graph, self.output_node, self.output_variant)
         # The worker is Linux; a Windows-authored graph may carry backslash model
         # paths (e.g. nested LoRA folders) that won't resolve there.
         _workflow.normalize_model_paths(graph)

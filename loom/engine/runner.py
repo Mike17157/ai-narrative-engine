@@ -18,7 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
-from ..config.schema import Character, Scenario, Settings, Step
+from ..config.schema import Character, Settings, Step
 from ..providers import ImageProvider, TextProvider, build_provider
 from ..providers.base import ImageResult, TextResult
 from .context import is_truthy, render
@@ -89,29 +89,17 @@ class Runner:
         chat step (role != 'image_prompt') — the user's standing instructions for
         the chat model, layered on top of the character's own system."""
         pipeline = self.settings.pipelines[pipeline_name]
-        scen_obj: Scenario | None = self.settings.scenarios.get(scenario) if scenario else None
-        # The focal character: an explicit one wins; otherwise the scenario's
-        # primary cast member (then its first), so picking a scenario is enough.
-        if character is None and scen_obj and scen_obj.cast:
-            primary = next((m for m in scen_obj.cast if m.primary), scen_obj.cast[0])
-            character = primary.character
         char_obj: Character | None = self.settings.characters.get(character) if character else None
 
         # Always provide full character + scenario shapes (empty when none is
         # selected) so templates like `{{ character.system }}` / `{{ scenario.setting }}`
-        # never hit a missing key under strict templating. `cast` resolves each
-        # member's character object so a pipeline can address the whole ensemble.
-        cast = []
-        if scen_obj:
-            for m in scen_obj.cast:
-                mc = self.settings.characters.get(m.character)
-                cast.append({**m.model_dump(), "name": mc.name if mc else m.character,
-                             "system": mc.system if mc else "",
-                             "fields": mc.fields if mc else {}})
+        # never hit a missing key under strict templating. The `scenario` param is
+        # retained for CLI back-compat but is no longer wired to any entity.
         context: dict[str, Any] = {
             "user_message": user_message,
             "character": (char_obj or Character(name="")).model_dump(),
-            "scenario": {**(scen_obj or Scenario(name="")).model_dump(), "cast": cast},
+            "scenario": {"name": "", "setting": "", "openings": [], "lorebook": {},
+                         "cast": [], "background": None, "fields": {}},
         }
 
         result = RunResult(pipeline=pipeline_name)

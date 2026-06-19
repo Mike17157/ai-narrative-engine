@@ -9,7 +9,10 @@
     index = 0,
     board = {},       // full board context passed to regen API
     charKey = '',
+    storyKey = '',    // for per-location background generation
+    locations = [],   // story locations — resolve this chapter's scene
     onSave = null,    // callback(updatedChapter)
+    onBgPicked = null,// callback() after a background is selected (so cards refresh)
     onClose = null,   // callback when dismissed
   } = $props();
 
@@ -40,6 +43,33 @@
       scenePrompt   = chapter.scene_prompt  || '';
     }
   });
+
+  // ── Scene background (per location, shared by chapters in that place) ──────
+  let bgBusy   = $state(false);
+  let bgCands  = $state([]);
+  let bgErr    = $state(null);
+  const N_BG = 4;
+  // Resolve the chapter's location (by id or name) to a location object.
+  let locObj = $derived(
+    (locations || []).find((l) => l.id === location
+      || (l.name || '').toLowerCase() === (location || '').toLowerCase()) || null
+  );
+
+  async function genBg() {
+    if (!locObj || !storyKey || bgBusy) return;
+    bgBusy = true; bgErr = null; bgCands = [];
+    for (let i = 0; i < N_BG; i++) {
+      const r = await post(`/stories/${storyKey}/locations/${locObj.id}/background/candidate`, { image_model: 'scene' });
+      if (r.data?.image) bgCands = [...bgCands, r.data.image];
+      else { bgErr = r.data?.error || 'render failed'; break; }
+    }
+    bgBusy = false;
+  }
+  async function useBg(dataUri) {
+    if (!locObj) return;
+    const r = await post(`/stories/${storyKey}/locations/${locObj.id}/background/select`, { data: dataUri });
+    if (r.data?.url) { locObj.background = r.data.url; bgCands = []; onBgPicked?.(); }
+  }
 
   function close() { onClose?.(); }
 
@@ -197,6 +227,34 @@
         </div>
       </div>
 
+      <!-- Scene background — per location, shows on every card in that place -->
+      {#if locObj}
+        <div class="bg-section">
+          <label class="fl">Scene background <span class="lo">— for "{locObj.name}", shared by every chapter set here</span></label>
+          {#if locObj.background && !bgCands.length}
+            <img class="bg-current" src={locObj.background} alt={locObj.name} />
+          {/if}
+          <div class="bg-acts">
+            <button class="regen-btn" onclick={genBg} disabled={bgBusy}>
+              {bgBusy ? `Rendering ${bgCands.length}/${N_BG}…` : (locObj.background ? '↻ New options' : `🖼 Generate background`)}
+            </button>
+          </div>
+          {#if bgErr}<div class="err">⚠ {bgErr}</div>{/if}
+          {#if bgCands.length}
+            <div class="bg-cands">
+              {#each bgCands as img, i (i)}
+                <div class="bg-cand">
+                  <img src={img} alt={`option ${i + 1}`} />
+                  <button class="use" onclick={() => useBg(img)}>Use</button>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        </div>
+      {:else if location}
+        <div class="bg-note">No matching location "<b>{location}</b>" — add it in Story settings to generate a background.</div>
+      {/if}
+
       <!-- Regen instruction + stream preview -->
       <div class="regen-section">
         <label class="fl">Regeneration instruction <span class="lo">(optional)</span></label>
@@ -341,6 +399,17 @@
   .ta { line-height: 1.5; resize: vertical; }
 
   .regen-section { display: flex; flex-direction: column; gap: 8px; }
+
+  /* Scene background */
+  .bg-section { display: flex; flex-direction: column; gap: 8px; }
+  .bg-current { width: 100%; max-height: 200px; object-fit: cover; border-radius: 9px; border: 1px solid var(--border); }
+  .bg-acts { display: flex; gap: 8px; }
+  .bg-cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
+  .bg-cand { display: flex; flex-direction: column; gap: 4px; }
+  .bg-cand img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
+  .bg-cand .use { font-size: 11px; padding: 4px 6px; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .bg-cand .use:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .bg-note { font-size: 12px; color: var(--faint); border: 1px dashed var(--border); border-radius: 8px; padding: 8px 11px; }
 
   /* Stream viewer */
   .stream {

@@ -1,208 +1,110 @@
 <script>
+  // Settings ▸ Models. The single authority for "which model do we use":
+  //   · the active chat model + its global system prompt (reads the active text connection)
+  //   · the active image workflow (reads the active image connection)
+  // Each section links to Connections (credentials) when no connection is set.
+  // Per-role image overrides for story generation live in Generation, not here.
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
-  import { app, refreshAll, refreshModels, setActiveImage } from '$lib/app.svelte.js';
+  import { app, refreshAll, setActiveImage } from '$lib/app.svelte.js';
   import Combobox from '$lib/components/Combobox.svelte';
 
-  // ── Language API connection ────────────────────────────────────────────────
-  let providers = $state([]);
-  let provider = $state('');
-  let baseUrl = $state('');
-  let apiKey = $state('');
-  let connecting = $state(false);
-  let connStatus = $state(null);
-  let touchedProvider = $state(false);
-
-  let providerItems = $derived(providers.map(p => ({ value: p.id, label: p.label })));
-  let curProvider = $derived(providers.find(p => p.id === provider));
-  let baseEditable = $derived(curProvider?.base_url_editable ?? false);
-  let needsKey = $derived(curProvider?.needs_key ?? true);
-  let canConnect = $derived(!connecting && (!needsKey || apiKey));
-
-  $effect(() => { if (curProvider && touchedProvider) baseUrl = curProvider.default_base_url || ''; });
-
-  // ── Chat model + system prompt ─────────────────────────────────────────────
-  let modelItems = $state([]);
-  let chatActive = $state('');
+  // ── Chat model ──
+  let chat = $state({ models: [], active: null, connected: false });
   let chatMsg = $state(null);
-  let chatSys = $state({ system: '' });
-  let chatSysLoaded = $state(false);
-  let chatSysMsg = $state(null);
-  let chatSysTimer;
 
-  // ── Image workflow ─────────────────────────────────────────────────────────
-  const famCap = (f) => f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : 'Other';
-  let imageItems = $derived((app.models.image || []).map(m => ({ value: m.key, label: m.key, group: famCap(m.family) })));
+  // ── Chat system prompt (chatgen.json) ──
+  let sys = $state({ system: '' });
+  let sysLoaded = $state(false);
+  let sysMsg = $state(null);
+  let sysTimer;
+
+  // ── Image workflow ──
+  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : 'Other');
+  let imageItems = $derived((app.models.image || []).map((m) => ({ value: m.key, label: m.key, group: famCap(m.family) })));
+  let imageActive = $derived(app.conns.active?.image);
 
   onMount(async () => {
-    providers = await get('/providers?kind=text');
-
-    const [chat, sys] = await Promise.all([
-      get('/text-models'),
-      get('/chatgen'),
-    ]);
-
-    chatSys = sys; chatSysLoaded = true;
-
-    if (chat.connected) {
-      modelItems = chat.models.map(m => ({ value: m.id, label: m.name }));
-      chatActive = chat.active || '';
-      connStatus = { ok: true, text: `Connected — ${chat.models.length} models` };
-      const conns = await get('/connections');
-      const c = conns.connections.find(c => c.kind === 'text' && c.id === chat.connection);
-      if (c) { provider = c.provider || ''; baseUrl = c.base_url || ''; }
-    } else if (providers[0]) {
-      provider = providers[0].id;
-      baseUrl = providers[0].default_base_url || '';
-    }
-
-    if (!app.models.image?.length) refreshModels();
+    await refreshAll();
+    try { chat = await get('/text-models'); } catch { /* no text connection */ }
+    try { sys = await get('/chatgen'); } catch { /* no chatgen config */ }
+    sysLoaded = true;
   });
 
-  function setProvider(v) { touchedProvider = true; provider = v; }
-
-  async function connect() {
-    connecting = true;
-    connStatus = { ok: false, text: 'Connecting…' };
-    const r = await post('/connections/test', { kind: 'text', provider, api_key: apiKey, base_url: baseUrl });
-    connecting = false;
-    if (!r.ok) { connStatus = { ok: false, text: '✗ ' + (r.data?.error || 'failed') }; return; }
-    await post('/connections', { id: provider, provider, api_key: apiKey, base_url: baseUrl, model: '', kind: 'text' });
-    apiKey = '';
-    modelItems = r.data.models.map(m => ({ value: m.id, label: m.name }));
-    connStatus = { ok: true, text: `Connected — ${r.data.count} models` };
-    await refreshAll();
-  }
+  let chatItems = $derived((chat.models || []).map((m) => ({ value: m.id, label: m.name })));
 
   async function pickChatModel(model) {
-    chatMsg = { text: '…' };
+    chatMsg = { text: 'Setting…' };
     const r = await post('/text/model', { model });
-    if (r.data?.ok) { chatActive = model; chatMsg = { ok: true, text: '✓' }; await refreshAll(); }
+    if (r.data?.ok) { chat.active = model; chatMsg = { ok: true, text: '✓ ' + model }; await refreshAll(); }
     else chatMsg = { err: true, text: r.data?.error || 'failed' };
   }
 
+  // Debounced autosave of the global chat system prompt.
   $effect(() => {
-    const snap = JSON.stringify($state.snapshot(chatSys));
-    if (!chatSysLoaded) return;
-    clearTimeout(chatSysTimer);
-    chatSysMsg = { text: 'saving…' };
-    chatSysTimer = setTimeout(async () => {
+    const snap = JSON.stringify($state.snapshot(sys));
+    if (!sysLoaded) return;
+    clearTimeout(sysTimer);
+    sysMsg = { text: 'saving…' };
+    sysTimer = setTimeout(async () => {
       const r = await post('/chatgen', JSON.parse(snap));
-      chatSysMsg = r.data?.ok ? { ok: true, text: '✓ saved' } : { err: true, text: 'failed' };
+      sysMsg = r.data?.ok ? { ok: true, text: '✓ saved' } : { err: true, text: 'save failed' };
     }, 500);
   });
 </script>
 
-<div class="pane">
+<div class="screen">
 
-  <!-- ── Language API ─────────────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="section-head">
-      <span class="section-title">Language API</span>
-      {#if connStatus}
-        <span class="conn-pill" class:ok={connStatus.ok} class:err={!connStatus.ok}>{connStatus.text}</span>
-      {/if}
+  <!-- ── Chat model ────────────────────────────────────────────────────────── -->
+  <section class="card">
+    <div class="card-head">
+      <h3>Chat model</h3>
+      {#if chatMsg}<span class="status-lbl" class:ok={chatMsg.ok} class:err={chatMsg.err}>{chatMsg.text}</span>{/if}
     </div>
-    <div class="api-form">
-      <div class="fld">
-        <label>Provider</label>
-        <Combobox items={providerItems} value={provider} placeholder="Provider…" onpick={setProvider} />
-      </div>
-      {#if baseEditable}
-        <div class="fld">
-          <label>Base URL</label>
-          <input bind:value={baseUrl} placeholder="http://localhost:11434" />
-        </div>
-      {/if}
-      {#if needsKey}
-        <div class="fld">
-          <label>API key</label>
-          <input type="password" bind:value={apiKey} placeholder="sk-…" autocomplete="off" />
-        </div>
-      {/if}
-      <div class="fld-btn">
-        <button onclick={connect} disabled={!canConnect}>{connecting ? 'Connecting…' : 'Connect'}</button>
-      </div>
-    </div>
-  </div>
-
-  <hr />
-
-  <!-- ── Chat model ───────────────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="section-head">
-      <span class="section-title">Chat model</span>
-      {#if chatMsg}<span class="smsg" class:ok={chatMsg.ok} class:err={chatMsg.err}>{chatMsg.text}</span>{/if}
-    </div>
-    {#if modelItems.length}
-      <Combobox items={modelItems} value={chatActive} placeholder="select model…" onpick={pickChatModel} />
+    {#if chat.connected}
+      <p class="hint">The model used for chat, story generation, and all text work. {(chat.models || []).length} available from your connection.</p>
+      <label>Active model</label>
+      <Combobox items={chatItems} value={chat.active} placeholder="search models…" onpick={pickChatModel} />
     {:else}
-      <p class="hint dim">Connect a provider above to pick a model.</p>
+      <p class="hint">No language connection yet — <a href="/settings/connections">set one up in Connections</a>.</p>
     {/if}
-    <div class="sub-head">
-      System prompt
-      {#if chatSysMsg}<span class="smsg" class:ok={chatSysMsg.ok} class:err={chatSysMsg.err}>{chatSysMsg.text}</span>{/if}
-    </div>
-    <textarea bind:value={chatSys.system} placeholder="Standing instructions layered on top of the character's own…"></textarea>
-  </div>
 
-  <hr />
+    <label style="margin-top:16px">System prompt</label>
+    <p class="hint">Standing instructions for the chat model — applied on top of the selected character's own. Leave blank to let the character govern entirely. Saves automatically.</p>
+    <textarea bind:value={sys.system} disabled={!sysLoaded}
+      placeholder="e.g. Always write in third person, present tense. Keep replies under 200 words…"></textarea>
+    {#if sysMsg}<div class="status-lbl" class:ok={sysMsg.ok} class:err={sysMsg.err}>{sysMsg.text}</div>{/if}
+  </section>
 
-  <!-- ── Image workflow ───────────────────────────────────────────────────── -->
-  <div class="section">
-    <div class="section-head">
-      <span class="section-title">Image workflow</span>
+  <!-- ── Image workflow ────────────────────────────────────────────────────── -->
+  <section class="card">
+    <div class="card-head">
+      <h3>Image workflow</h3>
     </div>
-    {#if imageItems.length}
-      <Combobox items={imageItems} value={app.activeImage} placeholder="ComfyUI workflow…" onpick={setActiveImage} />
+    {#if imageActive}
+      <p class="hint">The image workflow used to render pictures in chat &amp; stories. {imageItems.length} available — edit individual workflows in the <a href="/images/graph">Images ▸ Graph</a> section.</p>
+      <label>Active workflow</label>
+      {#if imageItems.length}
+        <Combobox items={imageItems} value={app.activeImage} placeholder="workflow…" onpick={(v) => setActiveImage(v)} />
+      {:else}
+        <p class="hint">Connected, but no workflows found. Manage the model tree in <a href="/images/models">Images ▸ Models</a>.</p>
+      {/if}
     {:else}
-      <p class="hint dim">No workflows available — connect ComfyUI in <a href="/settings/system">System settings</a>.</p>
+      <p class="hint">No image connection yet — <a href="/settings/connections">connect ComfyUI in Connections</a>.</p>
     {/if}
-  </div>
+  </section>
 
 </div>
 
 <style>
-  .pane {
-    flex: 1; min-height: 0; overflow: auto;
-    background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--radius-lg);
-    margin: 18px 20px 18px 4px;
-    display: flex; flex-direction: column;
-  }
-
-  .section { padding: 18px 22px; display: flex; flex-direction: column; }
-  textarea { flex: 1; min-height: 120px; resize: vertical; width: 100%; font-size: 13px; }
-
-  hr { border: none; border-top: 1px solid var(--border-soft); margin: 0; flex: none; }
-
-  .section-head {
-    display: flex; align-items: center; gap: 10px; margin-bottom: 12px; flex-wrap: wrap;
-  }
-  .section-title { font-size: 13px; font-weight: 660; color: var(--text); }
-
-  .sub-head {
-    font-size: 12px; color: var(--muted); margin: 14px 0 6px;
-    display: flex; align-items: center; gap: 8px;
-  }
-
-  .api-form { display: flex; flex-direction: column; gap: 10px; max-width: 460px; }
-  .fld { display: flex; flex-direction: column; gap: 4px; }
-  .fld-btn { margin-top: 2px; }
-
-  label { font-size: 12px; color: var(--muted); display: block; }
-  input:not([type='checkbox']) { width: 100%; }
-
-  .conn-pill {
-    font-size: 12px; border-radius: 999px; padding: 2px 10px; margin-left: auto; font-weight: 500;
-  }
-  .conn-pill.ok { background: rgba(87, 217, 163, .12); color: var(--good); }
-  .conn-pill.err { background: rgba(255, 100, 100, .12); color: var(--bad); }
-
-  .smsg { font-size: 12px; }
-  .smsg.ok { color: var(--good); }
-  .smsg.err { color: var(--bad); }
-
-  .hint { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 0 0 8px; }
-  .hint.dim { opacity: .6; }
+  .screen { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 16px; padding: 18px 20px 18px 4px; }
+  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--radius-lg); padding: 20px 22px; display: flex; flex-direction: column; }
+  .card-head { display: flex; align-items: center; gap: 9px; padding-bottom: 14px; border-bottom: 1px solid var(--border-soft); margin-bottom: 14px; }
+  h3 { margin: 0; font-size: 14px; font-weight: 660; color: var(--text); }
+  .status-lbl { font-size: 12px; color: var(--muted); margin-left: auto; }
+  .status-lbl.ok { color: var(--good); } .status-lbl.err { color: var(--bad); }
+  label { display: block; font-size: 12px; font-weight: 600; color: var(--muted); margin: 0 0 6px; }
+  textarea { width: 100%; resize: vertical; min-height: 130px; font-size: 13px; margin-top: 6px; }
+  .hint { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 0 0 12px; }
   .hint a { color: var(--accent); }
 </style>

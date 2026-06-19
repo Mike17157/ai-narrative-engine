@@ -1,6 +1,7 @@
 <script>
-  // Settings shell. The folder tree is rendered by the root layout's TreeNav;
-  // this layout just passes children through.
+  // Settings shell. The subnav (System / Connections / Models / Story-gen) is
+  // rendered by the root layout's horizontal bar from settingsTree()
+  // (lib/nav.svelte.js); this layout just passes children through.
   let { children } = $props();
 </script>
 

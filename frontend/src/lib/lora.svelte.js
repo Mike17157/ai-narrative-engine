@@ -1,7 +1,7 @@
 // Shared state for the LoRA generation pipeline (the prompt-set builder + the
-// live batch grid). Owned by the Library page, consumed by PromptSet and
+// live batch grid). Owned by the Training section, consumed by PromptSet and
 // GenerateCard. The batch + streaming grid survive navigating away because the
-// job is server-resident and the page reattaches on mount.
+// job is server-resident and the Training layout reattaches on mount.
 import { get, post } from './api.js';
 import { app } from './app.svelte.js';
 

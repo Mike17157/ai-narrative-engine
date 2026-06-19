@@ -17,7 +17,6 @@ from fastapi.responses import HTMLResponse
 
 from ..comfy.server import ComfyServer, LaunchConfig, detect_desktop_install, register_server
 from ..config import load_settings, load_user
-from ..config.migrate import split_cards_to_scenarios
 from ..connections import ConnectionStore
 
 from .context import AppContext
@@ -30,7 +29,6 @@ from .routers import (
     lora,
     models_conn,
     personas,
-    scenarios,
     server,
     tags,
     trainer,
@@ -77,7 +75,6 @@ def _register_comfy(user, root: Path) -> str:
 _ROUTERS = (
     server,
     characters,
-    scenarios,
     stories,
     tags,
     models_conn,
@@ -121,9 +118,6 @@ def build_context(root: str | Path = ".") -> AppContext:
     headless jobs can drive the same generation logic the routes use."""
     root = Path(root)
     _load_dotenv(root)
-    # Split any bundled character cards into clean Character + default Scenario
-    # before loading (idempotent — no-op once everything is migrated).
-    split_cards_to_scenarios(root)
     user = load_user(root)
     return AppContext(
         root=root,

@@ -24,7 +24,7 @@
   let path = $derived($page.url.pathname);
   let search = $derived($page.url.search || '');
   let section = $derived(path.split('/')[1] || '');
-  let tree = $derived(new Set(['characters', 'stories', 'images']).has(section) ? treeFor(section, path) : []);
+  let tree = $derived(new Set(['characters', 'stories', 'images', 'training', 'settings']).has(section) ? treeFor(section, path) : []);
   let activeHref = $derived(path + search);
 
   let comfyUp = $derived(app.health?.comfyui?.up);
@@ -44,6 +44,8 @@
     { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
     { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories' },
     { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/graph' },
+    { id: 'training',   label: 'Training',   icon: '🎓', href: '/training' },
+    { id: 'settings',   label: 'Settings',   icon: '⚙',  href: '/settings/system' },
   ];
 
   const isActive = (id) => path === `/${id}` || path.startsWith(`/${id}/`);

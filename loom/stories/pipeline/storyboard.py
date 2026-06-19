@@ -1,4 +1,4 @@
-"""Step 01 — Storyboard: generate and parse the chapter outline."""
+"""Storyboard: generate and parse the chapter outline (streaming, no structured output)."""
 
 from __future__ import annotations
 
@@ -8,14 +8,8 @@ from ._helpers import _card_context, _sys
 
 
 def storyboard_inputs(*, name: str, persona: str, extras: dict | None = None,
-                      systems: dict | None = None,
-                      premise: str = "") -> tuple[str, str]:
-    """(system, prompt) for the storyboard stage. Plain text (no structured output)
-    so it can be streamed token-by-token and watched live.
-
-    If `premise` is provided it is injected as a starting-point directive so the model
-    steers toward a concept the user has already sketched (e.g. via the workshop endpoint).
-    """
+                      systems: dict | None = None, premise: str = "") -> tuple[str, str]:
+    """(system, prompt) for the storyboard stage. Streamed token-by-token."""
     card = _card_context(name, persona, extras or {})
     if premise:
         user_prompt = (
@@ -32,7 +26,6 @@ _BEAT_RE = re.compile(r"^\s*\d+[.)]\s*(.*\S)\s*$")
 
 
 def _strip_label(value: str, label: str) -> str:
-    """Strip a known field label prefix (e.g. 'Narrative: ') if present."""
     low = value.lower()
     prefix = label.lower() + ":"
     if low.startswith(prefix):
@@ -41,12 +34,11 @@ def _strip_label(value: str, label: str) -> str:
 
 
 def parse_storyboard(text: str) -> dict:
-    """Parse the streamed HEART/LOGLINE/PREMISE/TONE/THEMES/CHAPTERS format into a board.
+    """Parse HEART/LOGLINE/PREMISE/TONE/THEMES/CHAPTERS text into a board dict.
 
-    Supports both the new 7-field chapter format:
+    Supports the 7-field chapter format:
       Title | Narrative: ... | Emotional: ... | Hook: ... | Location | Chars | Scene: ...
-    and the legacy 4-field format for backward compatibility:
-      Title | Summary | Location | Chars
+    and the legacy 4-field format for backward compatibility.
     """
     heart = logline = premise = tone = ""
     themes: list[str] = []
@@ -74,8 +66,6 @@ def parse_storyboard(text: str) -> dict:
                 continue
             parts = [p.strip() for p in m.group(1).split("|")]
             if len(parts) >= 7:
-                # New 7-field format: Title | Narrative: ... | Emotional: ... | Hook: ... |
-                #                     Location | Characters | Scene: ...
                 title = parts[0]
                 summary = _strip_label(parts[1], "Narrative")
                 emotional_core = _strip_label(parts[2], "Emotional")
@@ -90,13 +80,11 @@ def parse_storyboard(text: str) -> dict:
                     "scene_prompt": scene_prompt,
                 })
             elif len(parts) >= 4:
-                # Legacy 4-field format: Title | Summary | Location | Characters
                 title, summary, location = parts[0], parts[1], parts[2]
                 chars = [c.strip() for c in parts[3].split(",")]
                 beats.append({"title": title, "summary": summary, "location": location,
                               "characters": [c for c in chars if c]})
             else:
-                # Minimal fallback
                 title = ""
                 summary = parts[0] if parts else ""
                 location = parts[1] if len(parts) > 1 else ""

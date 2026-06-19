@@ -74,52 +74,17 @@
   let path = $derived($page.url.pathname);
 
   onMount(() => { loadChoices(); loadChars(); });
+
   let loadedFor = $state(null);
   $effect(() => {
     const key = app.activeImage;
     if (key && key !== loadedFor) { loadedFor = key; loadWorkflow(); }
   });
-
-  // --- header Data dropdown ---
-  let dataOpen = $state(false);
-  let dataEl;
-
-  $effect(() => {
-    if (!dataOpen) return;
-    const handler = (e) => { if (dataEl && !dataEl.contains(e.target)) dataOpen = false; };
-    const t = setTimeout(() => document.addEventListener('mousedown', handler), 0);
-    return () => { clearTimeout(t); document.removeEventListener('mousedown', handler); };
-  });
-
-  const DATA_LINKS = [
-    { href: '/images/models', label: 'Models' },
-    { href: '/images/poses',  label: 'Poses'  }
-  ];
-
-  const isData = $derived(path.startsWith('/images/models') || path.startsWith('/images/poses'));
 </script>
 
-<!-- Images section header nav -->
-<header class="imghead">
-  <a href="/images/graph" class="hbtn" class:on={path === '/images/graph'}>Graph</a>
-  <a href="/images/lora/library" class="hbtn" class:on={path.startsWith('/images/lora')}>LoRA</a>
-  <div class="datawrap" bind:this={dataEl}>
-    <button class="hbtn drop" class:on={isData} onclick={(e) => { e.stopPropagation(); dataOpen = !dataOpen; }}>
-      Data <span class="arr" class:up={dataOpen}>▾</span>
-    </button>
-    {#if dataOpen}
-      <div class="datasub" role="menu">
-        {#each DATA_LINKS as l (l.href)}
-          <a href={l.href} class="subitem" class:on={path === l.href} role="menuitem"
-             onclick={() => (dataOpen = false)}>{l.label}</a>
-        {/each}
-      </div>
-    {/if}
-  </div>
-  <a href="/settings/connections/image" class="hbtn"
-     class:on={path.startsWith('/settings/connections/image')}>Connection</a>
-</header>
-
+<!-- Images section: the Graph / LoRA / Models / Poses / Connection subnav is now
+     rendered by the root layout from imagesTree() (lib/nav.svelte.js). This
+     layout just wraps the content and hosts the shared test-render modal. -->
 <div class="page">
   <div class="col" class:full={path === '/images/graph'}>
     {#if img.msg}<div class="status" class:ok={img.msg.ok} class:err={img.msg.err}>{img.msg.text}</div>{/if}
@@ -250,47 +215,6 @@
 {/if}
 
 <style>
-  /* ── header nav bar ── */
-  .imghead {
-    flex: none;
-    display: flex; align-items: center; gap: 2px;
-    padding: 6px 10px;
-    background: #13161e;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .hbtn {
-    display: inline-flex; align-items: center; gap: 5px;
-    padding: 5px 14px; border-radius: 7px;
-    font-size: 13px; font-weight: 600;
-    color: var(--muted); background: none; border: none;
-    cursor: pointer; text-decoration: none; line-height: 1;
-    transition: color .12s, background .12s;
-  }
-  .hbtn:hover { color: var(--text); background: var(--elev); }
-  .hbtn.on { color: #fff; background: var(--elev-2); }
-
-  .datawrap { position: relative; }
-  .drop { cursor: pointer; }
-  .arr { font-size: 10px; transition: transform .15s; display: inline-block; }
-  .arr.up { transform: rotate(180deg); }
-
-  .datasub {
-    position: absolute; top: calc(100% + 5px); left: 0; z-index: 40;
-    background: var(--panel); border: 1px solid var(--border);
-    border-radius: 9px; box-shadow: 0 6px 20px rgba(0,0,0,.35);
-    padding: 4px; min-width: 130px;
-    display: flex; flex-direction: column; gap: 1px;
-  }
-  .subitem {
-    display: block; padding: 7px 12px; border-radius: 6px;
-    font-size: 13px; font-weight: 500; color: var(--muted);
-    text-decoration: none; white-space: nowrap;
-    transition: color .1s, background .1s;
-  }
-  .subitem:hover { color: var(--text); background: var(--elev); }
-  .subitem.on { color: #fff; background: var(--elev-2); }
-
   /* ── content area ── */
   .page { flex: 1; min-height: 0; overflow: auto; }
   .col { max-width: 900px; margin: 0 auto; padding: 20px 24px; }

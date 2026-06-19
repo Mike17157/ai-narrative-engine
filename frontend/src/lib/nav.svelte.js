@@ -1,8 +1,8 @@
-// Per-section folder-tree definitions for TreeNav. Each function returns a plain
-// node tree ([{ id, label, href, icon?, disabled?, children?, match? }]) built
-// from current store state, so counts stay live. No callbacks — TreeNav renders
-// leaves as <a href>, navigation is native. ONE nav model for every section;
-// no in-page menu fragments anywhere.
+// Per-section folder-tree definitions for the subnav. Each function returns a
+// plain node list ([{ id, label, href, icon?, disabled?, children?, match? }])
+// built from current store state, so counts stay live. ONE nav model for every
+// section; no in-page menu fragments anywhere. The root layout renders these as
+// a horizontal subnav bar (+ dropdowns for nodes with children).
 
 import { chars } from './characters.svelte.js';
 import { stories } from './stories.svelte.js';
@@ -16,19 +16,49 @@ export function charactersTree() {
     { id: 'search', label: `Browse${n ? ` (${n})` : ''}`, href: '/characters/search' },
     { id: 'import', label: 'Import card', href: '/characters/import' },
     { id: 'personas', label: 'Personas', href: '/characters/personas' },
-    { id: 'models', label: 'Models', href: '/settings/models' },
-    { id: 'chat-connection', label: 'Connection', href: '/settings/connections/chat' },
   ];
 }
 
+// Images subnav — the bespoke header that used to live in images/+layout.svelte
+// is gone; everything here renders in the unified subnav bar.
 export function imagesTree() {
-  return [];
+  return [
+    { id: 'graph',       label: 'Graph',      href: '/images/graph' },
+    { id: 'lora',        label: 'LoRA',       href: '/images/lora/library' },
+    { id: 'models',      label: 'Models',     href: '/images/models' },
+    { id: 'poses',       label: 'Poses',      href: '/images/poses' },
+    { id: 'connection',  label: 'Connection', href: '/settings/connections' },
+  ];
+}
+
+// Training subnav — the LoRA-making pipeline (formerly a collapsed <details>
+// inside the LoRA library page), now a first-class section.
+export function trainingTree() {
+  return [
+    { id: 'pipeline',  label: 'Pipeline',  href: '/training' },
+    { id: 'datasets',  label: 'Datasets',  href: '/training/datasets' },
+    { id: 'trainer',   label: 'Trainer',   href: '/training/trainer' },
+  ];
+}
+
+// Settings subnav — organized by concern, not by kind. Connections owns
+// credentials (chat + image); Models owns which model/workflow is active off an
+// active connection; Generation owns story-builder + image-role config.
+// Personas live under Characters.
+export function settingsTree() {
+  return [
+    { id: 'system',      label: 'System',      href: '/settings/system' },
+    { id: 'connections', label: 'Connections', href: '/settings/connections' },
+    { id: 'models',      label: 'Models',      href: '/settings/models' },
+    { id: 'generation',  label: 'Generation',  href: '/settings/story-gen' },
+  ];
 }
 
 // Stories subnav — 3 contextual modes:
 //   Mode A (library): Library · story list · Pipeline
 //   Mode B (wizard):  ← Library · Setup · Storyboard · Scenes · Cast  (step indicators)
-//   Mode C (story):   [Story Name ▾ picker] · Overview · Backgrounds · Cast · Edit · ▶ Play
+//   Mode C (story):   [Story Name ▾ picker] · Story map · Cast · ▶ Play
+//                     (backgrounds + editing now live in the story-map graph)
 export function storiesTree(path = '') {
   const list = stories.list || [];
 
@@ -61,27 +91,26 @@ export function storiesTree(path = '') {
     return [
       { id: 'story-picker', label: active.name || active.key, picker: true,
         children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview` })) },
-      { id: `${key}-overview`,    label: 'Overview',    href: `/stories/${key}/overview` },
-      { id: `${key}-backgrounds`, label: 'Backgrounds', href: `/stories/${key}/backgrounds` },
+      { id: `${key}-overview`,    label: 'Story map',   href: `/stories/${key}/overview` },
       { id: `${key}-cast`,        label: 'Cast',        href: `/stories/${key}/cast` },
-      { id: `${key}-edit`,        label: 'Edit',        href: `/stories/${key}/edit` },
       { id: `${key}-play`,        label: '▶ Play',      href: `/stories/${key}/play` },
     ];
   }
 
-  // Mode A — library
+  // Mode A — library (no story links — the library page is now the management view)
   return [
     { id: 'library', label: 'Library', href: '/stories', match: 'exact' },
-    ...list.map((s) => ({ id: `story-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview` })),
-    { id: 'pipeline', label: 'Pipeline', href: '/settings/story-gen' }
+    { id: 'pipeline', label: 'Generation', href: '/settings/story-gen' },
   ];
 }
 
 export function treeFor(section, path = '') {
   switch (section) {
     case 'characters': return charactersTree();
-    case 'images': return imagesTree();
-    case 'stories': return storiesTree(path);
+    case 'images':     return imagesTree();
+    case 'training':   return trainingTree();
+    case 'settings':   return settingsTree();
+    case 'stories':    return storiesTree(path);
     default: return [];
   }
 }

@@ -8,10 +8,11 @@
 # are independent entries. Swap either without touching the other or any
 # character.
 #
-# The image pipeline is Anima-only (Qwen-Image natural-language DiT). All
-# image workflows load the Anima UNet (node 4) + a separate Qwen CLIP
-# (node 11) + Qwen VAE (node 12). Prompts are natural-language prose (see
-# loom/server/services/prompts.py), injected at node 6.
+# The image pipeline is Anima-only (Qwen-Image natural-language DiT). All three
+# `anima*` entries share ONE central workflow — the flattened Anima All-In-One
+# master graph (workflows/anima_master_api.json) — and differ only by
+# output_variant (full vs cutout). Prompts are natural-language prose (see
+# loom/server/services/prompts.py), injected at the primary CLIPTextEncode.
 models:
   opus:
     provider: anthropic
@@ -31,46 +32,60 @@ models:
       max_tokens: 1024
       thinking: disabled
 
-  # Workflow: Anima (CircleStone 2B anime DiT). Loads a UNet (node 4) + a
-  # separate Qwen CLIP (node 11) + Qwen VAE (node 12), per the model's reference
-  # workflow. Positive prompt injects at node 6; output node 9. Used for SCENES
-  # and chat pictures (full backgrounds kept). Swap the unet_name (node 4) to
-  # anisnuff / hosekiLustrousmixAnima as desired.
+  # --------------------------------------------------------------------------- #
+  # Anima — the ONE central image workflow.
+  #
+  # All three Anima roles below point at the SAME flattened master graph
+  # (workflows/anima_master_api.json — a faithful API-format port of the Anima
+  # All-In-One pipeline: switchable txt2img/img2img, LLLite refine, face/region
+  # detailers, upscale, and an 8-preset LoRA style switcher). They differ ONLY
+  # by `output_variant`, which splices an Inspyrenet background remover after
+  # the render for the cutout roles. See scripts/flatten_anima_allinone.py for
+  # how the master graph is rebuilt from the source UI workflow.
+  #
+  # LoRA routing: the graph applies its preset style stack via `easy
+  # loraStackApply`; Loom's resolved stack (detail + theme + identity + routed
+  # state) chains on top of it through inject_models — so n LoRAs / any combo
+  # route through that single node. Positive prompt injects at node s890__903
+  # (the primary CLIPTextEncode on the output path); output is the Image Saver
+  # (node 775), or the spliced cutout node when output_variant: cutout.
+  # --------------------------------------------------------------------------- #
   anima:
     provider: comfyui
     kind: image
     options:
       base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_basic_api.json
+      workflow: ./workflows/anima_master_api.json
       inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "9"
-      timeout_s: 600          # Anima DiT cold start loads ~6 GB from the volume
+        positive: { node: "s890__903", field: "text" }
+      output_node: "775"        # Image Saver (full pipeline: refine + detail + upscale)
+      output_variant: full      # collect the rendered image as-is (scenes / chat)
+      timeout_s: 900            # full All-In-One pipeline is heavier than the old minimal graph
 
-  # Workflow: Anima CHARACTER cutout — the anima graph + Inspyrenet background
-  # removal (node 201) so the subject is cut from anima's busy, non-uniform
-  # backgrounds (segmentation, not colour-key). Used for the base/sprite roles
-  # so sprites composite cleanly onto scenes.
+  # Same master workflow, output routed through the Inspyrenet background remover
+  # so the subject is segmented out of Anima's busy backgrounds. Used for the
+  # base/sprite roles so cutouts composite cleanly onto scenes.
   anima_cutout:
     provider: comfyui
     kind: image
     options:
       base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_cutout_api.json
+      workflow: ./workflows/anima_master_api.json
       inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "201"      # easy imageRemBg → transparent PNG
-      timeout_s: 600          # Anima DiT cold start loads ~6 GB from the volume
+        positive: { node: "s890__903", field: "text" }
+      output_node: "775"
+      output_variant: cutout    # splices easy imageRemBg after the render → transparent PNG
+      timeout_s: 900
 
-  # Workflow: Anima at a portrait ratio for standalone background plates and
-  # scene/chat renders that want a taller frame.
+  # Portrait-ratio background plates reuse the master workflow at full output.
   anima_background:
     provider: comfyui
     kind: image
     options:
       base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_background_api.json
+      workflow: ./workflows/anima_master_api.json
       inputs:
-        positive: { node: "6", field: "text" }
-      output_node: "9"
-      timeout_s: 600          # Anima DiT cold start loads ~6 GB from the volume
+        positive: { node: "s890__903", field: "text" }
+      output_node: "775"
+      output_variant: full
+      timeout_s: 900
