@@ -5,8 +5,8 @@
            workflowNeedsInit, sweepParams, sweepValues, runSweep, composeTestCells } from '$lib/images.svelte.js';
   import { app } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
-  import ZoomImage from '$lib/components/ZoomImage.svelte';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import ZoomImage from '$lib/components/shared/ZoomImage.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   let { children } = $props();
 
@@ -72,6 +72,8 @@
   }
 
   let path = $derived($page.url.pathname);
+  // Full-bleed pages own their own scroll/layout (graph canvas, LoRA grid tester).
+  let fullBleed = $derived(path === '/images/graph' || path.startsWith('/images/lora'));
 
   onMount(() => { loadChoices(); loadChars(); });
 
@@ -86,7 +88,7 @@
      rendered by the root layout from imagesTree() (lib/nav.svelte.js). This
      layout just wraps the content and hosts the shared test-render modal. -->
 <div class="page">
-  <div class="col" class:full={path === '/images/graph'}>
+  <div class="col" class:full={fullBleed}>
     {#if img.msg}<div class="status" class:ok={img.msg.ok} class:err={img.msg.err}>{img.msg.text}</div>{/if}
     {@render children()}
   </div>

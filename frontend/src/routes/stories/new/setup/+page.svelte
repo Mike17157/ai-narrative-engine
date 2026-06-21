@@ -1,6 +1,6 @@
 <script>
   import { chars } from '$lib/characters.svelte.js';
-  import StoryWizard from '$lib/components/StoryWizard.svelte';
+  import StoryWizard from '$lib/components/story/StoryWizard.svelte';
   let charItems = $derived(chars.list.filter((c) => !c.story).map((c) => ({ value: c.key, label: c.name || c.key })));
 </script>
 

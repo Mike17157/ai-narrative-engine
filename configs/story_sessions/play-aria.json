@@ -1,0 +1,19 @@
+{
+  "id": "play-aria",
+  "character": "",
+  "messages": [],
+  "graph": null,
+  "draft": null,
+  "lorebooks": [],
+  "world_state": {
+    "entities": {},
+    "flags": {},
+    "inventory": [],
+    "location": "ocean-beach-shoreline",
+    "clock": "",
+    "log": [
+      "You are left alone on the beach, observing Kaia sketching from a distance."
+    ],
+    "revision": 1
+  }
+}

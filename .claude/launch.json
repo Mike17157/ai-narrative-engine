@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "loom",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-c", "import uvicorn; from loom.server.app import create_app; uvicorn.run(create_app('.'), host='127.0.0.1', port=8199, log_level='warning')"],
+      "port": 8199
+    }
+  ]
+}

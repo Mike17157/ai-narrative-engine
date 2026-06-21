@@ -21,6 +21,9 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "psutil>=5.9",   # CPU/RAM stats for the Activity panel
     "networkx>=3",   # tag similarity graph (co-occurrence navigation for image prompts)
+    "pydantic-graph>=1.10",   # story pipeline orchestration (consult→extract→expand→revise)
+    "libsql>=0.1",   # Turso/libSQL store for all lorebooks (FTS5 bm25 + native vector retrieval)
+    "fastembed>=0.3",   # local ONNX embeddings (bge-small) for hybrid semantic lorebook retrieval (no torch)
 ]
 
 [project.scripts]

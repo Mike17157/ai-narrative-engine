@@ -4,8 +4,10 @@
   // itself is installed/repaired in Settings → Trainer; this card just trains.
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
+  import { consumeSse } from '$lib/sse.js';
+  import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import { app } from '$lib/app.svelte.js';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   let trainer = $state(null);
   let datasets = $state([]);
@@ -104,26 +106,13 @@
     try {
       const res = await fetch('/api/train/stream');
       if (res.status === 204 || !res.body) { busy = false; return; }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-          buf = buf.slice(i + 2);
-          if (!line) continue;
-          const ev = JSON.parse(line.slice(5).trim());
-          if (ev.type === 'log') {
-            log = [...log.slice(-400), ev.line];
-            queueMicrotask(() => logEl && (logEl.scrollTop = logEl.scrollHeight));
-          } else if (ev.type === 'progress') { step = ev.done; total = ev.total; }
-          else if (ev.type === 'done') { jobStatus = ev.status; artifact = ev.artifact; }
-        }
-      }
+      await consumeSse(res, (ev) => {
+        if (ev.type === 'log') {
+          log = [...log.slice(-400), ev.line];
+          queueMicrotask(() => logEl && (logEl.scrollTop = logEl.scrollHeight));
+        } else if (ev.type === 'progress') { step = ev.done; total = ev.total; }
+        else if (ev.type === 'done') { jobStatus = ev.status; artifact = ev.artifact; }
+      });
     } catch (e) { startMsg = { err: true, text: String(e) }; }
     busy = false; cancelling = false;
   }
@@ -214,7 +203,7 @@
 {#if busy || log.length}
   <div class="run">
     <div class="prow">
-      <div class="bar" class:indet={pct === null}><span style={pct !== null ? `width:${pct}%` : ''}></span></div>
+      <ProgressBar value={pct} max={100} height="9px" />
       <div class="pmeta">{pct !== null ? `${pct}% · step ${step}/${total}` : (busy ? 'working…' : '')}</div>
     </div>
     <pre class="log" bind:this={logEl}>{log.join('\n')}</pre>
@@ -247,10 +236,6 @@
 
   .run { margin-top: 16px; }
   .prow { margin-bottom: 8px; }
-  .bar { height: 9px; border-radius: 999px; background: var(--elev); overflow: hidden; border: 1px solid var(--border); }
-  .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #9a6dff); transition: width .3s; }
-  .bar.indet span { width: 30%; animation: slide 1.1s ease-in-out infinite; }
-  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
   .pmeta { margin-top: 6px; font-size: 12px; color: var(--muted); }
   .log {
     height: 280px; overflow: auto; background: #0b0e14; border: 1px solid var(--border);

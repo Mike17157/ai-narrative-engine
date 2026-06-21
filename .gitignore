@@ -37,6 +37,9 @@ Loom.runtimeconfig.json
 danbooru_character.csv
 loom/data/
 
+# Local model weights (GGUF) — large binaries, never tracked
+*.gguf
+
 # Third-party trainer clone
 trainer/
 

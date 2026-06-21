@@ -158,27 +158,95 @@ def generate_character(
     typer.secho(f"OK — {out.get('name')}: base + 1 outfit + {out.get('sprites', 0)} sprites", fg=typer.colors.GREEN)
 
 
+def _resolve_dev(dev_flag: bool | None, root: Path) -> bool:
+    """Decide whether to launch in dev mode. Dev is the DEFAULT; opt out with --prod,
+    LOOM_MODE=prod, or LOOM_DEV=0. The explicit --dev/--prod flag always wins."""
+    import os
+
+    from .server.app import _load_dotenv
+
+    if dev_flag is not None:
+        return dev_flag
+    _load_dotenv(root)   # so the mode can live in .env alongside the other settings
+    mode = os.environ.get("LOOM_MODE", "").strip().lower()
+    if mode in ("prod", "production"):
+        return False
+    if mode in ("dev", "development"):
+        return True
+    if os.environ.get("LOOM_DEV", "").strip().lower() in ("0", "false", "no", "off"):
+        return False
+    return True   # dev by default
+
+
 @app.command()
 def serve(
     host: str = typer.Option("127.0.0.1", "--host"),
     port: int = typer.Option(8000, "--port"),
     open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the browser on start."),
     root: Path = typer.Option(Path("."), "--root"),
+    reload: bool = typer.Option(False, "--reload", help="Auto-restart the backend on code changes (dev)."),
+    dev: bool = typer.Option(None, "--dev/--prod",
+        help="Dev mode (DEFAULT) serves the live Vite dev server (hot reload — no rebuild) and "
+             "points the browser at it. Opt out with --prod, LOOM_MODE=prod, or LOOM_DEV=0."),
 ):
-    """Run the Loom web app and open it in your browser."""
+    """Run the Loom web app and open it in your browser.
+
+    **Dev is the default**: the CLI starts Vite (``npm run dev`` on :5173, which proxies /api
+    back here) so frontend edits hot-reload with no rebuild, and the backend auto-reloads too;
+    the browser opens the Vite URL. Use **--prod** (or LOOM_MODE=prod / LOOM_DEV=0) to instead
+    serve the prebuilt SPA in ``frontend/build`` on ``--port`` (needs ``npm run build``)."""
+    import os
+    import subprocess
     import threading
     import webbrowser
 
     import uvicorn
 
-    from .server import create_app
+    dev = _resolve_dev(dev, root)
+    front_port = 5173
+    vite = None
 
-    application = create_app(root)
-    url = f"http://{host}:{port}"
-    typer.secho(f"Loom running at {url}", fg=typer.colors.GREEN)
+    if dev:
+        reload = True   # hot-reload the backend as well
+        frontend = (root / "frontend").resolve()
+        browse_url = f"http://{host}:{front_port}"
+        typer.secho(f"Loom (dev) — UI http://{host}:{front_port} (Vite HMR) · API http://{host}:{port}",
+                    fg=typer.colors.GREEN)
+        try:
+            # shell=True so Windows resolves npm.cmd; Vite logs stream to this console.
+            vite = subprocess.Popen("npm run dev", cwd=str(frontend), shell=True)
+        except OSError as exc:
+            typer.secho(f"Could not start Vite ({exc}); is Node/npm installed and `npm install` run?",
+                        fg=typer.colors.RED)
+    else:
+        browse_url = f"http://{host}:{port}"
+        typer.secho(f"Loom running at {browse_url}" + (" (reload)" if reload else ""), fg=typer.colors.GREEN)
+
     if open_browser:
-        threading.Timer(1.5, lambda: webbrowser.open(url)).start()
-    uvicorn.run(application, host=host, port=port, log_level="info")
+        # Give Vite a beat to boot before opening the page in dev.
+        threading.Timer(3.5 if dev else 1.5, lambda: webbrowser.open(browse_url)).start()
+
+    try:
+        if reload:
+            # Reload needs an import string + factory so each restart re-imports the app.
+            # Watch only the package source; LOOM_ROOT carries --root into the factory.
+            os.environ["LOOM_ROOT"] = str(root)
+            uvicorn.run("loom.server.app:dev_app", factory=True, host=host, port=port,
+                        reload=True, reload_dirs=[str(Path(__file__).resolve().parent)], log_level="info")
+        else:
+            from .server import create_app
+            uvicorn.run(create_app(root), host=host, port=port, log_level="info")
+    finally:
+        if vite is not None:
+            # Tear down the whole Vite process tree (shell=True means node is a child of cmd).
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(vite.pid)],
+                                   capture_output=True)
+                else:
+                    vite.terminate()
+            except Exception:
+                pass
 
 
 @comfy_app.command("status")

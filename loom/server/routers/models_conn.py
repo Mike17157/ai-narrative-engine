@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from ...connections import Connection, list_providers, ping_comfyui, test_connection
-from ..context import IMAGE_ROLES, _ROLE_LABELS
+from ..context import IMAGE_ROLES, _ROLE_LABELS, _parse_role_entry
 from ..services import config_files
 
 
@@ -67,7 +67,7 @@ def register(app, ctx):
         return {
             "roles": IMAGE_ROLES,
             "labels": _ROLE_LABELS,
-            "config": {r: (cfg.get(r) or "") for r in IMAGE_ROLES},     # saved overrides ('' = unset)
+            "config": {r: (_parse_role_entry(cfg.get(r))[0] or "") for r in IMAGE_ROLES},  # model key only
             "effective": {r: ctx.role_model(r) for r in IMAGE_ROLES},   # what runs today
             "default": {r: ctx.role_default(r) for r in IMAGE_ROLES},   # fallback when unset
             "models": [k for k, m in ctx.base_settings.models.items() if m.kind == "image"],
@@ -93,12 +93,17 @@ def register(app, ctx):
             if key and (key not in ctx.base_settings.models or ctx.base_settings.models[key].kind != "image"):
                 return JSONResponse({"error": f"'{key}' is not an image workflow"}, status_code=400)
             if key:
-                cfg[role] = key
+                # Preserve extra opts (e.g. output_variant) already on the role entry.
+                existing = cfg.get(role)
+                if isinstance(existing, dict):
+                    cfg[role] = {**existing, "model": key}
+                else:
+                    cfg[role] = key
             else:
                 cfg.pop(role, None)                       # empty → unset (back to default)
         path = ctx.root / "configs" / "image_roles.json"
         path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"ok": True, "config": {r: (cfg.get(r) or "") for r in IMAGE_ROLES},
+        return {"ok": True, "config": {r: (_parse_role_entry(cfg.get(r))[0] or "") for r in IMAGE_ROLES},
                 "effective": {r: ctx.role_model(r) for r in IMAGE_ROLES}}
 
     # -- connections ------------------------------------------------------
@@ -176,6 +181,18 @@ def register(app, ctx):
     def save_chatgen(body: dict):
         cfg = {**config_files.CHATGEN_DEFAULT, **(body or {})}
         path = ctx.root / "configs" / "chatgen.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
+        return {"ok": True}
+
+    @app.get("/api/promptgen")
+    def get_promptgen() -> dict:
+        return config_files.load_promptgen(ctx.root)
+
+    @app.post("/api/promptgen")
+    def save_promptgen(body: dict):
+        cfg = {**config_files.PROMPTGEN_DEFAULT, **(body or {})}
+        path = ctx.root / "configs" / "promptgen.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(cfg, indent=2), encoding="utf-8")
         return {"ok": True}

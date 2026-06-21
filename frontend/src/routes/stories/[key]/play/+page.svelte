@@ -1,6 +1,6 @@
 <script>
   import { stories } from '$lib/stories.svelte.js';
-  import Player from '$lib/components/Player.svelte';
+  import Player from '$lib/components/story/Player.svelte';
   let st = $derived(stories.current);
 </script>
 

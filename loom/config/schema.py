@@ -141,6 +141,10 @@ class Beat(BaseModel):
     emotional_core: str = ""
     hook: str = ""
     scene_prompt: str = ""
+    # Beat-as-simulation (story graph): the state entering, the events, the state leaving.
+    start: str = ""
+    what_happened: str = ""
+    end: str = ""
 
 
 class Storyboard(BaseModel):
@@ -160,6 +164,29 @@ class ArcBeat(BaseModel):
     scene_prompt: str = ""
     characters: list[str] = Field(default_factory=list)
     next: list[str] = Field(default_factory=list)
+    # Beat-as-simulation (story graph): the state entering, the events, the state leaving.
+    start: str = ""
+    what_happened: str = ""
+    end: str = ""
+
+
+class ArcTimeline(BaseModel):
+    """One parallel path through an arc — a 'what if this persona expressed itself this way' thread."""
+    id: str
+    name: str = ""
+    premise: str = ""             # what defines this path (e.g. "she chooses vulnerability")
+    nodes: dict[str, ArcBeat] = Field(default_factory=dict)
+    start: str = ""               # id of the first chapter node
+
+
+class ArcTransition(BaseModel):
+    """A crossover edge between two timeline chapters — where paths can shift."""
+    from_timeline: str
+    from_node: str
+    to_timeline: str
+    to_node: str
+    condition: str = ""           # what decision/event triggers the shift
+    direction: str = ""           # "up" (toward lighter path) | "down" | ""
 
 
 class Arc(BaseModel):
@@ -169,9 +196,49 @@ class Arc(BaseModel):
     mini_ending: str = ""         # what this arc leaves the protagonist with
     dramatic_function: str = ""   # e.g. "Introduction — You · Need · Go"
     cast: list[str] = Field(default_factory=list)   # character keys active in this arc
-    nodes: dict[str, ArcBeat] = Field(default_factory=dict)
-    start: str = ""               # id of the first ArcBeat node
+    nodes: dict[str, ArcBeat] = Field(default_factory=dict)  # legacy flat chain
+    start: str = ""               # id of the first ArcBeat node (legacy)
     order: int = 0
+    timelines: list[ArcTimeline] = Field(default_factory=list)      # parallel timeline tracks
+    transitions: list[ArcTransition] = Field(default_factory=list)  # crossover edges
+    divergence_axis: str = ""     # the persona dimension timelines diverge along
+
+
+class EmotionalBeat(BaseModel):
+    """One psychological station on the protagonist's inner journey."""
+    inflection: str = ""    # name of the shift (e.g. "First Crack", "The Cost")
+    description: str = ""   # what this looks like from outside in the story
+
+
+class EmotionalSpine(BaseModel):
+    """Character-psychology first: the wound → lie → truth axis that drives all arcs.
+    Generated before the storyboard so every external event is engineered to force
+    one of these internal inflections."""
+    wound: str = ""         # the specific unhealed hurt that shapes all behaviour
+    lie: str = ""           # the false belief the protagonist formed to protect from the wound
+    truth: str = ""         # what they must finally accept to grow
+    heart: str = ""         # the human resonance — why a stranger would recognise themselves
+    beats: list[EmotionalBeat] = Field(default_factory=list)   # psychological stations
+    logline: str = ""
+    tone: str = ""
+    themes: list[str] = Field(default_factory=list)
+
+
+class LoreEntry(BaseModel):
+    id: str = ""
+    title: str = ""
+    keywords: list[str] = Field(default_factory=list)
+    content: str = ""
+    enabled: bool = True
+    priority: int = 0   # higher = injected first when context is tight
+    facet: str = ""     # retrieval groups by facet; at most one entry per facet per turn
+    source: str = ""    # provenance: "" = authored, "auto" = written back by the state engine
+    # An entry is a trigger→action rule. `trigger` is WHERE the keywords are matched:
+    # "input" (the transcript, via BM25 retrieval) or "output" (the model's reply, scanned
+    # by the guard layer). `script` is a named action from the registry ("" = none); with a
+    # script and/or content set, a matched entry can run the action, inject the text, or both.
+    trigger: str = "input"   # "input" | "output"
+    script: str = ""         # "" | "fallback" | …  (see loom/stories/guards.py registry)
 
 
 class Story(BaseModel):
@@ -179,6 +246,7 @@ class Story(BaseModel):
     premise: str = ""                        # one-paragraph synopsis
     tone: str = ""
     themes: list[str] = Field(default_factory=list)
+    spine: EmotionalSpine | None = None      # character-psychology spine (generated before storyboard)
     # The bounded plot outline this experience was built from (kept as the spine
     # the runtime can loosely follow; scenes + cast are extracted from it).
     storyboard: Storyboard = Field(default_factory=Storyboard)

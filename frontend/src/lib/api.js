@@ -3,7 +3,8 @@
 
 export async function get(path) {
   const r = await fetch('/api' + path);
-  return r.json();
+  // A missing/old route may fall through to the SPA shell (HTML); never throw on that.
+  try { return await r.json(); } catch { return null; }
 }
 
 export async function post(path, body, opts = {}) {
@@ -48,5 +49,5 @@ export async function patch(path, body) {
 
 export async function del(path) {
   const r = await fetch('/api' + path, { method: 'DELETE' });
-  return r.json();
+  try { return await r.json(); } catch { return null; }
 }

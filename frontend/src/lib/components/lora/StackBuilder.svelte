@@ -2,8 +2,8 @@
   // Stack builder: pick a named stack, set its checkpoint, then drag/click
   // compatible LoRAs in. Members get an identity (always-on) or state
   // (keyword-routed) role. Stacks are referenced by characters by name.
-  import Combobox from '$lib/components/Combobox.svelte';
-  import ScrubInput from '$lib/components/ScrubInput.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
+  import ScrubInput from '$lib/components/shared/ScrubInput.svelte';
   import {
     loraLib, famOf, famLabel, compat, baseFamMap, normRel, ckItems,
   } from '$lib/lora-library.svelte.js';

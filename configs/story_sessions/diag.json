@@ -1,0 +1,14 @@
+{
+  "id": "diag",
+  "character": "x",
+  "messages": [
+    {
+      "role": "user",
+      "content": "hi"
+    }
+  ],
+  "graph": {
+    "nodes": []
+  },
+  "draft": null
+}

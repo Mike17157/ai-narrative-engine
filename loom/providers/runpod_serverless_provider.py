@@ -86,10 +86,11 @@ class RunPodServerlessProvider:
         init_image: bytes | None = None,
         out_prefix: str | None = None,
         latent: tuple[int, int] | None = None,
+        flags: dict[str, bool] | None = None,
     ) -> ImageResult:
         """Generate an image via the RunPod serverless endpoint."""
         graph = _workflow.inject(
-            self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent
+            self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent, flags
         )
         out_node = _workflow.apply_output_variant(graph, self.output_node, self.output_variant)
         # The worker is Linux; a Windows-authored graph may carry backslash model

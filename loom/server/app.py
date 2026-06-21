@@ -21,14 +21,18 @@ from ..connections import ConnectionStore
 
 from .context import AppContext
 from .index_html import INDEX_HTML
+from . import startup
 from ..stories import router as stories  # story domain lives in loom/stories/, not routers/
 from .routers import (
     characters,
+    chat,
     comfy,
     jobs,
     lora,
+    lorebooks,
     models_conn,
     personas,
+    runpod,
     server,
     tags,
     trainer,
@@ -75,6 +79,7 @@ def _register_comfy(user, root: Path) -> str:
 _ROUTERS = (
     server,
     characters,
+    chat,
     stories,
     tags,
     models_conn,
@@ -84,6 +89,8 @@ _ROUTERS = (
     comfy,
     personas,
     jobs,
+    runpod,
+    lorebooks,
 )
 
 
@@ -128,6 +135,13 @@ def build_context(root: str | Path = ".") -> AppContext:
     )
 
 
+def dev_app() -> FastAPI:
+    """Zero-arg factory for `uvicorn --reload` (which needs an import string, not an app
+    instance). Honors LOOM_ROOT so `loom serve --reload --root <path>` still works."""
+    import os
+    return create_app(os.environ.get("LOOM_ROOT", "."))
+
+
 def create_app(root: str | Path = ".") -> FastAPI:
     root = Path(root)
     ctx = build_context(root)
@@ -151,6 +165,29 @@ def create_app(root: str | Path = ".") -> FastAPI:
         if not ctx.base_settings.personas:
             ctx.write_persona("you", {"name": "You", "description": ""})
     except Exception:  # noqa: BLE001 — never block startup on seeding
+        pass
+
+    # Embed any lorebook entries that lack a semantic vector (seeded/imported/legacy), in
+    # the background so the first request isn't blocked by model load. No-op without an embedder.
+    try:
+        import threading
+
+        from .services import lorebook_store as _LS_emb
+        threading.Thread(target=lambda: _LS_emb.backfill_embeddings(root), daemon=True).start()
+    except Exception:  # noqa: BLE001 — never block boot on indexing
+        pass
+
+    # Startup hooks — each is isolated; a failure never blocks the others or the boot.
+    startup.warm_scan_cache(ctx)
+    startup.reap_stale_jobs()
+    startup.regenerate_manifest(ctx)
+    startup.validate_lora_stacks(ctx)
+
+    # Reconcile the RunPod volume against the saved LoRA grid selection so the remote
+    # worker always matches what's configured here without any manual sync step.
+    try:
+        runpod.start_reconcile_if_configured(ctx)
+    except Exception:  # noqa: BLE001 — never block startup on sync
         pass
 
     return app

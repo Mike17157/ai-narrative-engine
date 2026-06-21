@@ -1,9 +1,9 @@
 <script>
   import { onMount } from 'svelte';
-  import { get, post, del } from '../api.js';
-  import { app, refreshAll } from '../app.svelte.js';
-  import { askConfirm } from '../confirm.svelte.js';
-  import Combobox from './Combobox.svelte';
+  import { get, post, del } from '$lib/api.js';
+  import { app, refreshAll } from '$lib/app.svelte.js';
+  import { askConfirm } from '$lib/confirm.svelte.js';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   // kind: "text" (TextGen) or "image" (Images). Each manages its own connections.
   let { kind = 'text' } = $props();

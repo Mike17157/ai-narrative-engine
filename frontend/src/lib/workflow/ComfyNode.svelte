@@ -2,7 +2,8 @@
   import { Handle, Position } from '@xyflow/svelte';
   import { img, dropModelOnNode, nodeTakesModel, clipCompatWarning, toggleBypass, deleteNode, toggleEmbedding, hasEmbedding, familyFilteredOptions } from '$lib/images.svelte.js';
   import { dims, slotTop, typeColor } from '$lib/workflow_graph.js';
-  import ScrubInput from '$lib/components/ScrubInput.svelte';
+  import ScrubInput from '$lib/components/shared/ScrubInput.svelte';
+  import LoraStackEditor from '$lib/workflow/LoraStackEditor.svelte';
 
   // LoRA strength / weight widgets get the drag-scrubber; seed/steps/cfg/dims keep
   // a plain field so their (very different) ranges aren't forced into 0.05 steps.
@@ -94,7 +95,10 @@
   {#if node && data.widgets.length}
     <div class="widgets">
       {#each data.widgets as w (w.name)}
-        {#if w.multiline}
+        {#if w.multiline && data.classType.includes('Lora Stacker') && w.name === 'text'}
+          <!-- Interactive chip editor for LoRA stacks -->
+          <LoraStackEditor nodeId={id} widgetName={w.name} />
+        {:else if w.multiline}
           <div class="wrow multi">
             <span class="k">{w.name}</span>
             {#if w.embeds && img.embeddings?.length}
@@ -119,7 +123,9 @@
                 {#each opts as opt}<option value={opt}>{opt}</option>{/each}
               </select>
             {:else if typeof w.value === 'boolean'}
-              <input class="nodrag nopan chk" type="checkbox" bind:checked={node.inputs[w.name]} />
+              <input class="nodrag nopan chk" type="checkbox"
+                checked={node.inputs[w.name] === true || node.inputs[w.name] === 'True'}
+                onchange={(e) => { node.inputs[w.name] = e.currentTarget.checked; }} />
             {:else if typeof w.value === 'number'}
               {#if isStrength(w.name)}
                 <ScrubInput class="nodrag nopan f" step={0.01} bind:value={node.inputs[w.name]} title="drag ↕ or click to type" />

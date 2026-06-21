@@ -14,6 +14,8 @@ from ..server.services.images import _clean_reference_png, _randomize_seeds, _re
 from ..server.services.jobs_util import _start_stream_job
 from ..server.services.prompts import FEATURES_SCHEMA, PLAY_SCHEMA, _assemble_base_prompt
 from .pipeline import apply_manifest as _apply_manifest, plan_and_apply as _plan_and_apply
+# The story pipeline runs on pydantic-graph state machines (see graph_pipeline.py).
+from .graph_pipeline import StoryState, StoryDeps, run_turn, run_draft
 
 
 def register(app, ctx):
@@ -50,10 +52,12 @@ def register(app, ctx):
         provider, systems = ctx.builder_ctx(body, "storyboard")
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
+        spine = body.get("spine") or {}
         system, prompt = storyboard_inputs(name=ch.name, persona=ch.system,
                                            extras=ctx.card_extras(ch, body["character"]),
                                            systems=systems,
-                                           premise=(body.get("premise") or "").strip())
+                                           premise=(body.get("premise") or "").strip(),
+                                           spine=spine)
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -85,6 +89,230 @@ def register(app, ctx):
                     yield f"data: {json.dumps(ev)}\n\n"
             finally:
                 cancel_evt.set()  # client disconnected / cancelled → stop upstream
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/api/stories/expand-graph")
+    async def story_expand_graph(body: dict):
+        """Faithfully expand a DEVELOPMENT GRAPH into a chapter draft — one chapter per
+        node, preserving ids and branches. The conversation's graph becomes the draft;
+        nothing is re-derived from a premise string.
+
+        Body: { character, graph: {logline, wound, lie, truth, nodes[]}, model? }
+        Streams `delta` text + a final `graph` event with the enriched graph.
+        """
+        import asyncio
+        import threading
+
+        from fastapi.responses import StreamingResponse
+
+        from .pipeline._helpers import _card_context
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(body.get("character"))
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        provider, systems = ctx.builder_ctx(body, "storyboard")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+
+        graph = body.get("graph") or {}
+        nodes = [n for n in (graph.get("nodes") or []) if isinstance(n, dict) and n.get("id")]
+        if not nodes:
+            return JSONResponse({"error": "no graph nodes to expand"}, status_code=400)
+
+        card = _card_context(ch.name, ch.system, ctx.card_extras(ch, body["character"]))
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        cancel_evt = threading.Event()
+
+        # Drive the draft graph (expand → revise). Steps emit a `graph` event via on_event.
+        deps = StoryDeps(
+            provider=provider,
+            on_event=lambda e: loop.call_soon_threadsafe(q.put_nowait, e),
+            cancel=cancel_evt.is_set,
+            do_revise=bool(body.get("revise")),
+        )
+        state = StoryState(card=card, working_graph=graph)
+
+        async def run():
+            try:
+                await run_draft(state, deps)
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            try:
+                while True:
+                    ev = await q.get()
+                    if ev is None:
+                        break
+                    yield f"data: {json.dumps(ev)}\n\n"
+            finally:
+                cancel_evt.set()
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    # ── Character simulation (emergent narrative) ─────────────────────────────
+    # Design an info-isolated cast (Sonnet, one pass), then simulate them scene by
+    # scene (GLM actors + DeepSeek director). The transcript feeds the graph later.
+
+    @app.post("/api/stories/simulate/design")
+    def sim_design(body: dict):
+        """Design a cast for simulation — each with goals + a private secret. Sonnet, one pass."""
+        from .simulation import design_cast
+        body = body or {}
+        cfg = ctx.load_story_builder()
+        prov = ctx.author_provider(config_files._stage_model(cfg, "characters"))
+        if prov is None:
+            return JSONResponse({"error": "no character-design model configured"}, status_code=400)
+        premise = (body.get("premise") or "").strip()
+        if not premise:
+            return JSONResponse({"error": "premise required"}, status_code=400)
+        n = max(2, min(int(body.get("n") or 3), 6))
+        try:
+            cast = design_cast(prov, premise, n)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        if not cast:
+            return JSONResponse({"error": "no characters produced (model may not support structured output)"}, status_code=502)
+        return {"characters": cast}
+
+    @app.post("/api/stories/simulate/scene")
+    async def sim_scene(body: dict):
+        """Run ONE autonomous scene burst — streams turns, returns the updated sim_state."""
+        import asyncio
+        import threading
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        from .simulation import run_scene_burst
+
+        body = body or {}
+        cfg = ctx.load_story_builder()
+        director = ctx.author_provider(config_files._stage_model(cfg, "sim_director"))
+        actor = ctx.author_provider(config_files._stage_model(cfg, "sim_actor"))
+        if director is None or actor is None:
+            return JSONResponse({"error": "simulation models not configured (sim_director / sim_actor)"}, status_code=400)
+        sim_state = body.get("sim_state") or {}
+        if not sim_state.get("characters"):
+            return JSONResponse({"error": "no characters to simulate"}, status_code=400)
+        steer = (body.get("steer") or "").strip()
+        max_turns = max(2, min(int(body.get("max_turns") or 8), 16))
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        holder: dict = {}
+
+        def emit(e: dict):
+            loop.call_soon_threadsafe(q.put_nowait, e)
+
+        async def run():
+            try:
+                holder["state"] = await run_in_threadpool(lambda: run_scene_burst(
+                    director_prov=director, actor_prov=actor, sim_state=sim_state,
+                    max_turns=max_turns, steer=steer, on_event=emit))
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            while True:
+                ev = await q.get()
+                if ev is None:
+                    break
+                yield f"data: {json.dumps(ev)}\n\n"
+            if holder.get("state") is not None:
+                yield f'data: {json.dumps({"type": "state", "sim_state": holder["state"]})}\n\n'
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/api/stories/spine")
+    async def story_spine(body: dict):
+        """Generate the EMOTIONAL SPINE for a character — wound / lie / truth / beats.
+        Streams delta text while the model writes, then emits a final `spine` event.
+
+        Body: { character: str, premise?: str, intended_ending?: str }
+        """
+        import asyncio
+        import threading
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        from .pipeline._helpers import SPINE_SCHEMA, _card_context, _sys
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(body.get("character"))
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+
+        provider, systems = ctx.builder_ctx(body, "spine")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+
+        extras = ctx.card_extras(ch, body["character"])
+        card = _card_context(ch.name, ch.system, extras)
+        premise = (body.get("premise") or "").strip()
+        intended_ending = (body.get("intended_ending") or "").strip()
+        system = _sys(systems, "spine")
+
+        parts = [f"CHARACTER CARD:\n{card}"]
+        if premise:
+            parts.append(f"STORY PREMISE:\n{premise}")
+        if intended_ending:
+            parts.append(f"INTENDED ENDING:\n{intended_ending}")
+        parts.append(
+            "Read this character deeply. Reveal the WOUND already present in who they are. "
+            "Derive the LIE they tell themselves because of it. Find the TRUTH they must accept. "
+            "Map the emotional beats — the psychological stations — that would take them from lie to truth. "
+            "Output structured JSON only."
+        )
+        prompt = "\n\n".join(parts)
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        cancel_evt = threading.Event()
+
+        def on_delta(t: str):
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t})
+
+        async def run():
+            try:
+                res = await run_in_threadpool(lambda: provider.generate_text(
+                    system=system, prompt=prompt, emits=SPINE_SCHEMA,
+                    on_delta=on_delta, cancel=cancel_evt.is_set))
+                if not cancel_evt.is_set():
+                    spine = res.data or {}
+                    if not spine:
+                        loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": "no spine produced"})
+                    else:
+                        loop.call_soon_threadsafe(q.put_nowait, {"type": "spine", "spine": spine})
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            try:
+                while True:
+                    ev = await q.get()
+                    if ev is None:
+                        break
+                    yield f"data: {json.dumps(ev)}\n\n"
+            finally:
+                cancel_evt.set()
             yield 'data: {"type": "done"}\n\n'
 
         return StreamingResponse(events(), media_type="text/event-stream")
@@ -319,7 +547,7 @@ def register(app, ctx):
         if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
 
-        provider, systems = ctx.builder_ctx(body, "storyboard")
+        provider, systems = ctx.builder_ctx(body, "workshop")
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
 
@@ -329,25 +557,103 @@ def register(app, ctx):
         card = _card_context(ch.name, ch.system, extras)
 
         system = (
-            f"You are a collaborative story architect. You know {ch.name} deeply — their card is "
-            f"provided below — and your job is to help the user develop the perfect story concept "
-            f"for them before committing to a full generation.\n\n"
-            f"Be curious and creative: ask what the user wants to feel, propose bold concepts, "
-            f"offer alternatives. Build toward a refined premise through conversation. Keep each "
-            f"response focused and conversational — 2-4 paragraphs at most. When the user seems "
-            f"satisfied or asks you to, offer to proceed with a full storyboard.\n\n"
-            f"Do NOT generate a full storyboard here — just converse and refine the concept.\n\n"
+            f"You are a story consultant — a developmental editor working with a writer to find "
+            f"the story that wants to be told from this character. You think the way working "
+            f"modern craft writers think (Will Storr, Lisa Cron, K.M. Weiland, John Truby, George "
+            f"Saunders, Donald Maass, Charles Baxter, Brandon Sanderson, Shawn Coyne, Jane Alison, "
+            f"Matthew Salesses), not in the vocabulary of academic literary theory. You will be "
+            f"given CRAFT NOTES below, drawn from these writers and selected for the current "
+            f"exchange — lean on them, but speak like an editor in the room, not a lecturer.\n\n"
+
+            f"You know {ch.name} from the character card below. Read it the way a developmental "
+            f"editor reads: find the flawed theory of control the character lives by, the misbelief "
+            f"and the concrete past moment that planted it, the gap between what they want and what "
+            f"they actually need, and the contradiction that makes them worth reading about. The "
+            f"plot is just the machine that tests all of this.\n\n"
+
+            f"The writer wants stories with real interiority, tension, melancholy, and earned "
+            f"growth — characters who circle the truth, flinch, retreat, and change only at cost. "
+            f"Aim for that depth; resist tidy or shallow premises.\n\n"
+
+            f"HOW YOU WORK:\n"
+            f"- This conversation is about CHARACTER DEVELOPMENT, not plot. You map how this person "
+            f"CHANGES — the wound, the misbelief/lie they live by, the want/need gap, and the "
+            f"sequence of internal inflections that carry them (or fail to carry them) from the lie "
+            f"toward the truth. Events exist only as the LEVERS that force those inflections; never "
+            f"discuss plot for its own sake.\n"
+            f"- DIAGNOSTIC first. Open with what you SEE — the wound, the misbelief, the shape of "
+            f"change latent in them — then invite the writer to react. Don't open with questions.\n"
+            f"- OPINIONATED. If an idea dodges the character's real developmental potential, say so "
+            f"and propose the harder, truer arc of change. Think in growth cycles: encounter the "
+            f"truth, flinch, retreat into the lie, pay a cost, circle back — what finally breaks "
+            f"the pattern?\n"
+            f"- CONCRETE. Ground every craft principle in THIS character. When you name an event, "
+            f"name the internal shift it is there to force.\n"
+            f"- Conversational but substantive: 2-4 paragraphs of prose. No bullet lists.\n"
+            f"- When the wound, misbelief, want/need gap, emotional register, and the sequence of "
+            f"inflections are clear, say so and invite the writer to generate the draft.\n\n"
+
+            f"A DEVELOPMENT GRAPH of the character's arc of change is shown beside the chat and "
+            f"kept in sync automatically by the system — you do NOT write it out yourself. Just "
+            f"keep your prose anchored to that arc: for each beat you discuss, name the internal "
+            f"inflection it forces and the event that serves as its lever. Treat any edits the "
+            f"writer has made to the working graph (shown below) as authoritative and build on "
+            f"them.\n\n"
+
             f"CHARACTER CARD:\n{card}"
         )
 
         # Build the conversation transcript as a single prompt string.
-        # The system prompt already has all the character context; the prompt is the dialogue.
         messages = list(body.get("messages") or [])
         premise = (body.get("premise") or "").strip()
         if not messages and premise:
-            messages = [{"role": "user", "content": f"I have a premise in mind: {premise}"}]
+            messages = [{"role": "user", "content": f"Here's the premise I have in mind: {premise}\n\nGive me your read of whether this plays to {ch.name}'s real dramatic potential, or whether there's a truer story here."}]
         elif not messages:
-            messages = [{"role": "user", "content": "Help me develop a story for this character."}]
+            messages = [{"role": "user", "content": f"Read {ch.name}'s character card and give me your opening read. What's the wound? What misbelief are they living by? What kind of change — or refusal to change — does their nature pull toward?"}]
+
+        # Retrieve craft principles + world lore (libSQL/Turso store, FTS5 bm25).
+        from ..server.services import lorebook_store as _LS
+        from ..server.services.lorebook import format_lore_block
+        query_text = " ".join(str(m.get("content", "")) for m in messages)
+
+        # Craft lorebook (_craft): modern storytelling theory the consultant
+        # reasons with. Surface what the exchange calls for; always keep a
+        # foundational floor so the AI is never without a craft lens.
+        craft_hits = _LS.retrieve(ctx.root, query_text, ["_craft"], top_k=7)
+        if not craft_hits:
+            craft_hits = _LS.top_by_priority(ctx.root, "_craft", 4)
+        if craft_hits:
+            system = system + "\n\n" + format_lore_block(
+                craft_hits,
+                header=(
+                    "CRAFT NOTES — modern storytelling principles relevant to this "
+                    "exchange. Reason with these and name the thinker when it sharpens "
+                    "a point, but apply them to THIS character; never lecture:"
+                ),
+            )
+
+        # World lore (setting, history, established facts). The console may assign
+        # specific scopes via body["lorebooks"]; default to character + global.
+        world_scopes = body.get("lorebooks")
+        if not isinstance(world_scopes, list) or not world_scopes:
+            world_scopes = [body["character"], "_global"]
+        world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in world_scopes]
+        world_scopes = [s for s in world_scopes if s and s != "_craft"]
+        world_hits = _LS.retrieve(ctx.root, query_text, world_scopes, top_k=5) if world_scopes else []
+        if world_hits:
+            system = system + "\n\n" + format_lore_block(world_hits)
+
+        retrieved_lore = craft_hits + world_hits
+
+        # The writer may have hand-edited the working spine in the graph pane — feed
+        # it back so the model builds on their changes rather than its own last draft.
+        working_spine = body.get("spine") or body.get("graph")
+        if isinstance(working_spine, dict) and working_spine:
+            system = system + (
+                "\n\nCURRENT WORKING STORY GRAPH (the writer may have edited this in the graph "
+                "pane; treat their edits as authoritative and continue from them):\n"
+                + json.dumps(working_spine, ensure_ascii=False)
+            )
 
         # Serialize the conversation history as a readable transcript for the prompt.
         transcript_parts = []
@@ -360,18 +666,41 @@ def register(app, ctx):
         # The model sees the full history and must reply to the last user turn.
         prompt = "\n\n".join(transcript_parts) if transcript_parts else "User: Help me develop a story for this character."
 
+        # Context-budget breakdown for the console's usage dial (estimate ~4 chars/token).
+        from ..server.services.lorebook import estimate_tokens
+        craft_text = format_lore_block(craft_hits, header="x") if craft_hits else ""
+        world_text = format_lore_block(world_hits) if world_hits else ""
+        craft_tok = estimate_tokens(craft_text)
+        world_tok = estimate_tokens(world_text)
+        hist_tok = estimate_tokens(prompt)
+        base_tok = max(0, estimate_tokens(system) - craft_tok - world_tok)
+        usage = {
+            "type": "usage",
+            "parts": {"base": base_tok, "craft": craft_tok, "world": world_tok, "history": hist_tok},
+            "tokens": base_tok + craft_tok + world_tok + hist_tok,
+            "window": 64000,  # DeepSeek V3 context window
+        }
+
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
         cancel_evt = threading.Event()
 
-        def on_delta(t: str):
-            loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t})
+        # Drive the turn graph (consult → extract). consult streams prose via on_delta;
+        # extract emits the updated development graph via on_event (a `spine` event).
+        deps = StoryDeps(
+            provider=provider,
+            on_delta=lambda t: loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t}),
+            on_event=lambda e: loop.call_soon_threadsafe(q.put_nowait, e),
+            cancel=cancel_evt.is_set,
+        )
+        state = StoryState(
+            card=card, system=system, prompt=prompt,
+            working_graph=working_spine if isinstance(working_spine, dict) else None,
+        )
 
         async def run():
             try:
-                await run_in_threadpool(lambda: provider.generate_text(
-                    system=system, prompt=prompt, on_delta=on_delta,
-                    cancel=cancel_evt.is_set))
+                await run_turn(state, deps)
             except Exception as exc:  # noqa: BLE001
                 loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
             loop.call_soon_threadsafe(q.put_nowait, None)
@@ -379,6 +708,7 @@ def register(app, ctx):
         asyncio.create_task(run())
 
         async def events():
+            yield f"data: {json.dumps(usage)}\n\n"
             try:
                 while True:
                     ev = await q.get()
@@ -387,9 +717,118 @@ def register(app, ctx):
                     yield f"data: {json.dumps(ev)}\n\n"
             finally:
                 cancel_evt.set()
+            lore_meta = [{"id": e.id, "title": e.title, "facet": e.facet} for e in retrieved_lore]
+            yield f'data: {json.dumps({"type": "lore", "entries": lore_meta})}\n\n'
             yield 'data: {"type": "done"}\n\n'
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    # ── Story session checkpoints (server-side) ───────────────────────────────
+
+    @app.get("/api/stories/session/{sid}")
+    def get_story_session(sid: str):
+        from ..server.services.story_sessions import load_session
+        return load_session(ctx.root, sid) or {}
+
+    @app.put("/api/stories/session/{sid}")
+    def put_story_session(sid: str, body: dict):
+        from ..server.services.story_sessions import save_session
+        return {"ok": True, "session": save_session(ctx.root, sid, body or {})}
+
+    @app.delete("/api/stories/session/{sid}")
+    def delete_story_session(sid: str):
+        from ..server.services.story_sessions import delete_session
+        delete_session(ctx.root, sid)
+        return {"ok": True}
+
+    # ── World-state engine (per-thread mutable state) ──────────────────────────
+
+    @app.get("/api/stories/{key}/state")
+    def get_world_state(key: str, sid: str | None = None):
+        from ..server.services.story_sessions import load_session
+        from . import state_engine as _SE
+        sid = sid or f"play-{key}"
+        ws = _SE.normalize((load_session(ctx.root, sid) or {}).get("world_state") or {})
+        return {"sid": sid, "state": ws}
+
+    @app.put("/api/stories/{key}/state")
+    def put_world_state(key: str, body: dict):
+        """Manual override of the world-state doc (the state panel's edits). Body:
+        { sid?, state } — replaces the stored doc with the normalized payload."""
+        from ..server.services.story_sessions import load_session, save_session
+        from . import state_engine as _SE
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        sess = load_session(ctx.root, sid) or {}
+        ws = _SE.normalize(body.get("state") or {})
+        save_session(ctx.root, sid, {**sess, "world_state": ws})
+        return {"ok": True, "state": ws}
+
+    @app.post("/api/stories/{key}/state/reset")
+    def reset_world_state(key: str, body: dict | None = None):
+        from ..server.services.story_sessions import load_session, save_session
+        from . import state_engine as _SE
+        sid = (body or {}).get("sid") or f"play-{key}"
+        sess = load_session(ctx.root, sid) or {}
+        save_session(ctx.root, sid, {**sess, "world_state": _SE.empty_state()})
+        return {"ok": True, "state": _SE.empty_state()}
+
+    # ── Text-model roles (narrator / scribe / refusal fallback) ────────────────
+
+    @app.get("/api/text-roles")
+    def get_text_roles():
+        from ..server.services import config_files as _cf
+        roles = _cf.load_text_roles(ctx.root)
+        # Offer the selectable text models/connections so the UI can build pickers.
+        items = [{"value": "", "label": "Active text connection"}]
+        items += [{"value": k, "label": k} for k, m in ctx.effective_settings().models.items()
+                  if m.kind == "text"]
+        return {"roles": roles, "models": items}
+
+    @app.put("/api/text-roles")
+    def put_text_roles(body: dict):
+        from ..server.services import config_files as _cf
+        return {"ok": True, "roles": _cf.save_text_roles(ctx.root, body or {})}
+
+    # ── Lorebook CRUD ─────────────────────────────────────────────────────────
+
+    @app.get("/api/lorebook/{scope}")
+    def get_lorebook(scope: str):
+        from ..server.services import lorebook_store as _LS
+        safe = re.sub(r"[^\w\-]+", "_", scope)
+        return {"entries": [e.model_dump() for e in _LS.load_lorebook(ctx.root, safe)]}
+
+    @app.put("/api/lorebook/{scope}")
+    def put_lore_entry(scope: str, body: dict):
+        from ..server.services import lorebook_store as _LS
+        from ..config.schema import LoreEntry
+        import uuid
+        safe = re.sub(r"[^\w\-]+", "_", scope)
+        entry_data = dict(body or {})
+        if not entry_data.get("id"):
+            entry_data["id"] = str(uuid.uuid4())[:8]
+        new_entry = LoreEntry(**entry_data)
+        _LS.upsert_entry(ctx.root, safe, new_entry)   # dynamic insert-or-update
+        return {"ok": True, "entry": new_entry.model_dump()}
+
+    @app.delete("/api/lorebook/{scope}/{entry_id}")
+    def delete_lore_entry(scope: str, entry_id: str):
+        from ..server.services import lorebook_store as _LS
+        safe = re.sub(r"[^\w\-]+", "_", scope)
+        _LS.delete_entry(ctx.root, safe, entry_id)
+        return {"ok": True}
+
+    @app.post("/api/lorebook/import/{scope}")
+    def import_lorebook(scope: str, body: dict):
+        """Import a SillyTavern world-info export into a scope. Body: {entries:[...]} or a
+        raw array. Safety filters reject prompt-injection entries and strip override lines."""
+        from ..server.services.lorebook_import import import_sillytavern
+        safe = re.sub(r"[^\w\-]+", "_", scope)
+        entries = (body or {}).get("entries") if isinstance(body, dict) else body
+        if not isinstance(entries, list):
+            return JSONResponse({"error": "expected a list of entries (or {entries:[...]})"}, status_code=400)
+        facet = (body or {}).get("facet", "") if isinstance(body, dict) else ""
+        return import_sillytavern(ctx.root, safe, entries, default_facet=facet)
 
     ARC_SUGGESTION_SCHEMA = {
         "type": "object", "additionalProperties": False, "required": ["arcs"],
@@ -592,9 +1031,27 @@ def register(app, ctx):
             "Characters in each chapter must be a subset of this arc's cast — no one else."
         )
 
+        # Spine context — informs which emotional inflections this arc should force.
+        spine = st.spine
+        spine_block = ""
+        if spine and (spine.wound or spine.beats):
+            lines = ["EMOTIONAL SPINE (character psychology — shape chapters to force these inflections):"]
+            if spine.wound:
+                lines.append(f"  WOUND: {spine.wound}")
+            if spine.lie:
+                lines.append(f"  LIE: {spine.lie}")
+            if spine.truth:
+                lines.append(f"  TRUTH: {spine.truth}")
+            if spine.beats:
+                lines.append("  BEATS:")
+                for b in spine.beats:
+                    lines.append(f"    [{b.inflection}] {b.description}")
+            spine_block = "\n".join(lines) + "\n\n"
+
         prompt = (
             f"BOOK HEART: {heart or '(not set)'}\n"
             f"INTENDED ENDING: {intended_ending or '(not set)'}\n\n"
+            f"{spine_block}"
             f"PREVIOUS ARCS:\n{prev_endings}\n\n"
             f"THIS ARC:\n"
             f"  Name: {arc.name}\n"
@@ -689,6 +1146,369 @@ def register(app, ctx):
             except Exception as exc:  # noqa: BLE001
                 loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
             loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            try:
+                while True:
+                    ev = await q.get()
+                    if ev is None:
+                        break
+                    yield f"data: {json.dumps(ev)}\n\n"
+            finally:
+                cancel_evt.set()
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
+    TIMELINE_DERIVE_SCHEMA = {
+        "type": "object", "additionalProperties": False, "required": ["axis", "timelines"],
+        "properties": {
+            "axis": {"type": "string"},
+            "timelines": {
+                "type": "array", "minItems": 2, "maxItems": 3,
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["id", "name", "premise"],
+                    "properties": {
+                        "id": {"type": "string"},
+                        "name": {"type": "string"},
+                        "premise": {"type": "string"},
+                    }
+                }
+            }
+        }
+    }
+
+    TRANSITION_SCHEMA = {
+        "type": "object", "additionalProperties": False, "required": ["transitions"],
+        "properties": {
+            "transitions": {
+                "type": "array",
+                "items": {
+                    "type": "object", "additionalProperties": False,
+                    "required": ["from_timeline", "from_node", "to_timeline", "to_node", "condition"],
+                    "properties": {
+                        "from_timeline": {"type": "string"},
+                        "from_node": {"type": "string"},
+                        "to_timeline": {"type": "string"},
+                        "to_node": {"type": "string"},
+                        "condition": {"type": "string"},
+                        "direction": {"type": "string"},
+                    }
+                }
+            }
+        }
+    }
+
+    @app.post("/api/stories/{key}/arc/{arc_id}/timelines")
+    async def arc_generate_timelines(key: str, arc_id: str, body: dict):
+        """Generate parallel timelines for an arc in three phases (streamed):
+        1. Derive 2-3 timeline premises from the persona's core tension.
+        2. Expand each timeline's chapters in parallel (one thread per timeline).
+        3. Auto-discover transition edges by comparing chapter states across timelines.
+        Saves the result to the story YAML and emits a final `result` event.
+
+        SSE events: phase · timeline_start · delta · timeline_done · transitions · result · done
+        """
+        import asyncio
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        from .pipeline import parse_storyboard
+        from ..config.schema import ArcBeat, ArcTimeline, ArcTransition
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        arc = next((a for a in st.arcs if a.id == arc_id), None)
+        if arc is None:
+            return JSONResponse({"error": f"no arc '{arc_id}'"}, status_code=404)
+
+        provider, systems = ctx.builder_ctx(body or {}, "storyboard")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+
+        # Protagonist + cast details.
+        primary_key = next((m.character for m in st.cast if m.primary), None) or \
+                      (st.cast[0].character if st.cast else None)
+        arc_cast_keys = list(arc.cast)
+        if primary_key and primary_key not in arc_cast_keys:
+            arc_cast_keys.insert(0, primary_key)
+        cast_details = []
+        prot_persona = ""
+        for ck in arc_cast_keys:
+            ch = ctx.base_settings.characters.get(ck)
+            if ch:
+                cast_details.append(f"{ch.name}: {(ch.system or '').splitlines()[0][:120]}")
+                if ck == primary_key:
+                    prot_persona = ch.system or ""
+            else:
+                cast_details.append(ck)
+        cast_block = "\n".join(cast_details) or "(unspecified)"
+
+        # Arc context.
+        sorted_arcs = sorted(st.arcs, key=lambda a: a.order)
+        arc_idx = next((i for i, a in enumerate(sorted_arcs) if a.id == arc_id), 0)
+        preceding = sorted_arcs[:arc_idx]
+        prev_endings = "\n".join(
+            f"Arc {i + 1} ({a.name}): {a.mini_ending}" for i, a in enumerate(preceding)
+        ) or "(this is the first arc)"
+
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+        cancel_evt = threading.Event()
+
+        def emit(ev: dict):
+            loop.call_soon_threadsafe(q.put_nowait, ev)
+
+        def _parse_chapters(raw: str, tl_id: str) -> tuple[dict, str]:
+            fake = f"CHAPTERS:\n{raw}"
+            parsed = parse_storyboard(fake)
+            beats = parsed.get("beats") or []
+            nodes: dict = {}
+            start_id = ""
+            for i, b in enumerate(beats):
+                nid = f"{arc_id}-{tl_id}-ch{i + 1}"
+                node = ArcBeat(
+                    id=nid,
+                    title=b.get("title", ""),
+                    summary=b.get("summary", ""),
+                    emotional_core=b.get("emotional_core", ""),
+                    hook=b.get("hook", ""),
+                    location=b.get("location", ""),
+                    scene_prompt=b.get("scene_prompt", ""),
+                    characters=b.get("characters", []),
+                    next=[f"{arc_id}-{tl_id}-ch{i + 2}"] if i < len(beats) - 1 else [],
+                )
+                nodes[nid] = node
+                if i == 0:
+                    start_id = nid
+            return nodes, start_id
+
+        async def run():
+            try:
+                # ── Phase 1: Derive timelines ──────────────────────────────
+                emit({"type": "phase", "label": "Deriving timelines from persona…"})
+                derive_system = (
+                    "You are a narrative architect. Analyse the protagonist's persona and the arc's "
+                    "dramatic function to identify the core DIVERGENCE AXIS — the fundamental tension "
+                    "within this character that could pull them toward different paths.\n\n"
+                    "Design 2-3 parallel TIMELINES for this arc. Each timeline is a complete, coherent "
+                    "path through the arc where the protagonist expresses a different aspect of themselves. "
+                    "The timelines should feel genuinely different in tone and outcome, not just slight variations.\n\n"
+                    "Rules:\n"
+                    "- `axis`: one phrase naming the divergence dimension (e.g. 'trust vs. control')\n"
+                    "- Each timeline `id`: short slug (tl-a, tl-b, tl-c)\n"
+                    "- Each timeline `name`: 2-4 words, evocative (e.g. 'The Opened Door')\n"
+                    "- Each timeline `premise`: one sentence — what choice or stance defines this path through the arc"
+                )
+                # Build spine block for timeline derivation if the story has one.
+                spine = st.spine
+                spine_tl_block = ""
+                if spine and (spine.wound or spine.beats):
+                    lines = ["EMOTIONAL SPINE (the axis timelines diverge along):"]
+                    if spine.wound:
+                        lines.append(f"  WOUND: {spine.wound}")
+                    if spine.lie:
+                        lines.append(f"  LIE: {spine.lie}")
+                    if spine.truth:
+                        lines.append(f"  TRUTH: {spine.truth}")
+                    if spine.beats:
+                        lines.append("  BEATS to force:")
+                        for b in spine.beats:
+                            lines.append(f"    [{b.inflection}] {b.description}")
+                    spine_tl_block = "\n".join(lines) + "\n\n"
+
+                derive_prompt = (
+                    f"PROTAGONIST PERSONA:\n{prot_persona[:800] or '(not set)'}\n\n"
+                    f"{spine_tl_block}"
+                    f"ARC: {arc.name}\n"
+                    f"  Dramatic function: {arc.dramatic_function or '(unset)'}\n"
+                    f"  Mini-ending: {arc.mini_ending or '(unset)'}\n\n"
+                    f"CAST:\n{cast_block}\n\n"
+                    f"STORY HEART: {st.storyboard.heart or '(unset)'}\n\n"
+                    "If an emotional spine is provided, use it as the divergence axis — timelines "
+                    "should represent different ways the protagonist could face (or avoid) the "
+                    "emotional beats. Otherwise derive the axis from the persona directly.\n\n"
+                    "Derive the divergence axis and 2-3 timeline premises now."
+                )
+                derive_result = await run_in_threadpool(
+                    lambda: provider.generate_text(system=derive_system, prompt=derive_prompt,
+                                                   emits=TIMELINE_DERIVE_SCHEMA)
+                )
+                derive_data = derive_result.data or {}
+                axis = derive_data.get("axis", "")
+                tl_defs = derive_data.get("timelines") or []
+                if not tl_defs:
+                    emit({"type": "error", "error": "could not derive timelines"})
+                    return
+                emit({"type": "timelines_derived", "axis": axis, "timelines": tl_defs})
+
+                # ── Phase 2: Expand each timeline's chapters in parallel ───
+                emit({"type": "phase", "label": f"Expanding {len(tl_defs)} timelines…"})
+
+                chapter_system = (
+                    "You are writing the CHAPTERS for ONE TIMELINE of an arc. This timeline represents "
+                    "one specific path the protagonist could take through this act — shaped by the "
+                    "premise given.\n\n"
+                    "Generate 3-5 chapters that form this timeline. Each chapter must feel distinctly "
+                    "coloured by this path's premise.\n\n"
+                    "Output as a CHAPTERS block, one chapter per line, pipe-delimited:\n"
+                    "Title | Narrative: what happens | Emotional: what shifts | "
+                    "Hook: tension into next | Location | Characters (comma-separated) | "
+                    "Scene: visual background prompt\n\n"
+                    "The final chapter must land on the arc's mini_ending as expressed through this timeline's lens."
+                )
+
+                def expand_timeline(tl_def):
+                    tl_id = tl_def["id"]
+                    tl_name = tl_def["name"]
+                    tl_premise = tl_def["premise"]
+                    emit({"type": "timeline_start", "timeline_id": tl_id, "name": tl_name})
+                    full_text: list[str] = []
+
+                    def on_delta(t: str):
+                        full_text.append(t)
+                        emit({"type": "delta", "timeline_id": tl_id, "text": t})
+
+                    ch_prompt = (
+                        f"ARC: {arc.name}\n"
+                        f"  Dramatic function: {arc.dramatic_function or '(unset)'}\n"
+                        f"  Mini-ending: {arc.mini_ending or '(unset)'}\n\n"
+                        f"PREVIOUS ARCS:\n{prev_endings}\n\n"
+                        f"TIMELINE: {tl_name}\n"
+                        f"  Premise: {tl_premise}\n"
+                        f"  Divergence axis: {axis}\n\n"
+                        f"CAST:\n{cast_block}\n\n"
+                        "Write the chapters for this timeline now.\n\nCHAPTERS:"
+                    )
+                    provider.generate_text(system=chapter_system, prompt=ch_prompt,
+                                           on_delta=on_delta, cancel=cancel_evt.is_set)
+                    raw = "".join(full_text).strip()
+                    nodes, start_id = _parse_chapters(raw, tl_id)
+                    emit({"type": "timeline_done", "timeline_id": tl_id,
+                          "nodes": {k: v.model_dump() for k, v in nodes.items()},
+                          "start": start_id})
+                    return ArcTimeline(id=tl_id, name=tl_name, premise=tl_premise,
+                                       nodes=nodes, start=start_id)
+
+                with ThreadPoolExecutor(max_workers=len(tl_defs)) as ex:
+                    timelines: list[ArcTimeline] = list(ex.map(expand_timeline, tl_defs))
+
+                if cancel_evt.is_set():
+                    return
+
+                # ── Phase 3: Discover transitions ──────────────────────────
+                emit({"type": "phase", "label": "Discovering transitions…"})
+
+                # Build a chapter summary block for the LLM.
+                tl_blocks = []
+                for tl in timelines:
+                    ordered = []
+                    seen_ch: set = set()
+                    cur_ch = tl.start
+                    while cur_ch and cur_ch not in seen_ch:
+                        seen_ch.add(cur_ch)
+                        nd = tl.nodes.get(cur_ch)
+                        if not nd:
+                            break
+                        ordered.append(nd)
+                        cur_ch = nd.next[0] if nd.next else None
+                    lines = [f"TIMELINE {tl.id}: {tl.name} ({tl.premise})"]
+                    for nd in ordered:
+                        lines.append(f"  {nd.id}: {nd.title} | {nd.emotional_core} | loc:{nd.location}")
+                    tl_blocks.append("\n".join(lines))
+                chapters_block = "\n\n".join(tl_blocks)
+
+                # Build valid (timeline_id, node_id) pairs for the LLM to choose from.
+                valid_pairs = []
+                for tl in timelines:
+                    for nid in tl.nodes:
+                        valid_pairs.append(f"{tl.id}/{nid}")
+                pairs_hint = ", ".join(valid_pairs[:40])
+
+                tr_system = (
+                    "You are a narrative editor. Given parallel timelines of an arc, identify natural "
+                    "TRANSITION POINTS — chapters where a character could plausibly shift from one "
+                    "path to another because their emotional or situational state aligns closely enough.\n\n"
+                    "Rules:\n"
+                    "- Transitions must feel narratively credible — the two chapters must be at a "
+                    "  similar juncture (same location, similar tension, compatible emotional state)\n"
+                    "- A transition should represent a decision or realisation that tips the character "
+                    "  from one path toward the other\n"
+                    "- `condition`: one sentence describing what tips the character across\n"
+                    "- `direction`: 'up' if shifting toward a lighter/more redemptive path, 'down' otherwise\n"
+                    "- Use EXACT node IDs from the chapter list — do not invent ids\n"
+                    "- 2-4 transitions total; prefer mid-arc crossover points over start/end"
+                )
+                tr_prompt = (
+                    f"ARC: {arc.name} (divergence axis: {axis})\n\n"
+                    f"{chapters_block}\n\n"
+                    f"Valid node references: {pairs_hint}\n\n"
+                    "Identify transition points now."
+                )
+                tr_result = await run_in_threadpool(
+                    lambda: provider.generate_text(system=tr_system, prompt=tr_prompt,
+                                                   emits=TRANSITION_SCHEMA)
+                )
+                raw_trs = (tr_result.data or {}).get("transitions") or []
+
+                # Validate: both ends must exist.
+                tl_node_map = {(tl.id, nid) for tl in timelines for nid in tl.nodes}
+                transitions: list[ArcTransition] = []
+                for tr in raw_trs:
+                    ft = tr.get("from_timeline", ""); fn = tr.get("from_node", "")
+                    tt = tr.get("to_timeline", "");   tn = tr.get("to_node", "")
+                    if (ft, fn) in tl_node_map and (tt, tn) in tl_node_map and ft != tt:
+                        transitions.append(ArcTransition(
+                            from_timeline=ft, from_node=fn, to_timeline=tt, to_node=tn,
+                            condition=tr.get("condition", ""), direction=tr.get("direction", ""),
+                        ))
+
+                emit({"type": "transitions", "transitions": [t.model_dump() for t in transitions]})
+
+                # ── Persist ───────────────────────────────────────────────
+                safe = re.sub(r"[^\w\-]+", "", key)
+                path = ctx.story_dir() / f"{safe}.yaml"
+                try:
+                    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                    for arc_entry in (data.get("arcs") or []):
+                        if arc_entry.get("id") == arc_id:
+                            arc_entry["timelines"] = [
+                                {
+                                    "id": tl.id, "name": tl.name, "premise": tl.premise,
+                                    "start": tl.start,
+                                    "nodes": {k: v.model_dump() for k, v in tl.nodes.items()},
+                                }
+                                for tl in timelines
+                            ]
+                            arc_entry["transitions"] = [t.model_dump() for t in transitions]
+                            arc_entry["divergence_axis"] = axis
+                            break
+                    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+                    ctx.reload_settings()
+                except Exception:  # noqa: BLE001
+                    pass
+
+                emit({
+                    "type": "result",
+                    "arc_id": arc_id,
+                    "axis": axis,
+                    "timelines": [
+                        {"id": tl.id, "name": tl.name, "premise": tl.premise, "start": tl.start,
+                         "nodes": {k: v.model_dump() for k, v in tl.nodes.items()}}
+                        for tl in timelines
+                    ],
+                    "transitions": [t.model_dump() for t in transitions],
+                })
+            except Exception as exc:  # noqa: BLE001
+                emit({"type": "error", "error": str(exc)})
+            emit(None)
 
         asyncio.create_task(run())
 
@@ -883,19 +1703,31 @@ def register(app, ctx):
         if primary_key and primary_key not in ctx.base_settings.characters:
             primary_key = None
 
-        # Ensure a UNIQUE display name (not just a unique key) so the story list isn't
-        # full of identically-named entries.
-        existing_names = {st.name for st in ctx.base_settings.stories.values()}
-        if name in existing_names:
-            base_name, n = name, 2
-            while name in existing_names:
-                name, n = f"{base_name} ({n})", n + 1
+        # If the caller provided an existing story key, overwrite that story in place
+        # rather than deduplicating the name/key. This happens when re-generating an
+        # existing story from the wizard (regenStory flow).
+        existing_key = re.sub(r"[^\w\-]+", "", draft.get("existing_key") or "")
+        overwriting = existing_key and (ctx.story_dir() / f"{existing_key}.yaml").is_file()
 
-        # Decide the story key first so NPCs can be tagged with it.
-        skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
-        skey, i = skey_base, 2
-        while (ctx.story_dir() / f"{skey}.yaml").is_file():
-            skey, i = f"{skey_base}_{i}", i + 1
+        if overwriting:
+            skey = existing_key
+            # Keep the existing story's name if the user didn't rename it.
+            existing_st = ctx.base_settings.stories.get(skey)
+            if existing_st and not draft.get("name"):
+                name = existing_st.name
+        else:
+            # Ensure a UNIQUE display name so the story list isn't full of identically-named entries.
+            existing_names = {st.name for st in ctx.base_settings.stories.values()}
+            if name in existing_names:
+                base_name, n = name, 2
+                while name in existing_names:
+                    name, n = f"{base_name} ({n})", n + 1
+
+            # Decide the story key first so NPCs can be tagged with it.
+            skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
+            skey, i = skey_base, 2
+            while (ctx.story_dir() / f"{skey}.yaml").is_file():
+                skey, i = f"{skey_base}_{i}", i + 1
 
         created: list[str] = []
         from .pipeline import extract_protagonist
@@ -1040,6 +1872,7 @@ def register(app, ctx):
             "fields": {"source_character": primary_key} if primary_key else {},
             "intended_ending": draft.get("intended_ending", ""),
             "arcs": arcs_validated,
+            "spine": draft.get("spine") or None,
         }
         try:
             Story(**story)  # validate (start ∈ locations, cast ∈ characters)
@@ -1098,7 +1931,7 @@ def register(app, ctx):
         data = st.model_dump()
         for f in ("name", "premise", "tone", "themes", "storyboard", "cast",
                   "lorebook", "locations", "start", "background", "fields",
-                  "intended_ending", "arcs"):
+                  "intended_ending", "arcs", "spine"):
             if f in (body or {}):
                 data[f] = body[f]
         try:
@@ -1327,6 +2160,26 @@ def register(app, ctx):
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
         body = body or {}
+
+        # This thread's durable state: a dedicated play session holds the mutable world
+        # state; `thread-<sid>` is its write-back lorebook scope (engine-established facts).
+        from ..server.services.story_sessions import load_session, save_session
+        from ..server.services import lorebook_store as _LS0
+        from . import state_engine as _SE0
+        sid = body.get("sid") or f"play-{key}"
+        _sess = load_session(ctx.root, sid) or {}
+        world_state = _SE0.normalize(_sess.get("world_state") or body.get("world_state") or {})
+        thread_scope = re.sub(r"[^\w\-]+", "_", f"thread-{sid}")
+        story_scope = re.sub(r"[^\w\-]+", "_", f"story-{key}")
+
+        # One-time migration: a story's legacy inline `lorebook` dict moves into the
+        # unified libSQL store as the book `story-<key>` (all lore lives in one place).
+        if _LS0.get_book(ctx.root, story_scope) is None and (st.lorebook or {}).get("entries"):
+            from ..server.services import lorebook_import as _LI0
+            _LI0.import_sillytavern(ctx.root, story_scope, st.lorebook["entries"])
+            _LS0.upsert_book(ctx.root, story_scope, name=st.name, category="story",
+                             rating="sfw", description=f"World lore for “{st.name}”.")
+
         tconn = ctx.store.active("text")
         if tconn is None:
             return JSONResponse({"error": "no chat connection"}, status_code=400)
@@ -1357,7 +2210,8 @@ def register(app, ctx):
 
         cast = "\n".join(cast_line(m) for m in st.cast) or "(none)"
         locs = "\n".join(f"- {l.id} | {l.name}: {l.description}" for l in st.locations) or "(none)"
-        lore = "; ".join(e.get("comment", "") for e in (st.lorebook or {}).get("entries", []) if e.get("comment"))
+        # World lore is no longer dumped here — it lives in the `story-<key>` book and is
+        # retrieved (ranked) into the WORLD INFO block below, like every other lorebook.
         cur = body.get("location") or st.start or (st.locations[0].id if st.locations else "")
         # The protagonist. The frontend passes the active persona (who *you* are);
         # fall back to a generic "Player" so old callers still work. A named player
@@ -1370,7 +2224,6 @@ def register(app, ctx):
         system = (
             f"You are the narrator and director of an interactive visual novel titled \"{st.name}\".\n"
             f"PREMISE: {st.premise}\nTONE: {st.tone}\n"
-            + (f"WORLD: {lore}\n" if lore else "")
             + f"{player_line}\n"
             f"CAST (use these names):\n{cast}\n"
             f"LOCATIONS (the scene is in exactly one; use the id):\n{locs}\n\n"
@@ -1393,6 +2246,61 @@ def register(app, ctx):
             who = player_name if m.get("role") == "user" else "Narrator"
             lines.append(f"{who}: {m.get('text', '')}")
         transcript = "\n".join(lines) or "(the story is just beginning)"
+
+        # NSFW injection: when the recent transcript hits trigger keywords, prepend the
+        # matching guidance — `_nsfw` (general intimacy style note) + `_nsfw_acts` (specific
+        # act/position guides). Deterministic word-match; capped so the prompt stays lean.
+        # All editable as normal lorebook entries (PUT /api/lorebook/_nsfw[_acts]).
+        from ..server.services import lorebook_store as _LS
+        _recent = " ".join(str(m.get("text", "")) for m in history[-3:]).lower()
+        _inject: list[str] = []
+        for _scope in ("_nsfw", "_nsfw_acts"):
+            for _e in _LS.load_lorebook(ctx.root, _scope):
+                if not (_e.enabled and _e.content):
+                    continue
+                if any(re.search(rf"\b{re.escape(k.lower())}\b", _recent) for k in _e.keywords if k):
+                    _inject.append(_e.content)
+                    if len(_inject) >= 4:
+                        break
+            if len(_inject) >= 4:
+                break
+        if _inject:
+            system = "\n\n".join(_inject) + "\n\n" + system
+
+        # Canon retrieval: attached lorebooks (world/RPG/story books pinned to this thread)
+        # PLUS the thread's own established-facts scope (engine write-back). Inject what the
+        # recent transcript calls for as a WORLD INFO block.
+        from ..server.services.lorebook import format_lore_block
+        attached = body.get("lorebooks")
+        world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in (attached or []) if s]
+        world_scopes += [story_scope, thread_scope]   # the story's own book + this thread's facts
+        hits = _LS.retrieve(ctx.root, _recent or transcript, world_scopes, top_k=6)
+        if hits:
+            system = system + "\n\n" + format_lore_block(hits)
+
+        # WORLD STATE: the mutable working memory of this playthrough (read every turn).
+        from . import state_engine as _SE
+        _state_block = _SE.render_state(world_state)
+        if _state_block:
+            system = system + "\n\n" + _state_block
+        system = system + (
+            "\n\nAlso report `state_deltas`: a list of update objects for what changed THIS turn. "
+            "Each object has an `op` and ONLY the fields that op needs; set unused fields to \"\" or []. "
+            "`name` is always a CHARACTER's name (never the op word). Examples:\n"
+            "- relationship shift toward the player: {\"op\":\"rel\",\"name\":\"Aria\",\"key\":\"you\",\"value\":\"-1\",\"title\":\"\",\"keywords\":[]}\n"
+            "- a character moves: {\"op\":\"move\",\"name\":\"Aria\",\"key\":\"\",\"value\":\"the pier\",\"title\":\"\",\"keywords\":[]}\n"
+            "- mood change: {\"op\":\"mood\",\"name\":\"Aria\",\"key\":\"\",\"value\":\"guarded\",\"title\":\"\",\"keywords\":[]}\n"
+            "- player gains an item: {\"op\":\"item_add\",\"name\":\"\",\"key\":\"\",\"value\":\"brass key\",\"title\":\"\",\"keywords\":[]}\n"
+            "- a real story variable: {\"op\":\"set_flag\",\"name\":\"\",\"key\":\"met_aria\",\"value\":\"true\",\"title\":\"\",\"keywords\":[]}\n"
+            "- a new fact to remember as canon: {\"op\":\"fact\",\"name\":\"\",\"key\":\"\",\"value\":\"Aria distrusts strangers after being burned before.\",\"title\":\"Aria distrusts strangers\",\"keywords\":[\"Aria\",\"trust\"]}\n"
+            "- a one-line beat summary: {\"op\":\"log\",\"name\":\"\",\"key\":\"\",\"value\":\"Daniel introduced himself; Aria sized him up warily.\",\"title\":\"\",\"keywords\":[]}\n"
+            "Be thorough: for EVERY character present whose mood or stance toward the player shifted "
+            "this turn, emit a `mood` and/or `rel` delta using their EXACT name from the CAST list "
+            "above; emit `move` when someone changes location and `item_add`/`item_remove` when the "
+            "player's belongings change. Always include exactly one `log` op summarizing the beat. Do "
+            "NOT invent flags; only set_flag for genuine story variables. Empty list only if truly "
+            "nothing changed.")
+
         moved = body.get("choice")
         directive = ""
         if moved:
@@ -1400,14 +2308,25 @@ def register(app, ctx):
             directive = f"\n\n[The player moves to: {dest}. Narrate the transition and arrival there; set location to '{moved}'.]"
         prompt = (f"CURRENT LOCATION: {cur}\n\nTRANSCRIPT:\n{transcript}{directive}\n\n"
                   f"Narrate the next turn and report the scene state.")
-        try:
-            res = provider.generate_text(system=system, prompt=prompt, emits=PLAY_SCHEMA)
-            data = res.data or {}
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        # Director narrates AND reports world-state changes in one structured call
+        # (PLAY_SCHEMA + state_deltas). The call is refusal-guarded: on a refusal /
+        # error / invalid output it re-runs on the configured fallback model.
+        import copy as _copy
+        from .guards import generate_guarded
+        from ..server.services import config_files as _cf
+        play_schema = _copy.deepcopy(PLAY_SCHEMA)
+        play_schema["properties"]["state_deltas"] = {"type": "array", "items": _SE.STATE_DELTA_ITEM}
+        play_schema["required"] = list(play_schema["required"]) + ["state_deltas"]
+
+        _fb_key = _cf.load_text_roles(ctx.root).get("fallback")
+        fallback = ctx.text_provider_for(_fb_key) if _fb_key else None
+        guarded = generate_guarded(provider, system=system, prompt=prompt, root=ctx.root,
+                                   emits=play_schema, fallback=fallback)
+        data = guarded["data"] or {}
         if not data:
-            return JSONResponse({"error": "director returned no structured data (model may not support it)"},
-                                status_code=500)
+            return JSONResponse({"error": guarded.get("error") or "director returned no structured data "
+                                          "(model may not support structured output)"}, status_code=500)
         # map present/emotion names -> character keys for the UI's sprite lookup
         name_to_key = {(ctx.base_settings.characters[m.character].name if m.character in ctx.base_settings.characters
                         else m.character).lower(): m.character for m in st.cast}
@@ -1424,11 +2343,24 @@ def register(app, ctx):
                 key = "neutral"
             emotions[ck] = key
         loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
+
+        # Evolve + persist the world state from this turn's deltas. `fact` deltas are
+        # written back into the thread's lorebook scope (retrievable next turn).
+        try:
+            world_state = _SE.apply_deltas(world_state, data.get("state_deltas") or [],
+                                           root=ctx.root, scope=thread_scope)
+            world_state["location"] = loc or world_state.get("location") or ""
+            save_session(ctx.root, sid, {**_sess, "world_state": world_state})
+        except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
+            pass
+
         return {
             "reply": data.get("reply", ""), "location": loc,
             "present": [k for k in present_keys if k],
             "emotions": emotions,
             "movement": bool(data.get("movement")),
+            "state": _SE.summary(world_state),
+            "guard": {"tripped": guarded.get("tripped"), "used_fallback": guarded.get("used_fallback")},
         }
 
     @app.post("/api/stories/{key}/plan-wardrobe")
@@ -1668,7 +2600,7 @@ def register(app, ctx):
             if not text_only:
                 emit({"type": "phase", "label": "Rendering the new base image"})
                 try:
-                    iprov, _mid = ctx.image_provider(ctx.role_model("base"))
+                    iprov, _mid = ctx.role_image_provider("base")
                     if iprov is not None and base_prompt:
                         from ...comfy.server import get_server
                         get_server(iprov.base_url).ensure_up()
@@ -1699,7 +2631,7 @@ def register(app, ctx):
                                                refine_outfits as _refine_outfits)
                     emit({"type": "phase", "label": "Composing expression + pose range"})
                     fresh_exprs = _compose_expressions(w_prov or provider, revised["persona"])
-                    fresh_poses = _compose_poses(w_prov or provider, revised["persona"])
+                    fresh_poses = _compose_poses(w_prov or provider, revised["persona"], ctx.load_pose_library())
                     emit({"type": "phase", "label": "Composing emotional expression range"})
                     _emo_cfg = ctx.load_story_builder()
                     _emo_prov = ctx.author_provider(config_files._stage_model(_emo_cfg, "emotion"))

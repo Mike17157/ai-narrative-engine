@@ -5,7 +5,9 @@
   // its datasets list, captioner config, WD14 status, and caption-job stream.
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import { consumeSse } from '$lib/sse.js';
+  import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   let datasets = $state([]);
   let dataset = $state('');
@@ -65,22 +67,9 @@
     installing = true; capMsg = { text: 'installing onnxruntime into the trainer venv…' };
     try {
       const res = await fetch('/api/lora/wd14/install', { method: 'POST' });
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-          buf = buf.slice(i + 2);
-          if (!line) continue;
-          const ev = JSON.parse(line.slice(5).trim());
-          if (ev.type === 'log') capMsg = { text: ev.line };
-        }
-      }
+      await consumeSse(res, (ev) => {
+        if (ev.type === 'log') capMsg = { text: ev.line };
+      });
     } catch (e) { capMsg = { err: true, text: String(e) }; }
     wd14 = await get('/lora/wd14/status');
     installing = false;
@@ -123,35 +112,22 @@
     try {
       const res = await fetch('/api/lora/caption/stream');
       if (res.status === 204 || !res.body) { busy = false; return; }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = '';
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-          buf = buf.slice(i + 2);
-          if (!line) continue;
-          const ev = JSON.parse(line.slice(5).trim());
-          if (ev.type === 'caption') {
-            const idx = byFile[ev.file];
-            if (idx != null) detail.images[idx].caption = ev.caption;
-            progress = { done: ev.index + 1, total: ev.total };
-          } else if (ev.type === 'error') {
-            if (ev.index != null) progress = { done: ev.index + 1, total: ev.total };
-            capMsg = { err: true, text: ev.file ? `${ev.file}: ${ev.error}` : ev.error };
-          } else if (ev.type === 'log') {
-            capMsg = { text: ev.line };
-          } else if (ev.type === 'fatal') {
-            capMsg = { err: true, text: ev.error };
-          } else if (ev.type === 'start' && ev.total) {
-            progress = { done: progress.done, total: ev.total };
-          }
+      await consumeSse(res, (ev) => {
+        if (ev.type === 'caption') {
+          const idx = byFile[ev.file];
+          if (idx != null) detail.images[idx].caption = ev.caption;
+          progress = { done: ev.index + 1, total: ev.total };
+        } else if (ev.type === 'error') {
+          if (ev.index != null) progress = { done: ev.index + 1, total: ev.total };
+          capMsg = { err: true, text: ev.file ? `${ev.file}: ${ev.error}` : ev.error };
+        } else if (ev.type === 'log') {
+          capMsg = { text: ev.line };
+        } else if (ev.type === 'fatal') {
+          capMsg = { err: true, text: ev.error };
+        } else if (ev.type === 'start' && ev.total) {
+          progress = { done: progress.done, total: ev.total };
         }
-      }
+      });
     } catch (e) { capMsg = { err: true, text: String(e) }; }
     busy = false;
   }
@@ -215,7 +191,7 @@
 
 {#if busy || progress.done}
   <div class="prog">
-    <div class="bar"><span style="width:{progress.total ? Math.round((progress.done / progress.total) * 100) : 0}%"></span></div>
+    <ProgressBar grow value={progress.done} max={progress.total} />
     <span class="pmeta">{progress.done}/{progress.total} captioned{busy ? '…' : ''}</span>
   </div>
 {/if}
@@ -262,8 +238,6 @@
   .ok { color: var(--good); } .err { color: var(--bad); }
 
   .prog { display: flex; align-items: center; gap: 10px; margin: 6px 0 14px; }
-  .bar { flex: 1; height: 8px; border-radius: 999px; background: var(--elev); overflow: hidden; border: 1px solid var(--border); }
-  .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #9a6dff); transition: width .3s; }
   .pmeta { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
   .grid { display: grid; gap: 12px; margin-top: 6px; padding-bottom: 72px; }

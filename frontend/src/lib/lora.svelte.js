@@ -3,6 +3,7 @@
 // GenerateCard. The batch + streaming grid survive navigating away because the
 // job is server-resident and the Training layout reattaches on mount.
 import { get, post } from './api.js';
+import { consumeSse } from './sse.js';
 import { app } from './app.svelte.js';
 
 export const lora = $state({
@@ -56,29 +57,16 @@ export async function attach() {
   try {
     const res = await fetch('/api/lora/stream');
     if (res.status === 204 || !res.body) { lora.busy = false; return; }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-        buf = buf.slice(i + 2);
-        if (!line) continue;
-        const ev = JSON.parse(line.slice(5).trim());
-        if (ev.type === 'start') {
-          if (!lora.rows.length) lora.rows = ev.prompts.map((p) => ({ prompt: p, cells: Array.from({ length: ev.variations }, () => ({})), selected: null }));
-          lora.variations = ev.variations;
-          lora.progress = { done: lora.progress.done, total: ev.total };
-        } else if (ev.type === 'image') lora.rows[ev.row].cells[ev.col] = { src: ev.src };
-        else if (ev.type === 'error' && ev.row != null) lora.rows[ev.row].cells[ev.col] = { error: ev.error || 'failed' };
-        else if (ev.type === 'count') lora.progress = { done: ev.done, total: ev.total };
-        else if (ev.type === 'done') lora.jobStatus = ev.status || 'done';
-      }
-    }
+    await consumeSse(res, (ev) => {
+      if (ev.type === 'start') {
+        if (!lora.rows.length) lora.rows = ev.prompts.map((p) => ({ prompt: p, cells: Array.from({ length: ev.variations }, () => ({})), selected: null }));
+        lora.variations = ev.variations;
+        lora.progress = { done: lora.progress.done, total: ev.total };
+      } else if (ev.type === 'image') lora.rows[ev.row].cells[ev.col] = { src: ev.src };
+      else if (ev.type === 'error' && ev.row != null) lora.rows[ev.row].cells[ev.col] = { error: ev.error || 'failed' };
+      else if (ev.type === 'count') lora.progress = { done: ev.done, total: ev.total };
+      else if (ev.type === 'done') lora.jobStatus = ev.status || 'done';
+    });
   } catch (e) { lora.genMsg = { err: true, text: String(e) }; }
   lora.busy = false; lora.cancelling = false;
 }

@@ -10,6 +10,11 @@ Model `options`:
     api_key:    bearer key (falls back to OPENROUTER_API_KEY / OPENAI_API_KEY)
     model:      e.g. "anthropic/claude-3.5-sonnet", "openai/gpt-4o-mini"
     max_tokens: int (default 1024)
+
+Sampling controls (any subset; omitted → the model/provider default): temperature,
+top_p, top_k, frequency_penalty, presence_penalty, repetition_penalty, min_p. These
+come from a config's `params` and are passed straight through to /chat/completions
+(OpenRouter forwards model-specific ones like top_k/min_p where supported).
 """
 
 from __future__ import annotations
@@ -34,6 +39,13 @@ class OpenAICompatProvider:
         )
         self.model: str = options.get("model", "openai/gpt-4o-mini")
         self.max_tokens: int = int(options.get("max_tokens", 1024))
+        # Optional sampling controls — only those explicitly set are forwarded.
+        self.sampling: dict[str, Any] = {}
+        for k in ("temperature", "top_p", "top_k", "frequency_penalty",
+                  "presence_penalty", "repetition_penalty", "min_p"):
+            v = options.get(k)
+            if v is not None and v != "":
+                self.sampling[k] = v
 
     def _err(self, resp) -> str:
         """Surface the provider's real error body, not a bare 'HTTP 404'."""
@@ -79,7 +91,8 @@ class OpenAICompatProvider:
             messages.append({"role": "user", "content": content})
         else:
             messages.append({"role": "user", "content": prompt})
-        body: dict[str, Any] = {"model": self.model, "messages": messages, "max_tokens": self.max_tokens}
+        body: dict[str, Any] = {"model": self.model, "messages": messages,
+                                "max_tokens": self.max_tokens, **self.sampling}
         url = f"{self.base_url}/chat/completions"
 
         # Structured path — OpenAI-style json_schema response_format.

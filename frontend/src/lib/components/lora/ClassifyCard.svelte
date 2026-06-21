@@ -3,15 +3,17 @@
   // architecture, then tag it detail/theme/character/skip. Classifications land
   // in the shared library config (loraLib.cfg.library). Renders against the
   // shared global test prompt (img.testPrompt).
+  import { onDestroy } from 'svelte';
   import { get } from '$lib/api.js';
+  import { jobStream } from '$lib/sse.js';
   import { img } from '$lib/images.svelte.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
-  import Combobox from '$lib/components/Combobox.svelte';
-  import ScrubInput from '$lib/components/ScrubInput.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
+  import ScrubInput from '$lib/components/shared/ScrubInput.svelte';
   import {
     loraLib, famOf, famLabel, compat, baseFamMap,
   } from '$lib/lora-library.svelte.js';
-  import ImgCard from '$lib/components/ImgCard.svelte';
+  import ImgCard from '$lib/components/image/ImgCard.svelte';
 
   let triageWeight = $state(0.8);
   let triageItems = $state([]);   // every lora: {name, fam, img, status, pct, type}
@@ -57,49 +59,73 @@
     })();
   });
 
+  // Active job tracking (cancel + cleanup on destroy).
+  let _job = null;
+  function _closeJob() { _job?.cancel(); _job = null; }
+  onDestroy(_closeJob);
+
+  function _itemCell(item) {
+    // Build a grid-render cell for one classify item.
+    const w = +triageWeight || 0.8;
+    const cache = { scope: baseModel, lora: item.name, prompt: img.testPrompt, weight: w };
+    return selBase?.checkpoint
+      ? { key: item.name, checkpoint: selBase.checkpoint, lora: item.name, weight: w, prompt: img.testPrompt, cache }
+      : { key: item.name, model: baseModel, loras: [{ name: item.name, weight: w }], prompt: img.testPrompt, cache };
+  }
+
+  function _attachJobStream(id, itemMap, onDone) {
+    _job = jobStream(id, (ev) => {
+      const item = itemMap[ev.key];
+      if (ev.type === 'cell_start') {
+        if (item) { item.status = 'gen'; item.pct = null; item.img = null; }
+      } else if (ev.type === 'cell_progress') {
+        if (item) item.pct = ev.max ? Math.round((ev.value / ev.max) * 100) : null;
+      } else if (ev.type === 'cell_image') {
+        if (item) { item.img = (ev.images || [])[0] || null; }
+      } else if (ev.type === 'cell_error') {
+        if (item) { item.status = 'err'; item.err = ev.error; }
+      } else if (ev.type === 'done') {
+        // Mark any still-gen items as done/err.
+        for (const it of Object.values(itemMap))
+          if (it.status === 'gen') it.status = it.img ? 'done' : 'err';
+      }
+    }, onDone);
+  }
+
   async function renderOne(item) {
     if (!selBase) { item.status = 'nockpt'; return; }
     item.status = 'gen'; item.pct = null; item.img = null;
-    // bundled checkpoint → fast minimal graph; split base (Anima/DiT/Flux) →
-    // inject the LoRA into the real workflow (split-loader aware).
-    const minimal = !!selBase.checkpoint;
-    const url = minimal ? '/api/loras/triage-render' : '/api/lora/sample';
-    const w = +triageWeight || 0.8;
-    const cache = { scope: baseModel, lora: item.name, prompt: img.testPrompt, weight: w };
-    const body = minimal
-      ? { checkpoint: selBase.checkpoint, lora: item.name, weight: w, prompt: img.testPrompt, cache }
-      : { model: baseModel, loras: [{ name: item.name, weight: w }], prompt: img.testPrompt, cache };
     try {
-      const res = await fetch(url, {
+      const res = await fetch('/api/loras/grid-render', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
+        body: JSON.stringify({ cells: [_itemCell(item)] }),
       });
-      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
-      while (true) {
-        const { value, done } = await reader.read(); if (done) break;
-        buf += dec.decode(value, { stream: true }); let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-          buf = buf.slice(i + 2); if (!line) continue;
-          const ev = JSON.parse(line.slice(5).trim());
-          if (ev.type === 'progress') item.pct = ev.max ? Math.round((ev.value / ev.max) * 100) : null;
-          else if (ev.type === 'image') item.img = (ev.images || [])[0] || null;
-          else if (ev.type === 'error') { item.status = 'err'; item.err = ev.error; }
-        }
-      }
-    } catch { item.status = 'err'; return; }
-    if (item.status !== 'err') item.status = 'done';
+      const data = await res.json();
+      if (!data.ok || !data.id) { item.status = 'err'; item.err = data.error || 'failed to start'; return; }
+      await new Promise((resolve) => _attachJobStream(data.id, { [item.name]: item }, resolve));
+    } catch (e) { item.status = 'err'; item.err = String(e); }
+    if (item.status === 'gen') item.status = item.img ? 'done' : 'err';
   }
 
   async function startTriage() {
-    if (triageRunning) { triageRunning = false; return; }  // toggle = stop
+    if (triageRunning) { _closeJob(); triageRunning = false; return; }
     if (!selBase) { loraLib.msg = { err: true, text: 'pick a workflow first' }; return; }
+
+    const pending = visibleTriage.filter((t) => !t.img);
+    if (!pending.length) return;
     triageRunning = true;
-    for (const item of visibleTriage) {
-      if (!triageRunning) break;
-      if (item.img) continue;
-      await renderOne(item);
-    }
+
+    try {
+      const res = await fetch('/api/loras/grid-render', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cells: pending.map(_itemCell) }),
+      });
+      const data = await res.json();
+      if (!data.ok || !data.id) { triageRunning = false; return; }
+      const itemMap = Object.fromEntries(pending.map((t) => [t.name, t]));
+      await new Promise((resolve) => _attachJobStream(data.id, itemMap, resolve));
+    } catch { /* network error */ }
+
     triageRunning = false;
   }
 

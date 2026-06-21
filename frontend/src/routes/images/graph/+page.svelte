@@ -3,20 +3,100 @@
   import { SvelteFlow, SvelteFlowProvider, Background, Controls } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { app, refreshModels } from '$lib/app.svelte.js';
-  import { img, saveWorkflow, loadObjectInfo, connectLink, deleteNode, deleteLink, addNode, selectWorkflow, openTest, chainLora, loadGraphFamilies } from '$lib/images.svelte.js';
+  import { img, saveWorkflow, loadObjectInfo, connectLink, deleteNode, deleteLink, addNode, selectWorkflow, openTest, chainLora, loadGraphFamilies, applyRecipeFlags } from '$lib/images.svelte.js';
+  import { sectionOf, buildSectionMap, VIRTUAL_SECTIONS, inferType, typeColor, toGraph, layoutGraph, toSectionGraph, layoutSectionGraph } from '$lib/workflow_graph.js';
+  import { nodeDoc } from '$lib/node_docs.js';
   import { post } from '$lib/api.js';
-  import { toGraph, layoutGraph } from '$lib/workflow_graph.js';
   import ComfyNode from '$lib/workflow/ComfyNode.svelte';
+  import SectionNode from '$lib/workflow/SectionNode.svelte';
   import NodeTree from '$lib/workflow/NodeTree.svelte';
-  import RoutedEdge from '$lib/workflow/RoutedEdge.svelte';
-  import JsonEditor from '$lib/components/JsonEditor.svelte';
-  import ModelLibraryModal from '$lib/components/ModelLibraryModal.svelte';
+  import LoraStackEditor from '$lib/workflow/LoraStackEditor.svelte';
+  import JsonEditor from '$lib/components/shared/JsonEditor.svelte';
+  import ModelLibraryModal from '$lib/components/image/ModelLibraryModal.svelte';
 
-  const nodeTypes = { comfy: ComfyNode };
-  const edgeTypes = { routed: RoutedEdge };
+  const nodeTypes = { comfy: ComfyNode, section: SectionNode };
+  const edgeTypes = {};
   let nodes = $state.raw([]);
   let edges = $state.raw([]);
-  let view = $state('graph'); // 'graph' | 'json' — JSON is an optional view, not its own tab
+  let view = $state('sections'); // 'sections' | 'graph' | 'json'
+  let drillSection = $state(null); // null = section overview, 'sXXX' = drilled into a section
+  let showInfo = $state(false);    // info panel (ⓘ) — scoped to the current section / recipe
+
+  // ── Compose: generation-type recipes (meta.json) ───────────────────────────
+  // Each recipe says which sections run and how the detailer/upscale/highrez gates
+  // are set for that output type (clipped sprite / scene / standard image).
+  let recipeList = $derived(Object.entries(img.recipes || {}).map(([id, r]) => ({ id, ...r })));
+  let activeRecipe = $derived(img.activeRecipe ? img.recipes?.[img.activeRecipe] : null);
+  // Section prefixes the active recipe keeps "live"; others dim in the Sections view.
+  let recipeSections = $derived(activeRecipe ? new Set(activeRecipe.sections || []) : null);
+
+  function pickRecipe(id) {
+    img.activeRecipe = img.activeRecipe === id ? null : id;
+  }
+  function applyRecipe() {
+    if (!activeRecipe) return;
+    applyRecipeFlags(activeRecipe);
+    img.msg = { ok: true, text: `Applied “${activeRecipe.label}” gates to the workflow — Save to persist.` };
+  }
+
+  // Data-flow order of a section's node IDs: a topological sort over intra-section
+  // edges (source feeds target ⇒ source first). This matches the left→right layer
+  // order ELK assigns, so the list reads upstream→downstream. Used as the fallback
+  // when laid-out positions aren't available.
+  function topoOrderSection(key) {
+    const wf = img.workflow || {};
+    const rsec = buildSectionMap(wf);
+    const ids = Object.keys(wf).filter((id) => rsec(id, wf[id]?.class_type || '') === key);
+    const idset = new Set(ids);
+    const indeg = {}, adj = {};
+    for (const id of ids) { indeg[id] = 0; adj[id] = []; }
+    for (const id of ids)
+      for (const v of Object.values(wf[id]?.inputs || {}))
+        if (Array.isArray(v) && v.length === 2 && typeof v[1] === 'number' && idset.has(String(v[0]))) {
+          adj[String(v[0])].push(id); indeg[id]++;
+        }
+    const queue = ids.filter((id) => indeg[id] === 0), out = [];
+    while (queue.length) {
+      const id = queue.shift(); out.push(id);
+      for (const w of adj[id]) if (--indeg[w] === 0) queue.push(w);
+    }
+    if (out.length < ids.length) { const seen = new Set(out); for (const id of ids) if (!seen.has(id)) out.push(id); }
+    return out;
+  }
+
+  // Node-type breakdown for a section, ordered top→bottom to mirror the graph's
+  // left→right flow. When drilled into this section the laid-out node positions are
+  // the truest order (that's literally what's on screen); otherwise fall back to topology.
+  function sectionStats(key) {
+    const wf = img.workflow || {};
+    let orderedIds;
+    const laid = drillSection === key
+      ? nodes.filter((n) => n.type === 'comfy' && wf[n.id]) : [];
+    if (laid.length && laid.some((n) => (n.position?.x || 0) !== 0)) {
+      orderedIds = laid.slice()
+        .sort((a, b) => (a.position.x - b.position.x) || (a.position.y - b.position.y))
+        .map((n) => n.id);
+    } else {
+      orderedIds = topoOrderSection(key);
+    }
+    const counts = {}, order = [];
+    for (const id of orderedIds) {
+      const ct = wf[id]?.class_type || '?';
+      if (!(ct in counts)) { counts[ct] = 0; order.push(ct); }
+      counts[ct]++;
+    }
+    return { total: orderedIds.length, types: order.map((ct) => [ct, counts[ct]]) };
+  }
+
+  // The description shown at the top of the graph pane, scoped to where you are:
+  // drilled into a section → that section's blurb; a recipe is picked → its blurb;
+  // otherwise the whole-workflow description.
+  let drillMeta = $derived(drillSection ? (img.sections?.[drillSection] ?? VIRTUAL_SECTIONS[drillSection]) : null);
+  let banner = $derived.by(() => {
+    if (drillSection) return { title: drillMeta?.name ?? drillSection, text: drillMeta?.desc ?? '', color: drillMeta?.color };
+    if (activeRecipe) return { title: activeRecipe.label, text: activeRecipe.desc ?? '', color: '#8b5cf6' };
+    return { title: app.activeImage || 'Workflow', text: img.description ?? '', color: '#607d8b' };
+  });
 
   // Selected block (drives the bottom resize bar). Kept across rebuilds.
   let selectedId = $state(null);
@@ -27,8 +107,131 @@
   let rebuildSeq = 0;
   async function rebuild() {
     const seq = ++rebuildSeq;
-    const g = toGraph(img.workflow, img.objectInfo, img.nodeSizes);
-    const laid = await layoutGraph(g.nodes, g.edges, img.nodeSizes);
+    if (!img.workflow) { nodes = []; edges = []; return; }
+
+    let g, laid;
+    if (drillSection) {
+      // Drill-in: show the section's nodes with boundary stubs for cross-section I/O.
+      const rsec = buildSectionMap(img.workflow);
+      const subset = Object.fromEntries(
+        Object.entries(img.workflow).filter(([id, n]) =>
+          rsec(id, n?.class_type || '') === drillSection
+        )
+      );
+      const subsetIds = new Set(Object.keys(subset));
+      // Pre-compute which slots of internal nodes are consumed by EXTERNAL nodes.
+      // Without these hints, nodes whose outputs only cross section boundaries would
+      // default to a single anonymous "out 0" slot (Context Big, ImpactSwitch, etc.).
+      const hintUsedSlots = {};
+      for (const [extId, extNode] of Object.entries(img.workflow)) {
+        if (subsetIds.has(extId)) continue;
+        for (const [, val] of Object.entries(extNode.inputs || {})) {
+          if (!Array.isArray(val) || val.length !== 2 || typeof val[1] !== 'number') continue;
+          const srcId = String(val[0]);
+          if (!subsetIds.has(srcId)) continue;
+          (hintUsedSlots[srcId] ||= new Set()).add(val[1]);
+        }
+      }
+      g = toGraph(subset, img.objectInfo, img.nodeSizes, hintUsedSlots);
+      const internalIds = new Set(g.nodes.map(n => n.id));
+
+      // ── Build boundary stubs ─────────────────────────────────────────────
+      // Scan for cross-section connections; deduplicate by data type label.
+      const inPorts = new Map();    // portId → { handleId, label, type }
+      const inEdges = [];
+      const outPorts = new Map();
+      const outEdges = [];
+      const outEdgeKeys = new Set();
+
+      for (const [id, node] of Object.entries(subset)) {
+        for (const [inputName, val] of Object.entries(node.inputs || {})) {
+          if (!Array.isArray(val) || val.length !== 2 || typeof val[1] !== 'number') continue;
+          const srcId = String(val[0]);
+          if (subsetIds.has(srcId)) continue;
+          const srcNode = img.workflow[srcId];
+          if (!srcNode) continue;
+          const slot = val[1];
+          const otype = img.objectInfo?.[srcNode.class_type]?.outputs?.[slot]?.type
+                     || inferType(inputName) || '';
+          const label = otype || inputName;
+          const portId = `__in__${label}`;
+          if (!inPorts.has(portId)) inPorts.set(portId, { handleId: portId, label, type: otype });
+          inEdges.push({
+            id: `stubin_${id}_${inputName}`,
+            source: '__section_inputs__', sourceHandle: portId,
+            target: id, targetHandle: inputName,
+            data: { type: otype },
+            style: `stroke:${typeColor(otype)};stroke-width:2;opacity:.85`,
+            markerEnd: { type: 'arrowclosed', color: typeColor(otype) },
+          });
+        }
+      }
+
+      for (const [extId, extNode] of Object.entries(img.workflow)) {
+        if (subsetIds.has(extId)) continue;
+        for (const [inputName, val] of Object.entries(extNode.inputs || {})) {
+          if (!Array.isArray(val) || val.length !== 2 || typeof val[1] !== 'number') continue;
+          const srcId = String(val[0]);
+          if (!subsetIds.has(srcId)) continue;
+          const srcClass = img.workflow[srcId]?.class_type || '';
+          const slot = val[1];
+          const otype = img.objectInfo?.[srcClass]?.outputs?.[slot]?.type
+                     || inferType(inputName) || '';
+          const label = otype || inputName;
+          const portId = `__out__${label}`;
+          if (!outPorts.has(portId)) outPorts.set(portId, { handleId: portId, label, type: otype });
+          const eKey = `${srcId}__${slot}__${portId}`;
+          if (!outEdgeKeys.has(eKey)) {
+            outEdgeKeys.add(eKey);
+            outEdges.push({
+              id: `stubout_${srcId}_${slot}_${portId}`,
+              source: srcId, sourceHandle: `out-${slot}`,
+              target: '__section_outputs__', targetHandle: portId,
+              data: { type: otype },
+              style: `stroke:${typeColor(otype)};stroke-width:2;opacity:.85`,
+              markerEnd: { type: 'arrowclosed', color: typeColor(otype) },
+            });
+          }
+        }
+      }
+
+      // Boundary nodes reuse the SectionNode component (type='section').
+      // Input stub has outputs (right handles); output stub has inputs (left handles).
+      const BW = 200, BH = 36, BR = 30, BP = 12;
+      const boundaryNodes = [];
+      if (inPorts.size) {
+        const ports = [...inPorts.values()];
+        boundaryNodes.push({
+          id: '__section_inputs__', type: 'section', position: { x: 0, y: 0 },
+          data: { name: 'Inputs', color: '#27ae60', inputs: [], outputs: ports,
+                  order: -999, section: '__boundary__', count: 0 },
+          width: BW, height: BH + ports.length * BR + BP,
+        });
+      }
+      if (outPorts.size) {
+        const ports = [...outPorts.values()];
+        boundaryNodes.push({
+          id: '__section_outputs__', type: 'section', position: { x: 0, y: 0 },
+          data: { name: 'Outputs', color: '#c0392b', inputs: ports, outputs: [],
+                  order: 999, section: '__boundary__', count: 0 },
+          width: BW, height: BH + ports.length * BR + BP,
+        });
+      }
+
+      g.nodes = [...boundaryNodes, ...g.nodes];
+      g.edges = [
+        ...g.edges.filter(e => internalIds.has(e.source) && internalIds.has(e.target)),
+        ...inEdges, ...outEdges,
+      ];
+      laid = await layoutGraph(g.nodes, g.edges, img.nodeSizes);
+    } else if (view === 'sections') {
+      g = toSectionGraph(img.workflow, img.sections);
+      laid = await layoutSectionGraph(g.nodes, g.edges);
+    } else {
+      g = toGraph(img.workflow, img.objectInfo, img.nodeSizes);
+      laid = await layoutGraph(g.nodes, g.edges, img.nodeSizes);
+    }
+
     if (seq !== rebuildSeq) return;
     nodes = selectedId ? laid.nodes.map((n) => (n.id === selectedId ? { ...n, selected: true } : n)) : laid.nodes;
     edges = laid.edges;
@@ -240,6 +443,9 @@
     }
   }
 
+  // LoRA stack config modal — opened when clicking any Lora Stacker node.
+  let loraConfig = $state(null); // null | { nodeId, widgetName, title }
+
   // Full cross-family model library + organizer (relocated here from the Models pane).
   let libOpen = $state(false);
   async function onLibApplied() { await refreshModels(); loadGraphFamilies(); }
@@ -252,13 +458,32 @@
     return () => document.removeEventListener('click', onDoc);
   });
 
-  // Rebuild + auto-layout only when the *workflow itself* changes (a new object
-  // from loadWorkflow). Field edits mutate the same object, so untrack() keeps
-  // them from re-tracking — typing in a node never rebuilds/relays the graph.
+  // Rebuild whenever anything that affects the graph changes.
   $effect(() => {
-    img.workflow; // track the reference (new workflow loaded)
-    img.layoutNonce; // …and explicit relayout requests (e.g. a prompt box grew)
+    img.workflow;
+    img.layoutNonce;
+    img.sections;  // section metadata arriving after initial workflow load
+    view;
+    drillSection;  // entering or exiting a section drill
     untrack(rebuild);
+  });
+
+  // Dim nodes outside the active section (only in full Nodes view — no dimming when drilled).
+  // ALL reads of `nodes` must be inside untrack() — reading it outside would make `nodes`
+  // a reactive dependency, causing an infinite loop (effect sets nodes → nodes changes → effect fires).
+  $effect(() => {
+    const sec = (!drillSection && view === 'graph') ? img.activeSection : null;
+    // In the Sections overview, an active Compose recipe dims sections it doesn't use.
+    const rsecs = (!drillSection && view === 'sections') ? recipeSections : null;
+    untrack(() => {
+      if (!nodes.length) return;
+      nodes = nodes.map((n) => {
+        let dim = false;
+        if (sec) dim = (n.data?.section || sectionOf(n.id)) !== sec;
+        else if (rsecs) dim = !rsecs.has(n.id);
+        return { ...n, class: dim ? 'sect-dim' : '' };
+      });
+    });
   });
 </script>
 
@@ -278,7 +503,8 @@
   <button class="tbtn" onclick={() => (libOpen = true)} title="Browse & organize the full model library (all families)">⊞ <span>Model library</span></button>
   {#if img.workflow}
     <div class="seg" role="tablist">
-      <button class:on={view === 'graph'} onclick={() => (view = 'graph')}>Graph</button>
+      <button class:on={view === 'sections'} onclick={() => (view = 'sections')}>Sections</button>
+      <button class:on={view === 'graph'} onclick={() => (view = 'graph')}>Nodes</button>
       <button class:on={view === 'json'} onclick={() => (view = 'json')}>JSON</button>
     </div>
     <span class="spacer"></span>
@@ -302,6 +528,20 @@
             </div>
           {/if}
         </div>
+        <button class="tbtn" onclick={rebuild} title="Re-run auto-layout">⟲ <span>Re-layout</span></button>
+      {/if}
+      {#if view === 'sections'}
+        {#if recipeList.length}
+          <div class="compose" title="Highlight the stages each output type uses">
+            <span class="clabel">Compose</span>
+            {#each recipeList as r (r.id)}
+              <button class="cbtn" class:on={img.activeRecipe === r.id} onclick={() => pickRecipe(r.id)}>{r.label}</button>
+            {/each}
+            {#if activeRecipe}
+              <button class="cbtn apply" onclick={applyRecipe} title="Set the detailer / upscale / hi-res gates in the workflow to match this mode">Apply gates</button>
+            {/if}
+          </div>
+        {/if}
         <button class="tbtn" onclick={rebuild} title="Re-run auto-layout">⟲ <span>Re-layout</span></button>
       {/if}
       {#if dupName !== null}
@@ -357,20 +597,105 @@
   {/if}
   <SvelteFlowProvider>
     <div class="ge" ondragover={(e) => e.preventDefault()} ondrop={onDropWorkflow}>
-      <NodeTree {nodes} onmutate={rebuild} onadd={openPalette} onchainlora={chainLora} />
+      <NodeTree
+        {nodes}
+        isSectionView={view === 'sections'}
+        {drillSection}
+        onmutate={rebuild}
+        onadd={openPalette}
+        onchainlora={chainLora}
+        ondrillsection={(key) => { drillSection = key; selectedId = null; img.activeSection = null; }}
+        ondrillexit={() => { drillSection = null; selectedId = null; }}
+      />
       <div class="flowwrap">
+        <!-- Scoped description bar: workflow blurb in overview, recipe blurb when a
+             Compose mode is picked, section blurb when drilled in. -->
+        <div class="topbar">
+          {#if drillSection}
+            <button class="bcrumb-back" onclick={() => { drillSection = null; selectedId = null; }}>← Sections</button>
+          {/if}
+          <span class="tb-dot" style="background:{banner.color ?? '#7f8aa3'}"></span>
+          <span class="tb-title">{banner.title}</span>
+          {#if banner.text}<p class="tb-desc">{banner.text}</p>{/if}
+        </div>
+
+        <button class="infobtn" class:on={showInfo} onclick={() => (showInfo = !showInfo)}
+          title="{drillSection ? 'Section' : activeRecipe ? 'Compose mode' : 'Workflow'} details">ⓘ</button>
+
+        {#if showInfo}
+          <div class="infopanel">
+            {#if drillSection}
+              {@const st = sectionStats(drillSection)}
+              <div class="ip-head" style="--c:{drillMeta?.color ?? '#7f8aa3'}">
+                <span class="ip-dot"></span>{drillMeta?.name ?? drillSection}
+                <span class="ip-tag">{st.total} node{st.total === 1 ? '' : 's'}</span>
+              </div>
+              {#if drillMeta?.desc}<p class="ip-desc">{drillMeta.desc}</p>{/if}
+              {#if st.types.length}
+                <div class="ip-sub">Nodes</div>
+                <div class="ip-nodes">
+                  {#each st.types as [ct, n] (ct)}
+                    <div class="ip-node">
+                      <div class="ip-nrow"><span class="ip-nname">{ct}</span>{#if n > 1}<span class="ip-ncount">×{n}</span>{/if}</div>
+                      {#if nodeDoc(ct, img.objectInfo)}<div class="ip-ndoc">{nodeDoc(ct, img.objectInfo)}</div>{/if}
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            {:else if activeRecipe}
+              <div class="ip-head" style="--c:#8b5cf6"><span class="ip-dot"></span>{activeRecipe.label}</div>
+              <p class="ip-desc">{activeRecipe.desc}</p>
+              <div class="ip-sub">Gates</div>
+              <div class="ip-flags">
+                {#each Object.entries(activeRecipe.flags || {}) as [f, on] (f)}
+                  <span class="ip-flag" class:on>{on ? '●' : '○'} {f}</span>
+                {/each}
+              </div>
+              <div class="ip-sub">Output</div>
+              <div class="ip-kv">
+                <span>variant</span><b>{activeRecipe.variant ?? 'full'}</b>
+                {#if activeRecipe.latent}<span>canvas</span><b>{activeRecipe.latent[0]}×{activeRecipe.latent[1]}</b>{/if}
+              </div>
+              <div class="ip-note">“Apply gates” sets the detailer / upscale / hi-res switches in the workflow. Variant &amp; canvas are applied per render.</div>
+            {:else}
+              <div class="ip-head" style="--c:#607d8b"><span class="ip-dot"></span>{app.activeImage || 'Workflow'}</div>
+              {#if img.description}<p class="ip-desc">{img.description}</p>{/if}
+              <div class="ip-sub">Stages</div>
+              <div class="ip-stages">
+                {#each Object.entries(img.sections || {}).sort((a, b) => (a[1].order ?? 99) - (b[1].order ?? 99)) as [key, s] (key)}
+                  <button class="ip-stage" onclick={() => { drillSection = key; selectedId = null; img.activeSection = null; showInfo = false; }}>
+                    <span class="ip-dot" style="--c:{s.color}"></span>
+                    <span class="ip-sname">{s.name}</span>
+                    {#if s.desc}<span class="ip-sdesc">{s.desc}</span>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+        {/if}
         <SvelteFlow bind:nodes bind:edges {nodeTypes} {edgeTypes} colorMode="dark" fitView
           nodesDraggable={true} minZoom={0.15}
           deleteKeyCode={['Delete', 'Backspace']}
           isValidConnection={isValid}
-          onnodeclick={(_e, node) => (selectedId = node?.id ?? null)}
+          onnodeclick={(_e, node) => {
+            if (node?.type === 'section' && !node.id.startsWith('__section_')) {
+              // Clicking a section node drills into it (boundary stubs are excluded)
+              drillSection = node.id; selectedId = null; img.activeSection = null;
+            } else if (node?.data?.classType?.includes('Lora Stacker')) {
+              // Lora Stacker nodes open the stack config modal instead of inline editing.
+              selectedId = node.id;
+              loraConfig = { nodeId: node.id, widgetName: 'text', title: node.data.title || node.id };
+            } else {
+              selectedId = node?.id ?? null;
+            }
+          }}
           onpaneclick={() => (selectedId = null)}
           onconnect={onConnect} onconnectend={onConnectEnd} ondelete={onDelete}>
           <Background />
           <Controls />
         </SvelteFlow>
 
-        {#if selected}
+        {#if selected && view === 'graph'}
           <div class="boxbar">
             <span class="bn" title={selected.data?.title}>{selected.data?.title}</span>
             <label class="scl">Width <input type="range" min="160" max="460" step="5" value={selSize.nodeW} oninput={(e) => setSize('nodeW', +e.currentTarget.value)} /></label>
@@ -381,9 +706,27 @@
   </SvelteFlowProvider>
 {/if}
 
+{#if loraConfig}
+  <!-- LoRA stack config modal — scoped to the graph page. -->
+  <div class="lora-modal-bg" onclick={() => (loraConfig = null)}>
+    <div class="lora-modal" onclick={(e) => e.stopPropagation()}>
+      <div class="lm-head">
+        <span class="lm-title">{loraConfig.title}</span>
+        <span class="lm-sub">LoRA stack</span>
+        <button class="lm-close" onclick={() => (loraConfig = null)}>✕</button>
+      </div>
+      <div class="lm-body">
+        <LoraStackEditor nodeId={loraConfig.nodeId} widgetName={loraConfig.widgetName} />
+      </div>
+    </div>
+  </div>
+{/if}
+
 <ModelLibraryModal open={libOpen} onclose={() => (libOpen = false)} onapplied={onLibApplied} />
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && (drop = null)} />
+<svelte:window onkeydown={(e) => {
+  if (e.key === 'Escape') { drop = null; loraConfig = null; }
+}} />
 
 {#if drop}
   <div class="dropmenu" bind:this={dropEl} style="left:{drop.x}px; top:{drop.y}px" onclick={(e) => e.stopPropagation()}>
@@ -496,5 +839,106 @@
   /* selected edge: thicken + white so it's clear what Delete will remove */
   .flowwrap :global(.svelte-flow__edge.selected .svelte-flow__edge-path) {
     stroke: #fff !important; stroke-width: 3 !important; opacity: 1 !important;
+  }
+  /* Compose recipe selector (Sections toolbar) */
+  .compose { display: inline-flex; align-items: center; gap: 4px; padding: 3px 4px 3px 9px;
+    border: 1px solid var(--border); border-radius: 9px; background: var(--elev); }
+  .clabel { font-size: 11px; font-weight: 700; color: var(--faint); text-transform: uppercase; letter-spacing: .4px; margin-right: 2px; }
+  .cbtn { border: 0; box-shadow: none; background: transparent; color: var(--muted);
+    padding: 5px 10px; font-size: 12.5px; font-weight: 600; border-radius: 7px; }
+  .cbtn:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .cbtn.on { color: #fff; background: #8b5cf6; }
+  .cbtn.apply { color: #fff; background: var(--accent); margin-left: 2px; }
+  .cbtn.apply:hover { background: var(--accent); filter: brightness(1.08); }
+
+  /* scoped description bar — top-left of the graph pane */
+  .topbar {
+    position: absolute; top: 10px; left: 10px; z-index: 5; max-width: min(520px, 60%);
+    display: grid; grid-template-columns: auto auto 1fr; align-items: center; gap: 4px 8px;
+    padding: 9px 13px; border-radius: 12px;
+    background: rgba(20, 24, 34, .9); border: 1px solid var(--border);
+    box-shadow: 0 6px 20px rgba(0,0,0,.4); backdrop-filter: blur(8px); pointer-events: auto;
+  }
+  .bcrumb-back { background: none; box-shadow: none; padding: 0; color: var(--muted); font-weight: 600; font-size: 12px; }
+  .bcrumb-back:hover { color: var(--text); filter: none; }
+  .tb-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .tb-title { font-size: 13px; font-weight: 700; color: var(--text); }
+  .tb-desc { grid-column: 1 / -1; margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: var(--muted);
+    display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* info toggle + panel — top-right of the graph pane */
+  .infobtn {
+    position: absolute; top: 10px; right: 10px; z-index: 6;
+    width: 30px; height: 30px; padding: 0; border-radius: 50%; font-size: 15px;
+    background: rgba(20, 24, 34, .9); border: 1px solid var(--border); color: var(--muted);
+    box-shadow: 0 4px 14px rgba(0,0,0,.4); backdrop-filter: blur(8px);
+  }
+  .infobtn:hover { color: var(--text); filter: none; }
+  .infobtn.on { color: #fff; border-color: var(--accent); background: var(--accent); }
+  .infopanel {
+    position: absolute; top: 48px; right: 10px; z-index: 6; width: 320px; max-height: 76%; overflow: auto;
+    padding: 14px; border-radius: 12px;
+    background: rgba(20, 24, 34, .96); border: 1px solid var(--border);
+    box-shadow: 0 12px 34px rgba(0,0,0,.5); backdrop-filter: blur(10px);
+  }
+  .ip-head { display: flex; align-items: center; gap: 7px; font-size: 13.5px; font-weight: 700; color: var(--text); }
+  .ip-dot { width: 9px; height: 9px; border-radius: 50%; background: var(--c, #7f8aa3); flex: none; }
+  .ip-tag { margin-left: auto; font-size: 11px; font-weight: 600; color: var(--faint); }
+  .ip-desc { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--muted); }
+  .ip-sub { margin-top: 12px; font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--faint); font-weight: 700; }
+  .ip-nodes { display: flex; flex-direction: column; gap: 8px; margin-top: 7px; }
+  .ip-node { border-left: 2px solid var(--border); padding-left: 9px; }
+  .ip-nrow { display: flex; align-items: baseline; gap: 6px; }
+  .ip-nname { font-size: 11.5px; font-family: ui-monospace, monospace; font-weight: 600; color: var(--text); }
+  .ip-ncount { font-size: 10.5px; color: var(--faint); }
+  .ip-ndoc { margin-top: 2px; font-size: 11.5px; line-height: 1.45; color: var(--muted); }
+  .ip-flags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .ip-flag { font-size: 11.5px; font-weight: 600; color: var(--faint); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); }
+  .ip-flag.on { color: #fff; background: #8b5cf6; border-color: transparent; }
+  .ip-kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; margin-top: 6px; font-size: 12px; }
+  .ip-kv span { color: var(--faint); }
+  .ip-kv b { color: var(--text); font-weight: 600; }
+  .ip-note { margin-top: 10px; font-size: 11px; line-height: 1.45; color: var(--faint); font-style: italic; }
+  .ip-stages { display: flex; flex-direction: column; gap: 2px; margin-top: 6px; }
+  .ip-stage { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 4px 8px;
+    text-align: left; background: none; box-shadow: none; color: var(--text); padding: 6px 8px; border-radius: 8px; }
+  .ip-stage:hover { background: var(--elev-2); filter: none; }
+  .ip-sname { font-size: 12.5px; font-weight: 600; }
+  .ip-sdesc { grid-column: 2; font-size: 11px; line-height: 1.4; color: var(--muted);
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+
+  /* LoRA stack config modal */
+  .lora-modal-bg {
+    position: fixed; inset: 0; z-index: 200;
+    background: rgba(0,0,0,.55); backdrop-filter: blur(3px);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .lora-modal {
+    width: 420px; max-width: calc(100vw - 32px); max-height: 80vh;
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 24px 64px rgba(0,0,0,.6); display: flex; flex-direction: column; overflow: hidden;
+  }
+  .lm-head {
+    display: flex; align-items: center; gap: 10px; padding: 14px 16px;
+    border-bottom: 1px solid var(--border-soft);
+    background: var(--elev);
+  }
+  .lm-title { font-size: 15px; font-weight: 700; color: var(--text); }
+  .lm-sub { font-size: 11.5px; color: var(--muted); margin-top: 1px; }
+  .lm-close {
+    margin-left: auto; background: none; box-shadow: none; border: none;
+    color: var(--faint); font-size: 16px; padding: 2px 6px; border-radius: 6px;
+  }
+  .lm-close:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .lm-body { overflow-y: auto; flex: 1; }
+
+  /* section dimming: non-active section nodes fade out and lose pointer events */
+  .flowwrap :global(.svelte-flow__node.sect-dim) {
+    opacity: 0.12;
+    pointer-events: none;
+    transition: opacity .18s;
+  }
+  .flowwrap :global(.svelte-flow__node:not(.sect-dim)) {
+    transition: opacity .18s;
   }
 </style>

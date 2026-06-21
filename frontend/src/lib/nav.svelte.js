@@ -7,6 +7,7 @@
 import { chars } from './characters.svelte.js';
 import { stories } from './stories.svelte.js';
 import { app } from './app.svelte.js';
+import { openConfigModal } from './configModal.svelte.js';
 
 export function charactersTree() {
   const n = chars.list?.length || 0;
@@ -27,7 +28,7 @@ export function imagesTree() {
     { id: 'lora',        label: 'LoRA',       href: '/images/lora/library' },
     { id: 'models',      label: 'Models',     href: '/images/models' },
     { id: 'poses',       label: 'Poses',      href: '/images/poses' },
-    { id: 'connection',  label: 'Connection', href: '/settings/connections' },
+    { id: 'connection',  label: '⚙ Connection', action: () => openConfigModal({ tab: 'connections' }) },
   ];
 }
 
@@ -41,16 +42,15 @@ export function trainingTree() {
   ];
 }
 
-// Settings subnav — organized by concern, not by kind. Connections owns
-// credentials (chat + image); Models owns which model/workflow is active off an
-// active connection; Generation owns story-builder + image-role config.
-// Personas live under Characters.
+// Settings subnav — Models, connections AND the generation pipeline configs (story-
+// builder stages, prompts, image roles) all moved out of settings into the point-of-use
+// ⚙ config modal, where each stage is just a script-bound chat config. The launchers
+// below keep them discoverable here. Personas live under Characters.
 export function settingsTree() {
   return [
     { id: 'system',      label: 'System',      href: '/settings/system' },
-    { id: 'connections', label: 'Connections', href: '/settings/connections' },
-    { id: 'models',      label: 'Models',      href: '/settings/models' },
-    { id: 'generation',  label: 'Generation',  href: '/settings/story-gen' },
+    { id: 'modelsconn',  label: '⚙ Models & connections', action: () => openConfigModal({ tab: 'models' }) },
+    { id: 'gencfg',      label: '⚙ Generation configs',   action: () => openConfigModal({ tab: 'configs' }) },
   ];
 }
 
@@ -100,7 +100,18 @@ export function storiesTree(path = '') {
   // Mode A — library (no story links — the library page is now the management view)
   return [
     { id: 'library', label: 'Library', href: '/stories', match: 'exact' },
-    { id: 'pipeline', label: 'Generation', href: '/settings/story-gen' },
+    { id: 'pipeline', label: '⚙ Generation', action: () => openConfigModal({ tab: 'configs' }) },
+  ];
+}
+
+// Lorebooks subnav — manager landing + filter shortcuts. The page owns book
+// selection/editing; the subnav just frames the section and offers rating filters.
+export function loreTree() {
+  return [
+    { id: 'lore-all',  label: 'All books', href: '/lorebooks', match: 'exact' },
+    { id: 'lore-sfw',  label: 'SFW',       href: '/lorebooks?rating=sfw' },
+    { id: 'lore-nsfw', label: 'NSFW',      href: '/lorebooks?rating=nsfw' },
+    { id: 'lore-import', label: 'Import',  href: '/lorebooks?import=1' },
   ];
 }
 
@@ -111,6 +122,7 @@ export function treeFor(section, path = '') {
     case 'training':   return trainingTree();
     case 'settings':   return settingsTree();
     case 'stories':    return storiesTree(path);
+    case 'lorebooks':  return loreTree();
     default: return [];
   }
 }

@@ -64,7 +64,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
 
     # 3. base image → the character's reference (.ref.png)
     emit({"type": "phase", "label": "Rendering the base image"})
-    provider, mid = ctx.image_provider(ctx.role_model("base"))
+    provider, mid = ctx.role_image_provider("base")
     if provider is None:
         raise ValueError(mid)
     get_server(provider.base_url).ensure_up()
@@ -83,7 +83,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     _w_cfg = ctx.load_story_builder()
     _w_prov = ctx.author_provider(config_files._stage_model(_w_cfg, "wardrobe"))
     exprs = compose_expressions(_w_prov, persona)
-    poses = compose_poses(_w_prov, persona)
+    poses = compose_poses(_w_prov, persona, ctx.load_pose_library())
 
     # 5. one default outfit → manifest
     emit({"type": "phase", "label": "Composing the outfit"})
@@ -99,8 +99,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     odir = ctx.portrait_dir(key, create=True) / oid
     odir.mkdir(parents=True, exist_ok=True)
 
-    sprite_model = ctx.role_model("sprite")
-    sprov, smid = ctx.image_provider(sprite_model)
+    sprov, smid = ctx.role_image_provider("sprite")
     if sprov is None:
         raise ValueError(smid)
     get_server(sprov.base_url).ensure_up()
@@ -127,7 +126,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
         prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(
             p for p in (appearance, attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if p))))
         try:
-            prov2, _mid = ctx.image_provider(sprite_model)  # fresh workflow/seed per render
+            prov2, _mid = ctx.role_image_provider("sprite")  # fresh workflow/seed per render
             _randomize_seeds(prov2.workflow)
             rr = prov2.generate_image(prompt=prompt, latent=ctx.pose_latent(emo),
                                       out_prefix=ctx.output_prefix_for(smid, "sprite", key))

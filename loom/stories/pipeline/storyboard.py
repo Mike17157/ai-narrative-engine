@@ -8,17 +8,53 @@ from ._helpers import _card_context, _sys
 
 
 def storyboard_inputs(*, name: str, persona: str, extras: dict | None = None,
-                      systems: dict | None = None, premise: str = "") -> tuple[str, str]:
+                      systems: dict | None = None, premise: str = "",
+                      spine: dict | None = None) -> tuple[str, str]:
     """(system, prompt) for the storyboard stage. Streamed token-by-token."""
     card = _card_context(name, persona, extras or {})
-    if premise:
-        user_prompt = (
-            f"{card}\n\n"
-            f"USER'S STORY PREMISE: {premise}\n\n"
-            "Storyboard a story for this character, using the premise above as your starting point."
+
+    # Build the spine block if an emotional spine was pre-generated.
+    spine_block = ""
+    if spine and (spine.get("wound") or spine.get("beats")):
+        lines = [
+            "EMOTIONAL SPINE — psychological skeleton the chapters must hang from:",
+        ]
+        if spine.get("wound"):
+            lines.append(f"  WOUND: {spine['wound']}")
+        if spine.get("lie"):
+            lines.append(f"  LIE (false belief): {spine['lie']}")
+        if spine.get("truth"):
+            lines.append(f"  TRUTH (must accept): {spine['truth']}")
+        if spine.get("heart"):
+            lines.append(f"  HEART: {spine['heart']}")
+        beats = spine.get("beats") or []
+        if beats:
+            lines.append("  EMOTIONAL BEATS to force through external events:")
+            for b in beats:
+                lines.append(f"    [{b.get('inflection', '')}] {b.get('description', '')}")
+        lines.append(
+            "\n  CRITICAL: every chapter must be designed to force at least one of these internal "
+            "inflections. The storyboard shows WHAT HAPPENS; the spine is WHY IT MATTERS. Do not "
+            "invent emotional beats — engineer events that produce the beats above."
         )
+        spine_block = "\n".join(lines)
+
+    parts = [card]
+    if spine_block:
+        parts.append(spine_block)
+    if premise:
+        parts.append(f"USER'S STORY PREMISE: {premise}")
+    if spine_block:
+        parts.append(
+            "Storyboard a story for this character. The emotional spine above is the FIXED inner "
+            "journey — derive the outer events to force each beat in order."
+        )
+    elif premise:
+        parts.append("Storyboard a story for this character, using the premise above as your starting point.")
     else:
-        user_prompt = f"{card}\n\nStoryboard a plausible story for this character."
+        parts.append("Storyboard a plausible story for this character.")
+
+    user_prompt = "\n\n".join(parts)
     return (_sys(systems or {}, "storyboard"), user_prompt)
 
 

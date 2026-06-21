@@ -3,7 +3,7 @@
   import { post } from '$lib/api.js';
   import { app, refreshPersonas, setActivePersona, limitedPost, startJob, finishJob } from '$lib/app.svelte.js';
   import { rget, rensure } from '$lib/renders.svelte.js';
-  import ZoomImage from '$lib/components/ZoomImage.svelte';
+  import ZoomImage from '$lib/components/shared/ZoomImage.svelte';
 
   // ── Modal state ──────────────────────────────────────────────────────────
   let editKey = $state(null);

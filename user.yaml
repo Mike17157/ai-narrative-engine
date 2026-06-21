@@ -27,7 +27,7 @@ runpod:
   base_directory: null
   startup_timeout_s: 180
   models_path: C:\Users\micha\Documents\ComfyUI\models
-  enabled: true
+  enabled: false
 paths:
   workflows: ./workflows
   models: ./models

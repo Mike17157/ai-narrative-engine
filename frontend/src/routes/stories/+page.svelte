@@ -22,6 +22,11 @@
   let toneFilter = $state('');
   let castFilter = $state('any');   // 'any' | '1' | '2-4' | '5+'
   let sort = $state('recent');      // 'recent' | 'name' | 'cast'
+  let showFilters = $state(false);  // filter modal open
+
+  // Count only the constraining filters (tone/cast), not sort, for the button badge.
+  let activeFilters = $derived((toneFilter ? 1 : 0) + (castFilter !== 'any' ? 1 : 0));
+  function clearFilters() { toneFilter = ''; castFilter = 'any'; sort = 'recent'; }
 
   let tones = $derived(
     [...new Set(complete.map((s) => s.tone).filter(Boolean))].sort()
@@ -105,28 +110,16 @@
   </div>
 
   {#if complete.length}
-    <!-- toolbar: search + filters + sort -->
+    <!-- toolbar: search + filter button -->
     <div class="toolbar">
       <div class="search">
         <span class="sico">🔍</span>
         <input bind:value={q} placeholder="Search stories — name, premise, cast, themes…" />
         {#if q}<button class="clear" onclick={() => (q = '')} title="Clear">✕</button>{/if}
       </div>
-      <select bind:value={toneFilter} disabled={tones.length < 2}>
-        <option value="">All tones</option>
-        {#each tones as t (t)}<option value={t}>{t}</option>{/each}
-      </select>
-      <select bind:value={castFilter}>
-        <option value="any">Any cast size</option>
-        <option value="1">Solo</option>
-        <option value="2-4">2–4 cast</option>
-        <option value="5+">5+ cast</option>
-      </select>
-      <select bind:value={sort}>
-        <option value="recent">Recent</option>
-        <option value="name">Name A–Z</option>
-        <option value="cast">Cast size</option>
-      </select>
+      <button class="filterbtn" class:active={activeFilters} onclick={() => (showFilters = true)}>
+        ⚙ Filters{#if activeFilters}<span class="fbadge">{activeFilters}</span>{/if}
+      </button>
     </div>
 
     {#if filtered.length}
@@ -153,7 +146,7 @@
     {:else}
       <div class="no-match">
         <p>No stories match your filters.</p>
-        <button class="ghost sm" onclick={() => { q = ''; toneFilter = ''; castFilter = 'any'; }}>Clear filters</button>
+        <button class="ghost sm" onclick={() => { q = ''; clearFilters(); }}>Clear filters</button>
       </div>
     {/if}
   {:else if !drafts.length}
@@ -166,6 +159,51 @@
   {/if}
 
 </div></div>
+
+{#if showFilters}
+  <div class="overlay" onclick={() => (showFilters = false)} role="presentation">
+    <div class="dlg" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
+      <div class="dlghead">
+        <h3 class="title">Filter & sort</h3>
+        <button class="x" onclick={() => (showFilters = false)} title="Close">✕</button>
+      </div>
+
+      <label class="field">
+        <span>Tone</span>
+        <select bind:value={toneFilter} disabled={tones.length < 2}>
+          <option value="">All tones</option>
+          {#each tones as t (t)}<option value={t}>{t}</option>{/each}
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Cast size</span>
+        <select bind:value={castFilter}>
+          <option value="any">Any cast size</option>
+          <option value="1">Solo</option>
+          <option value="2-4">2–4 cast</option>
+          <option value="5+">5+ cast</option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span>Sort by</span>
+        <select bind:value={sort}>
+          <option value="recent">Recent</option>
+          <option value="name">Name A–Z</option>
+          <option value="cast">Cast size</option>
+        </select>
+      </label>
+
+      <div class="acts">
+        <button class="ghost" onclick={clearFilters} disabled={!activeFilters && sort === 'recent'}>Reset</button>
+        <button onclick={() => (showFilters = false)}>Done</button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<svelte:window onkeydown={(e) => { if (showFilters && e.key === 'Escape') showFilters = false; }} />
 
 <style>
   .sechead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
@@ -182,6 +220,33 @@
   .search input:focus { outline: none; border-color: var(--accent); }
   .search .clear { position: absolute; right: 8px; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 12px; padding: 4px; }
   select { padding: 8px 10px; border-radius: 9px; background: var(--elev); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+
+  /* filter button */
+  .filterbtn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: 9px;
+    background: var(--elev); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+  .filterbtn:hover { border-color: var(--border-strong, var(--accent)); }
+  .filterbtn.active { border-color: var(--accent); color: var(--accent); }
+  .fbadge { display: inline-grid; place-items: center; min-width: 17px; height: 17px; padding: 0 5px;
+    border-radius: 999px; background: var(--accent); color: #fff; font-size: 10.5px; font-weight: 700; }
+
+  /* filter modal */
+  .overlay { position: fixed; inset: 0; z-index: 80; background: rgba(6, 8, 12, .62);
+    display: grid; place-items: center; padding: 24px; backdrop-filter: blur(2px); animation: fade .12s ease; }
+  .dlg { width: min(92vw, 380px); background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius-lg, 14px); box-shadow: var(--shadow, 0 18px 50px rgba(0,0,0,.55));
+    padding: 18px; animation: pop .13s ease; }
+  .dlghead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+  .title { margin: 0; font-size: 16px; font-weight: 680; color: var(--text); }
+  .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 4px; }
+  .x:hover { color: var(--text); }
+  .field { display: flex; flex-direction: column; gap: 5px; margin-bottom: 12px; }
+  .field span { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+  .field select { width: 100%; }
+  .acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .acts button { padding: 8px 16px; font-size: 13.5px; border-radius: 9px; }
+  .acts .ghost:disabled { opacity: .4; cursor: not-allowed; }
+  @keyframes fade { from { opacity: 0; } }
+  @keyframes pop { from { opacity: 0; transform: translateY(-8px) scale(.98); } }
 
   /* grids */
   .drafts { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }

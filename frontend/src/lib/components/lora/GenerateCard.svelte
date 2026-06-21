@@ -3,7 +3,8 @@
   // the pipeline (lora.svelte.js). Click images to keep them, then save a
   // curated LoRA dataset. Renders inline (no separate route) — shows an empty
   // state until a batch is started by PromptSet above.
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
+  import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import { openLightbox } from '$lib/lightbox.svelte.js';
   import {
     lora, selectedCount, pick, cancelJob, saveSet,
@@ -28,7 +29,7 @@
     </div>
     {#if lora.busy}<button class="ghost sm" onclick={cancelJob} disabled={lora.cancelling}>{lora.cancelling ? 'Cancelling…' : 'Cancel'}</button>{/if}
   </div>
-  {#if lora.progress.total}<div class="bar"><span style="width:{Math.round((lora.progress.done / lora.progress.total) * 100)}%"></span></div>{/if}
+  {#if lora.progress.total}<ProgressBar value={lora.progress.done} max={lora.progress.total} margin="10px 0" />{/if}
 
   <div class="rows">
     {#each lora.rows as r, ri (ri)}
@@ -63,8 +64,6 @@
   .empty { padding: 24px 8px; }
   .hint { font-size: 12.5px; color: var(--muted); }
   .row { display: flex; gap: 10px; align-items: center; }
-  .bar { height: 8px; border-radius: 999px; background: var(--elev); overflow: hidden; border: 1px solid var(--border); margin: 10px 0; }
-  .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #9a6dff); transition: width .3s; }
   .rows { display: flex; flex-direction: column; gap: 10px; }
   .lrow { padding: 8px; border: 1px solid var(--border-soft); border-radius: var(--radius); }
   .lrow.done { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }

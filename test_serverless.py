@@ -38,15 +38,15 @@ from loom.server.app import _load_dotenv
 
 
 def _pick_model(settings, requested: str | None) -> tuple[str, object]:
-    """Resolve the model key to test: explicit, else the first comfyui image model."""
+    """Resolve the model key to test: explicit, else the first comfyui/runpod_serverless image model."""
     image_models = {k: m for k, m in settings.models.items()
-                    if m.kind == "image" and m.provider == "comfyui"}
+                    if m.kind == "image" and m.provider in ("comfyui", "runpod_serverless")}
     if requested:
         if requested not in settings.models:
             sys.exit(f"model '{requested}' not in models.yaml. image models: {list(image_models)}")
         return requested, settings.models[requested]
     if not image_models:
-        sys.exit("no comfyui image models found in models.yaml")
+        sys.exit("no comfyui/runpod_serverless image models found in models.yaml")
     key = next(iter(image_models))
     return key, image_models[key]
 
@@ -59,6 +59,12 @@ def main() -> None:
     ap.add_argument("--endpoint", default=None, help="RunPod serverless endpoint id (else RUNPOD_ENDPOINT_ID env)")
     ap.add_argument("--count", type=int, default=1, help="how many images to render")
     ap.add_argument("--latent", default=None, help="canvas WxH, e.g. 832x1216")
+    ap.add_argument("--checkpoint", default=None,
+                    help="UNet/checkpoint name to inject (e.g. anima/anisnuff_v15-000024.safetensors). "
+                         "Required when the workflow has a placeholder model path.")
+    ap.add_argument("--detailer", action="store_true", help="enable FaceDetailer pass (character gens)")
+    ap.add_argument("--upscale", action="store_true", help="enable UltimateSDUpscale pass")
+    ap.add_argument("--sage", action="store_true", help="enable SageAttention kernel (faster; needs sageattention in the worker)")
     ap.add_argument("--dry-run", action="store_true", help="print the prepared workflow JSON; make no API call")
     args = ap.parse_args()
 
@@ -79,12 +85,24 @@ def main() -> None:
         w, h = args.latent.lower().split("x")
         latent = (int(w), int(h))
 
+    flags: dict[str, bool] = {}
+    if args.detailer:
+        flags["detailer"] = True
+    if args.upscale:
+        flags["upscale"] = True
+    if args.sage:
+        flags["sage"] = True
+
     # ---- dry run: show the prepared graph, no network -------------------------
     if args.dry_run:
+        from loom.comfy.stack import inject_models
         from loom.providers import _workflow
         wf = json.loads(Path(opts["workflow"]).read_text(encoding="utf-8"))
+        if args.checkpoint:
+            wf = inject_models(wf, args.checkpoint, loras=[])
         graph = _workflow.inject(wf, opts.get("inputs", {}), args.prompt, args.negative,
-                                 out_prefix="loom/_test/serverless", latent=latent)
+                                 out_prefix="loom/_test/serverless", latent=latent,
+                                 flags=flags or None)
         print("\nPrepared workflow (this is exactly what would be sent):\n")
         print(json.dumps(graph, indent=2)[:4000])
         print("\n[dry-run] No API call made. The positive node should now hold your prompt.")
@@ -100,6 +118,7 @@ def main() -> None:
     if not api_key:
         sys.exit("No RUNPOD_API_KEY in environment / .env.")
 
+    from loom.comfy.stack import inject_models
     from loom.providers.runpod_serverless_provider import RunPodServerlessProvider
 
     provider = RunPodServerlessProvider({
@@ -110,6 +129,13 @@ def main() -> None:
         "output_node": opts.get("output_node"),
         "timeout_s": float(opts.get("timeout_s", 600)),
     })
+
+    if args.checkpoint:
+        provider.workflow = inject_models(provider.workflow, args.checkpoint, loras=[])
+        print(f"Checkpoint: {args.checkpoint}")
+    if flags:
+        print(f"Flags:      {flags}")
+
     print(f"Endpoint:   {provider.base_url}")
     print(f"Prompt:     {args.prompt!r}")
     print(f"Rendering {args.count} image(s)...\n")
@@ -126,6 +152,7 @@ def main() -> None:
                 negative_prompt=args.negative,
                 out_prefix=f"loom/_test/serverless_{i}",
                 latent=latent,
+                flags=flags or None,
             )
         except Exception as e:  # noqa: BLE001
             print(f"  [{i}] FAILED: {type(e).__name__}: {e}")

@@ -3,9 +3,9 @@
   import { get, post } from '$lib/api.js';
   import { app } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
-  import ZoomImage from '$lib/components/ZoomImage.svelte';
-  import Portraits from '$lib/components/Portraits.svelte';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import ZoomImage from '$lib/components/shared/ZoomImage.svelte';
+  import Portraits from '$lib/components/image/Portraits.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   let active = $derived(chars.list.find((c) => c.key === app.activeChar) || null);
 

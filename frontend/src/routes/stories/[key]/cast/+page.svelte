@@ -2,7 +2,7 @@
   import { page } from '$app/state';
   import { chars, loadChars, charName } from '$lib/characters.svelte.js';
   import { stories, loadStory } from '$lib/stories.svelte.js';
-  import CastDashboard from '$lib/components/CastDashboard.svelte';
+  import CastDashboard from '$lib/components/story/CastDashboard.svelte';
 
   let st = $derived(stories.current);
   // ?c=<key> (from the side-menu cast tier) selects that member in the carousel; no separate page.

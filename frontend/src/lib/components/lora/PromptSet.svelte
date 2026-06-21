@@ -2,7 +2,7 @@
   // The prompt-set builder for LoRA training-image generation. Load/save named
   // prompt sets, fill from a theme via the Prompt Gen LLM, set variations, and
   // start a batch. The batch itself renders in GenerateCard (inline, no route).
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
   import { app } from '$lib/app.svelte.js';
   import {
     lora, promptList, loadSet, saveAsSet, fillFromTheme, genImages,

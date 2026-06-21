@@ -115,6 +115,26 @@ def classify(path: str) -> dict:
     return info
 
 
+_scan_cache: dict | None = None
+_scan_cache_root: str | None = None
+
+
+def cached_scan(models_dir: str | Path) -> dict:
+    """Return a cached scan result; re-scans only when models_dir changes or the
+    cache has been invalidated (e.g. after a smart-upload or librarian move)."""
+    global _scan_cache, _scan_cache_root
+    key = str(models_dir)
+    if _scan_cache is None or _scan_cache_root != key:
+        _scan_cache = scan_models(models_dir)
+        _scan_cache_root = key
+    return _scan_cache
+
+
+def invalidate_scan_cache() -> None:
+    global _scan_cache
+    _scan_cache = None
+
+
 def scan_models(models_dir: str | Path) -> dict:
     """Walk the ComfyUI models tree → a typed index grouped by kind, plus an
     arch summary for the diffusion models/checkpoints (what you'd build a

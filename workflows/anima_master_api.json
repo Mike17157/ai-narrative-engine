@@ -456,13 +456,13 @@
       "values": ""
     },
     "_meta": {
-      "title": "W 타일크기"
+      "title": "W tile size"
     }
   },
   "s1541__1536": {
     "class_type": "UpscaleModelLoader",
     "inputs": {
-      "model_name": "2x-AnimeSharpV4_Fast_RCAN_PU.safetensors"
+      "model_name": "Illustrious/RealESRGAN_x4plus_anime_6B.pth"
     },
     "_meta": {
       "title": "UpscaleModelLoader"
@@ -625,7 +625,7 @@
       "values": ""
     },
     "_meta": {
-      "title": "H 타일크기"
+      "title": "H tile size"
     }
   },
   "s1541__1531": {
@@ -646,7 +646,7 @@
       "value": 1.5
     },
     "_meta": {
-      "title": "배율 설정"
+      "title": "Scale setting"
     }
   },
   "s1541__1534": {
@@ -656,7 +656,7 @@
       "widget_1": "fixed"
     },
     "_meta": {
-      "title": "한 변당 나눌 갯수"
+      "title": "Divisions per side"
     }
   },
   "s1541__1538": {
@@ -735,35 +735,6 @@
       "title": "UltimateSDUpscale"
     }
   },
-  "s893__891": {
-    "class_type": "CheckpointLoaderSimple",
-    "inputs": {
-      "ckpt_name": "sam3.1_multiplex_fp16.safetensors"
-    },
-    "_meta": {
-      "title": "SAM3 로드"
-    }
-  },
-  "s893__892": {
-    "class_type": "Context (rgthree)",
-    "inputs": {
-      "model": [
-        "s893__891",
-        0
-      ],
-      "clip": [
-        "s893__891",
-        1
-      ],
-      "vae": [
-        "s893__891",
-        2
-      ]
-    },
-    "_meta": {
-      "title": "ctx_SAM3"
-    }
-  },
   "s1530__1512": {
     "class_type": "StringConcatenate",
     "inputs": {
@@ -772,70 +743,7 @@
       "delimiter": ":"
     },
     "_meta": {
-      "title": "부위 입력"
-    }
-  },
-  "s1530__1514": {
-    "class_type": "Context (rgthree)",
-    "inputs": {
-      "base_ctx": [
-        "s893__892",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "ctx_SAM3"
-    }
-  },
-  "s1530__1515": {
-    "class_type": "CLIPTextEncode",
-    "inputs": {
-      "clip": [
-        "s1530__1514",
-        2
-      ],
-      "text": [
-        "s1530__1512",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "SAM3 DETECT 부위"
-    }
-  },
-  "s1530__1516": {
-    "class_type": "Masks Combine Batch",
-    "inputs": {
-      "masks": [
-        "s1530__1517",
-        0
-      ]
-    },
-    "_meta": {
-      "title": "Masks Combine Batch"
-    }
-  },
-  "s1530__1517": {
-    "class_type": "SAM3_Detect",
-    "inputs": {
-      "model": [
-        "s1530__1514",
-        1
-      ],
-      "image": [
-        "s1284__1465",
-        0
-      ],
-      "conditioning": [
-        "s1530__1515",
-        0
-      ],
-      "threshold": 0.5,
-      "refine_iterations": 2,
-      "individual_masks": false
-    },
-    "_meta": {
-      "title": "SAM3_Detect"
+      "title": "Body part input"
     }
   },
   "s1530__1520": {
@@ -931,70 +839,6 @@
       "title": "Use Spectrum"
     }
   },
-  "s1530__1527": {
-    "class_type": "DetailerForEach",
-    "inputs": {
-      "image": [
-        "s1284__1465",
-        0
-      ],
-      "segs": [
-        "s1530__1640",
-        0
-      ],
-      "model": [
-        "s1530__1524",
-        0
-      ],
-      "clip": [
-        "s1530__1520",
-        2
-      ],
-      "vae": [
-        "s1530__1520",
-        3
-      ],
-      "positive": [
-        "s1530__1520",
-        4
-      ],
-      "negative": [
-        "s1530__1520",
-        5
-      ],
-      "seed": [
-        "s1530__1520",
-        8
-      ],
-      "steps": [
-        "s1530__1520",
-        10
-      ],
-      "cfg": [
-        "s1530__1520",
-        11
-      ],
-      "sampler_name": [
-        "s1530__1520",
-        13
-      ],
-      "detailer_hook": "euler",
-      "scheduler_func_opt": "sgm_uniform",
-      "guide_size": 512,
-      "max_size": 1024,
-      "scheduler": "simple",
-      "denoise": 0.5,
-      "feather": 5,
-      "noise_mask": true,
-      "guide_size_for": true,
-      "force_inpaint": true,
-      "wildcard": "",
-      "cycle": 1
-    },
-    "_meta": {
-      "title": "얼굴 디테일러 (SEGS)"
-    }
-  },
   "s1530__1528": {
     "class_type": "ComfyMathExpression",
     "inputs": {
@@ -1023,40 +867,6 @@
       "title": "PrimitiveInt"
     }
   },
-  "s1530__1518": {
-    "class_type": "MaskToSEGS",
-    "inputs": {
-      "mask": [
-        "s1530__1516",
-        0
-      ],
-      "combined": false,
-      "crop_factor": 3.0,
-      "bbox_fill": false,
-      "drop_size": 10,
-      "contour_fill": false
-    },
-    "_meta": {
-      "title": "MaskToSEGS"
-    }
-  },
-  "s1530__1640": {
-    "class_type": "ComfySwitchNode",
-    "inputs": {
-      "on_false": [
-        "s1530__1641",
-        0
-      ],
-      "on_true": [
-        "s1530__1518",
-        0
-      ],
-      "switch": ""
-    },
-    "_meta": {
-      "title": "Use Detailer"
-    }
-  },
   "s1530__1641": {
     "class_type": "EmptySegs",
     "inputs": {},
@@ -1072,7 +882,7 @@
         0
       ],
       "on_true": [
-        "s1530__1527",
+        "s1530__1641",
         0
       ],
       "switch": ""
@@ -1134,7 +944,7 @@
     "class_type": "KSampler",
     "inputs": {
       "model": [
-        "s1284__1276",
+        "s1284__1754",
         0
       ],
       "positive": [
@@ -1182,7 +992,7 @@
       "text": ""
     },
     "_meta": {
-      "title": "CLIPTextEncode"
+      "title": "Positive prompt (inject here)"
     }
   },
   "s1284__1326": {
@@ -1195,32 +1005,7 @@
       "text": ""
     },
     "_meta": {
-      "title": "CLIPTextEncode"
-    }
-  },
-  "s1284__1276": {
-    "class_type": "AnimaLLLiteApply",
-    "inputs": {
-      "model": [
-        "s1284__1754",
-        0
-      ],
-      "image": [
-        "1748",
-        0
-      ],
-      "mask": [
-        "1748",
-        1
-      ],
-      "lllite_name": 1,
-      "strength": 1.0,
-      "start_percent": 0.0,
-      "end_percent": 1.0,
-      "preserve_wrapper": true
-    },
-    "_meta": {
-      "title": "AnimaLLLiteApply"
+      "title": "Negative prompt"
     }
   },
   "s1284__1756": {
@@ -1347,7 +1132,7 @@
       "value": false
     },
     "_meta": {
-      "title": "정사각형 전환"
+      "title": "Square mode toggle"
     }
   },
   "s900__119": {
@@ -1413,7 +1198,7 @@
       "value": false
     },
     "_meta": {
-      "title": "가로모드 전환"
+      "title": "Landscape mode toggle"
     }
   },
   "s900__898": {
@@ -1463,7 +1248,7 @@
       "widget_1": "fixed"
     },
     "_meta": {
-      "title": "정사각"
+      "title": "Square"
     }
   },
   "s900__445": {
@@ -1473,7 +1258,7 @@
       "widget_1": "fixed"
     },
     "_meta": {
-      "title": "짧은 변"
+      "title": "Short side"
     }
   },
   "s900__446": {
@@ -1483,7 +1268,7 @@
       "widget_1": "fixed"
     },
     "_meta": {
-      "title": "긴 변"
+      "title": "Long side"
     }
   },
   "s1736__1743": {
@@ -1597,7 +1382,7 @@
       "text": ""
     },
     "_meta": {
-      "title": "아니마 긍정 프롬프트"
+      "title": "Anima positive prompt"
     }
   },
   "s890__904": {
@@ -1613,7 +1398,7 @@
       ]
     },
     "_meta": {
-      "title": "아니마 부정 프롬프트"
+      "title": "Anima negative prompt"
     }
   },
   "s890__164": {
@@ -1967,7 +1752,7 @@
       "cheby_degree": 1,
       "ridge_lambda": 10.0,
       "enabled": true,
-      "history_size": false,
+      "history_size": 100,
       "one_sampler_only": false,
       "verbose": false
     },
@@ -2034,7 +1819,7 @@
       "switch": ""
     },
     "_meta": {
-      "title": "latent를 이미지로 변환"
+      "title": "Convert latent to image"
     }
   },
   "s1634__1624": {
@@ -2163,7 +1948,7 @@
       "cheby_degree": 1,
       "ridge_lambda": 10.0,
       "enabled": true,
-      "history_size": false,
+      "history_size": 100,
       "one_sampler_only": false,
       "verbose": false
     },

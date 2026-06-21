@@ -179,20 +179,28 @@ def refine_outfits(provider, outfits: list, persona: str, base_appearance: str,
 # Pose generation
 # ---------------------------------------------------------------------------
 
-def compose_poses(provider, persona: str) -> dict:
+def compose_poses(provider, persona: str, library: dict | None = None) -> dict:
     """Character-level body-language booru tags for the full emotion taxonomy.
-    One structured call. Returns {emotion_key: pose_tags}."""
+    One structured call. Returns {emotion_key: pose_tags}.
+
+    `library` is the curated pose palette (configs/pose_library.json); the model PICKS from it
+    rather than improvising, so the tags stay real. Defaults to the built-in palette."""
     from loom.server.services.emotions import EMOTIONS, EMOTION_KEYS
+    from loom.server.services.pose_library import palette_text
     from loom.server.services.poses import _POSE_SYSTEM
     if provider is None:
         return {k: "" for k in EMOTION_KEYS}
     schema = {"type": "object", "additionalProperties": False, "required": EMOTION_KEYS,
               "properties": {k: {"type": "string"} for k in EMOTION_KEYS}}
     listing = "\n".join(f"- {e['key']} ({e['label']})" for e in EMOTIONS)
+    palette = palette_text(library)
     system = _POSE_SYSTEM + (
-        "\n\nYou are given a FIXED list of emotions. For EVERY emotion key, output how THIS "
-        "character's BODY carries it as thorough body-language tags. "
-        "Return exactly one field per emotion key.")
+        "\n\nYou are given a FIXED list of emotions and a PALETTE of real pose tags grouped by "
+        "body facet. For EVERY emotion key, output how THIS character's BODY carries it, building "
+        "the pose by PICKING tags from the palette (a stance + what the arms/hands do + a head "
+        "tilt + energy), personalized to the persona. Prefer palette tags; add a short real booru "
+        "tag only when the palette truly lacks it. Return exactly one field per emotion key.\n\n"
+        f"POSE PALETTE — real tags by facet:\n{palette}")
     prompt = f"CHARACTER PERSONA:\n{persona}\n\nEMOTIONS (give a body-language prompt for each):\n{listing}"
     try:
         data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}
@@ -202,13 +210,14 @@ def compose_poses(provider, persona: str) -> dict:
 
 
 def compose_outfit_poses(provider, persona: str, outfit_name: str, outfit_concept: str,
-                         emotion_keys: list[str]) -> dict:
+                         emotion_keys: list[str], library: dict | None = None) -> dict:
     """Per-outfit body-language tags for all emotions in the character's affect range.
 
     The outfit shapes posture and gesture — one structured call per outfit covers all emotions.
-    Returns {emotion_key: pose_tags}.
+    `library` is the curated pose palette the model picks from. Returns {emotion_key: pose_tags}.
     """
     from loom.server.services.emotions import EMOTIONS, EMOTION_KEYS
+    from loom.server.services.pose_library import palette_text
     from loom.server.services.poses import _POSE_SYSTEM
     keys = [k for k in emotion_keys if k in set(EMOTION_KEYS)]
     if not keys or provider is None:
@@ -219,11 +228,14 @@ def compose_outfit_poses(provider, persona: str, outfit_name: str, outfit_concep
         f"- {e['key']} ({e['label']})" for e in EMOTIONS if e["key"] in set(keys)
     )
     outfit_line = outfit_name + (f" — {outfit_concept}" if outfit_concept else "")
+    palette = palette_text(library)
     system = _POSE_SYSTEM + (
         "\n\nThe character is wearing a SPECIFIC OUTFIT. Body language should reflect both "
         "personality AND how the outfit constrains or frees movement "
         "(a gown limits stride; armour adds weight; swimwear leaves the body open). "
-        "Return exactly one field per emotion key."
+        "Build each pose by PICKING from the PALETTE of real pose tags below, personalized to "
+        "the persona; prefer palette tags. Return exactly one field per emotion key.\n\n"
+        f"POSE PALETTE — real tags by facet:\n{palette}"
     )
     prompt = (
         f"CHARACTER PERSONA:\n{persona}\n\n"
@@ -353,7 +365,7 @@ def apply_manifest(ctx, key: str, body: dict, *, provider=None,
                 outfit_poses = compose_outfit_poses(
                     _resolve("wardrobe"), persona_text,
                     nm, (o.get("concept") or "").strip(),
-                    affect_range,
+                    affect_range, ctx.load_pose_library(),
                 )
             except Exception:  # noqa: BLE001
                 pass

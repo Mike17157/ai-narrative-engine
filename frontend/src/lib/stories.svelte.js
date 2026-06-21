@@ -4,21 +4,31 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { startJob } from './app.svelte.js';
 import { get, post, put, del } from './api.js';
+import { consumeSse } from './sse.js';
 import { loadChars } from './characters.svelte.js';
+import { graphToBoard, graphToArcs } from './story_graph_model.js';
 
 const blankWizard = () => ({
-  step: 0,                 // 0 setup · 1 storyboard · 2 scenes · 3 characters
+  step: 0,                 // 0 setup · 1 spine · 2 storyboard · 3 scenes · 4 characters
   character: '', charName: '', model: '',
   busy: false, streaming: false, streamText: '', error: null,
   name: '',
+  spine: null,             // { wound, lie, truth, heart, beats[], logline, tone, themes }
   board: null,             // { logline, premise, tone, themes, beats[] }
   locations: null,         // [{ id, name, description, background_prompt }]
   start: null,
   cast: null,              // [{ name, persona, appearance, role, base_prompt, primary }] — protagonist first
   intended_ending: '',     // destination locked in during workshop phase 1
   arcs: [],                // [{id, name, mini_ending, dramatic_function, cast, rationale}]
+  workshopPremise: '',     // premise text from workshop, passed to spine + storyboard
   draftId: null,           // server-side draft ID once persisted
+  existingStoryKey: null,  // if set, save overwrites this story instead of creating a new one
+  sessionId: null,         // server-side console checkpoint id (consult/graph), persists across reloads
 });
+
+function _uuid() {
+  try { return crypto.randomUUID(); } catch { return 'sess-' + Date.now().toString(36); }
+}
 
 // Wizard draft persists across reloads (a model error / refresh mid-build keeps work).
 const DRAFT_LS = 'loom.wizardDraft';
@@ -82,8 +92,8 @@ export async function loadModels() {
 }
 
 // --- wizard --------------------------------------------------------------- //
-export function startWizard(character, charName, model = '') {
-  stories.wizard = { ...blankWizard(), character, charName, model, name: charName || '' };
+export function startWizard(character, charName, model = '', existingStoryKey = null) {
+  stories.wizard = { ...blankWizard(), character, charName, model, name: charName || '', existingStoryKey, sessionId: _uuid() };
   stories.msg = null;
   goto('/stories/new');
 }
@@ -113,12 +123,16 @@ async function _flushDraft() {
     premise: wz.board?.premise || '',
     character: wz.character,
     charName: wz.charName,
+    spine: wz.spine,
     board: wz.board,
     locations: wz.locations,
     start: wz.start,
     cast: wz.cast,
     intended_ending: wz.intended_ending,
+    workshopPremise: wz.workshopPremise,
     arcs: wz.arcs,
+    existingStoryKey: wz.existingStoryKey,
+    sessionId: wz.sessionId,
   };
   const r = await post('/stories/draft', body);
   if (r.data?.id && !wz.draftId) stories.wizard.draftId = r.data.id;
@@ -135,10 +149,12 @@ export async function resumeDraft(id) {
   stories.wizard = {
     ...blankWizard(),
     ...r,
+    draftId: r.id,   // the persisted draft stores its id as `id`; the wizard tracks it as `draftId`.
+                     // Without this remap, auto-save would write a NEW draft file every resume.
     busy: false, streaming: false, streamText: '', error: null,
   };
   const step = r.step ?? 0;
-  const stepRoutes = ['setup', 'storyboard', 'scenes', 'characters'];
+  const stepRoutes = ['setup', 'spine', 'storyboard', 'scenes', 'characters'];
   goto(`/stories/new/${stepRoutes[step] || 'setup'}`);
 }
 
@@ -160,8 +176,49 @@ async function postCancelable(path, payload) {
   } finally { abortCtl = null; }
 }
 
-// Stage 1 streams the storyboard live (watch it write); cancel stops upstream.
-// Optional `workshopPremise` is passed when the user has gone through the Workshop first.
+// Stage 0.5 — Generate the emotional spine BEFORE the storyboard.
+// Streams JSON token-by-token, then emits a final `spine` event.
+export async function generateSpine(workshopPremise = '') {
+  const wz = w();
+  wz.busy = true; wz.streaming = true; wz.error = null; wz.streamText = '';
+  abortCtl = new AbortController();
+  const job = startJob('Emotional spine', wz.charName || wz.character, 'stories/new/spine');
+  job.onCancel = cancelGen;
+  let spine = null;
+  const premise = workshopPremise || wz.workshopPremise || wz.board?.premise || '';
+  const intendedEnding = wz.intended_ending || '';
+  try {
+    const res = await fetch('/api/stories/spine', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character: wz.character, premise, intended_ending: intendedEnding }),
+      signal: abortCtl.signal
+    });
+    await consumeSse(res, (ev) => {
+      if (ev.type === 'delta') wz.streamText += ev.text;
+      else if (ev.type === 'spine') spine = ev.spine;
+      else if (ev.type === 'error') wz.error = ev.error;
+    });
+    if (spine) {
+      wz.spine = spine;
+      // Pre-seed board fields from spine so storyboard can use them as defaults.
+      if (!wz.board) wz.board = { logline: '', premise: '', tone: '', themes: [], beats: [], heart: '' };
+      if (!wz.board.heart && spine.heart) wz.board.heart = spine.heart;
+      if (!wz.board.logline && spine.logline) wz.board.logline = spine.logline;
+      if (!wz.board.tone && spine.tone) wz.board.tone = spine.tone;
+      if (!wz.board.themes?.length && spine.themes?.length) wz.board.themes = spine.themes;
+      wz.step = 1;
+      job.status = 'done';
+    } else if (!wz.error) { wz.error = 'no spine produced'; job.status = 'error'; }
+  } catch (e) {
+    if (e?.name !== 'AbortError') wz.error = String(e);
+    job.status = e?.name === 'AbortError' ? 'cancelled' : 'error';
+  } finally {
+    wz.busy = false; wz.streaming = false; abortCtl = null;
+    if (job.status === 'running') job.status = wz.error ? 'error' : 'cancelled';
+  }
+}
+
+// Stage 1 — streams the storyboard live; uses spine for context if available.
 export async function genStoryboard(workshopPremise = '') {
   const wz = w();
   wz.busy = true; wz.streaming = true; wz.error = null; wz.streamText = '';
@@ -169,35 +226,26 @@ export async function genStoryboard(workshopPremise = '') {
   const job = startJob('Storyboard', wz.charName || wz.character, 'stories/new/storyboard');
   job.onCancel = cancelGen;
   let board = null;
-  const bodyExtra = workshopPremise ? { premise: workshopPremise } : {};
+  const premise = workshopPremise || wz.workshopPremise || '';
+  const bodyExtra = {
+    ...(premise ? { premise } : {}),
+    ...(wz.spine ? { spine: wz.spine } : {}),
+  };
   try {
     const res = await fetch('/api/stories/storyboard', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(reqBody(bodyExtra)), signal: abortCtl.signal
     });
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-        buf = buf.slice(i + 2);
-        if (!line) continue;
-        const ev = JSON.parse(line.slice(5).trim());
-        if (ev.type === 'delta') wz.streamText += ev.text;
-        else if (ev.type === 'board') board = ev.board;
-        else if (ev.type === 'error') wz.error = ev.error;
-      }
-    }
+    await consumeSse(res, (ev) => {
+      if (ev.type === 'delta') wz.streamText += ev.text;
+      else if (ev.type === 'board') board = ev.board;
+      else if (ev.type === 'error') wz.error = ev.error;
+    });
     if (board) {
       wz.board = { logline: board.logline || '', premise: board.premise || '', tone: board.tone || '',
                    themes: board.themes || [], beats: board.beats || [], heart: board.heart || '' };
       if (!wz.name) wz.name = wz.charName || '';
-      wz.step = 1;
+      wz.step = 2;
       job.status = 'done';
     } else if (!wz.error) { wz.error = 'no storyboard produced'; job.status = 'error'; }
   } catch (e) {
@@ -211,6 +259,48 @@ export async function genStoryboard(workshopPremise = '') {
 
 export async function regenStoryboard() { stories.wizard.step = 0; await genStoryboard(); }
 
+// Faithful draft: expand the development graph node-by-node into chapters (preserving
+// branches), instead of re-deriving from a premise string. Seeds spine from the graph
+// core and writes board + arcs. Returns true on success (caller navigates to storyboard).
+export async function draftFromGraph(graph) {
+  const wz = w();
+  wz.busy = true; wz.streaming = true; wz.error = null;
+  wz.streamText = 'Expanding each beat of the arc into a chapter…';
+  wz.workshopPremise = graph?.logline || '';
+  // The consultation already produced the spine — carry it straight in.
+  wz.spine = {
+    wound: graph?.wound || '', lie: graph?.lie || '', truth: graph?.truth || '',
+    heart: '', logline: graph?.logline || '', tone: wz.board?.tone || '', themes: wz.board?.themes || [], beats: [],
+  };
+  abortCtl = new AbortController();
+  const job = startJob('Drafting from graph', wz.charName || wz.character, 'stories/new/storyboard');
+  job.onCancel = cancelGen;
+  let enriched = null;
+  try {
+    const res = await fetch('/api/stories/expand-graph', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character: wz.character, graph }), signal: abortCtl.signal,
+    });
+    await consumeSse(res, (ev) => {
+      // delta is raw structured-output JSON — ignore it; show a friendly status instead.
+      if (ev.type === 'graph') enriched = ev.graph;
+      else if (ev.type === 'error') wz.error = ev.error;
+    });
+    const g = enriched || graph;
+    wz.board = graphToBoard(g, { tone: wz.board?.tone || '', themes: wz.board?.themes || [], heart: wz.spine.heart });
+    wz.arcs = graphToArcs(g);
+    if (!wz.name) wz.name = wz.charName || '';
+    if (!wz.error) { wz.step = 2; job.status = 'done'; return true; }
+    job.status = 'error'; return false;
+  } catch (e) {
+    if (e?.name !== 'AbortError') wz.error = String(e);
+    job.status = e?.name === 'AbortError' ? 'cancelled' : 'error';
+    return false;
+  } finally {
+    wz.busy = false; wz.streaming = false; abortCtl = null;
+  }
+}
+
 export async function genScenes() {
   const wz = w(); wz.busy = true; wz.error = null;
   const job = startJob('Scene extraction', wz.charName || wz.character, 'stories/new/scenes');
@@ -218,7 +308,7 @@ export async function genScenes() {
   const r = await postCancelable('/stories/extract-scenes', reqBody({ board: wz.board }));
   wz.busy = false;
   if (!r) { job.status = 'cancelled'; return; }
-  if (r.ok && r.data?.locations) { wz.locations = r.data.locations; wz.start = r.data.start; wz.step = 2; job.status = 'done'; }
+  if (r.ok && r.data?.locations) { wz.locations = r.data.locations; wz.start = r.data.start; wz.step = 3; job.status = 'done'; }
   else { wz.error = r.data?.error || 'scene extraction failed'; job.status = 'error'; }
 }
 
@@ -233,7 +323,7 @@ export async function genCharacters() {
     wz.cast = r.data.cast || [];                          // one uniform list, protagonist first
     const prot = wz.cast.find((c) => c.primary);
     if (prot?.name) wz.charName = prot.name;
-    wz.step = 3; job.status = 'done';
+    wz.step = 4; job.status = 'done';
   } else { wz.error = r.data?.error || 'character extraction failed'; job.status = 'error'; }
 }
 
@@ -270,25 +360,32 @@ export async function expandArc(storyKey, arcId, onDelta, onArc) {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({}),
   });
-  const reader = res.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, { stream: true });
-    let i;
-    while ((i = buf.indexOf('\n\n')) >= 0) {
-      const chunk = buf.slice(0, i); buf = buf.slice(i + 2);
-      const dataLine = chunk.split('\n').find(l => l.startsWith('data:'));
-      if (!dataLine) continue;
-      try {
-        const ev = JSON.parse(dataLine.slice(5).trim());
-        if (ev.type === 'delta') onDelta?.(ev.text);
-        else if (ev.type === 'arc') onArc?.(ev);
-      } catch { /* skip malformed */ }
-    }
-  }
+  await consumeSse(res, (ev) => {
+    if (ev.type === 'delta') onDelta?.(ev.text);
+    else if (ev.type === 'arc') onArc?.(ev);
+  });
+}
+
+export async function generateTimelines(storyKey, arcId, onEvent) {
+  const res = await fetch(`/api/stories/${storyKey}/arc/${arcId}/timelines`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+  await consumeSse(res, (ev) => onEvent?.(ev));
+}
+
+// Expand a development graph into a fleshed (chapter-bearing) graph via the faithful
+// expander. Returns the enriched graph (falls back to the input on failure).
+export async function expandGraphRequest(character, graph) {
+  let enriched = null;
+  try {
+    const res = await fetch('/api/stories/expand-graph', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ character, graph }),
+    });
+    await consumeSse(res, (ev) => { if (ev.type === 'graph') enriched = ev.graph; });
+  } catch { /* fall back to the raw graph */ }
+  return enriched || graph;
 }
 
 export async function saveStory() {
@@ -302,6 +399,8 @@ export async function saveStory() {
     cast: wz.cast || [], source_character: wz.character,
     intended_ending: wz.intended_ending || '',
     arcs: wz.arcs || [],
+    spine: wz.spine || null,
+    ...(wz.existingStoryKey ? { existing_key: wz.existingStoryKey } : {}),
   });
   stories.saving = false;
   if (r.data?.ok) {
@@ -350,10 +449,10 @@ export async function deleteStory(key) {
   if (stories.current?.key === key) { stories.current = null; goto('/stories'); }
 }
 // Relaunch the wizard from a story's source/primary character.
+// Passes the existing story key so the save overwrites rather than duplicates.
 export function regenStory(st) {
-  const key = st.fields?.source_character || st.cast?.find((m) => m.primary)?.character || st.cast?.[0]?.character;
-  const name = stories.list.find((s) => s.key === key)?.name || key || '';
-  startWizard(key || '', name, '');
+  const charKey = st.fields?.source_character || st.cast?.find((m) => m.primary)?.character || st.cast?.[0]?.character;
+  startWizard(charKey || '', st.name || '', '', st.key || null);
 }
 
 // --- edit page (clone of current; debounced auto-save) -------------------- //

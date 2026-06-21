@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import { app } from '$lib/app.svelte.js';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
   import { askConfirm } from '$lib/confirm.svelte.js';
   import { goto } from '$app/navigation';
   import { chars, blurb, selectChar, deleteChar } from '$lib/characters.svelte.js';

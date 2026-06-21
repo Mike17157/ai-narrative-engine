@@ -2,7 +2,7 @@
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
   import { chars, loadChars, charName } from '$lib/characters.svelte.js';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   // Two parts: (1) global shot GEOMETRY per emotion (camera crop + canvas) — geometry, not personality;
   // (2) per-character BODY LANGUAGE — generated from the persona (no static library), editable as prose.
@@ -18,7 +18,12 @@
     geom = d.poses || []; framings = d.framings || []; aspects = d.aspects || [];
     loading = false;
   }
-  onMount(() => { loadGeom(); loadChars(); });
+
+  // --- curated pose palette (the real-tag library the model picks from) ---
+  let lib = $state({ facets: [], count: 0 });
+  let libOpen = $state(false);
+  async function loadLib() { lib = (await get('/pose-library')) || { facets: [], count: 0 }; }
+  onMount(() => { loadGeom(); loadLib(); loadChars(); });
 
   async function saveGeom(row, field, v) {
     row[field] = v;
@@ -114,6 +119,29 @@
       <p class="hint" style="margin-top:8px">No body language yet — <b>Compose all from persona</b> (or it's generated when the character is regenerated).</p>
     {/if}
   </section>
+
+  <!-- CURATED POSE PALETTE (the real-tag library the model picks from) -->
+  <section class="card">
+    <button class="libhdr" onclick={() => (libOpen = !libOpen)}>
+      <h3 style="margin:0">Pose palette <span class="sub">— {lib.count} real booru pose tags the model draws from</span></h3>
+      <span class="chev">{libOpen ? '▾' : '▸'}</span>
+    </button>
+    {#if libOpen}
+      <p class="hint" style="margin:8px 0 12px">
+        Composed body language is built by <b>picking from these real tags</b> (per facet), personalized to
+        the persona — so poses stay grounded in vocabulary the image model understands. Edit
+        <code>configs/pose_library.json</code> to curate it.
+      </p>
+      <div class="facets">
+        {#each lib.facets as f (f.key)}
+          <div class="facet">
+            <div class="fname">{f.key} <span class="sub">— {f.desc}</span></div>
+            <div class="tags">{#each f.tags as t}<span class="tag">{t}</span>{/each}</div>
+          </div>
+        {/each}
+      </div>
+    {/if}
+  </section>
 {/if}
 
 <style>
@@ -132,4 +160,12 @@
   .charrow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   .cpick { width: 260px; }
   .cmsg { font-size: 12px; color: var(--muted); }
+  .libhdr { display: flex; align-items: center; justify-content: space-between; width: 100%; background: none; border: 0; padding: 0; cursor: pointer; color: var(--text); }
+  .chev { color: var(--faint); font-size: 13px; }
+  code { font-size: 11.5px; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  .facets { display: flex; flex-direction: column; gap: 12px; }
+  .facet { display: flex; flex-direction: column; gap: 6px; }
+  .fname { font-size: 12.5px; font-weight: 700; color: var(--text); text-transform: capitalize; }
+  .tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .tag { font-size: 11.5px; color: var(--muted); background: var(--bg); border: 1px solid var(--border-soft); border-radius: 999px; padding: 2px 9px; }
 </style>

@@ -2,8 +2,8 @@
   // The Library table: shared, constant LoRAs (detail = always-on, theme =
   // picked, character = state-routing pool). Populated by Classify; rows are
   // mutated in place against the shared config.
-  import Combobox from '$lib/components/Combobox.svelte';
-  import ScrubInput from '$lib/components/ScrubInput.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
+  import ScrubInput from '$lib/components/shared/ScrubInput.svelte';
   import { loraLib, loraItems } from '$lib/lora-library.svelte.js';
 
   function removeLib(i) { loraLib.cfg.library.splice(i, 1); }

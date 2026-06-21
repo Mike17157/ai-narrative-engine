@@ -15,6 +15,7 @@ Nothing here touches the network: a provider deep-copies its workflow, calls
 from __future__ import annotations
 
 import copy
+import os
 import re
 from typing import Any
 
@@ -54,11 +55,22 @@ def apply_out_prefix(graph: dict, out_prefix: str) -> None:
     for node in graph.values():
         if not isinstance(node, dict):
             continue
-        if node.get("class_type") in _SAVE_CLASSES:
+        ct = node.get("class_type")
+        if ct in _SAVE_CLASSES:
             ins = node.setdefault("inputs", {})
             # easy imageSave uses `save_prefix`; core SaveImage uses `filename_prefix`
             key = "save_prefix" if "save_prefix" in ins else "filename_prefix"
             ins[key] = out_prefix
+        elif ct == "Image Saver":
+            # comfyui-image-saver splits into `path` (subfolder) + `filename`. The Anima
+            # graph wires `path` to a StringConcatenate that yields "\V19" — an absolute
+            # drive-root path ComfyUI's /view rejects (403), so Loom can't collect the
+            # render. Override with our relative prefix (path=dir, filename=basename) so the
+            # output lands under the ComfyUI output dir and is collectable.
+            ins = node.setdefault("inputs", {})
+            head, _, tail = out_prefix.replace("\\", "/").rpartition("/")
+            ins["path"] = head
+            ins["filename"] = tail or out_prefix
 
 
 def apply_latent(graph: dict, latent: tuple[int, int]) -> None:
@@ -114,6 +126,79 @@ def apply_breaks(graph: dict) -> None:
             graph[nid]["inputs"][k] = [prev, 0]
 
 
+# Map flag name → set of ComfySwitchNode titles that gate that feature.
+# Title strings must match _meta.title exactly in the workflow JSON.
+_FLAG_TITLES: dict[str, set[str]] = {
+    "detailer": {"Use Detailer"},
+    "upscale":  {"Using USDU"},
+    "highrez":  {"Use HighRez"},
+}
+
+
+def apply_flags(graph: dict, **flags: bool) -> None:
+    """Enable or disable named pipeline features.
+
+    Known flags: ``detailer``, ``upscale``, ``highrez`` (ComfySwitchNode gates
+    located by ``_meta.title``) and ``sage`` (the SageAttention kernel patch).
+    Unrecognised flag names are silently ignored (the workflow simply has no
+    matching node), so the function stays workflow-agnostic.
+
+    ``sage`` is special-cased: it doesn't gate a branch, it flips the
+    ``PathchSageAttentionKJ`` node's ``sage_attention`` widget between ``auto``
+    (use the faster fused kernel) and ``disabled`` (stock attention). Turn it OFF
+    when running on hardware whose ComfyUI lacks the sageattention library or
+    whose GPU the kernel doesn't support; ON for the RunPod fleet.
+    """
+    for flag, enabled in flags.items():
+        if flag == "sage":
+            _apply_sage(graph, bool(enabled))
+            continue
+        titles = _FLAG_TITLES.get(flag)
+        if not titles:
+            continue
+        for node in graph.values():
+            if not isinstance(node, dict):
+                continue
+            if node.get("_meta", {}).get("title") in titles:
+                node.setdefault("inputs", {})["switch"] = bool(enabled)
+
+
+def _apply_sage(graph: dict, enabled: bool) -> None:
+    mode = "auto" if enabled else "disabled"
+    for node in graph.values():
+        if isinstance(node, dict) and node.get("class_type") == "PathchSageAttentionKJ":
+            node.setdefault("inputs", {})["sage_attention"] = mode
+
+
+def fix_image_saver_metadata(graph: dict) -> None:
+    """Harden the comfyui-image-saver ``Image Saver`` node against a None crash.
+
+    That node stamps the sampler/scheduler names into PNG metadata and its filename
+    template via ``str.replace(token, value)`` — which raises ``TypeError`` if value
+    is None *even when the token is absent*. In the Anima graph those names are wired
+    through a fragile rgthree Context bus that can resolve to None, which crashes the
+    final save (the render itself is fine). We resolve the real sampler/scheduler from
+    a ``KSampler Config (rgthree)`` node and stamp them as literal strings, so the save
+    never depends on the bus. Metadata-only; no effect on the actual sampling."""
+    sampler, scheduler = "euler", "normal"
+    for n in graph.values():
+        if isinstance(n, dict) and n.get("class_type") == "KSampler Config (rgthree)":
+            ins = n.get("inputs") or {}
+            if isinstance(ins.get("sampler_name"), str):
+                sampler = ins["sampler_name"]
+            if isinstance(ins.get("scheduler"), str):
+                scheduler = ins["scheduler"]
+            break
+    for n in graph.values():
+        if not isinstance(n, dict) or n.get("class_type") != "Image Saver":
+            continue
+        ins = n.setdefault("inputs", {})
+        if not isinstance(ins.get("sampler_name"), str):
+            ins["sampler_name"] = sampler
+        if not isinstance(ins.get("scheduler_name"), str):
+            ins["scheduler_name"] = scheduler
+
+
 _MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf", ".sft")
 
 
@@ -132,6 +217,23 @@ def normalize_model_paths(graph: dict) -> None:
         for k, v in ins.items():
             if isinstance(v, str) and "\\" in v and v.lower().endswith(_MODEL_EXTS):
                 ins[k] = v.replace("\\", "/")
+
+
+def localize_model_paths(graph: dict) -> None:
+    """Rewrite model-name separators to the local OS separator.
+
+    The mirror of :func:`normalize_model_paths`: ComfyUI's loader combo lists use the
+    host OS separator (backslash on Windows), so a nested model name carrying '/' — e.g.
+    ``anima/anisnuff_v15.safetensors`` from inject_models — fails validation against a
+    Windows ComfyUI ("Value not in list"). Used by the same-OS local provider; the
+    serverless provider normalizes to '/' for its Linux worker instead."""
+    for node in graph.values():
+        ins = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(ins, dict):
+            continue
+        for k, v in ins.items():
+            if isinstance(v, str) and v.lower().endswith(_MODEL_EXTS) and ("/" in v or "\\" in v):
+                ins[k] = v.replace("/", os.sep).replace("\\", os.sep)
 
 
 def find_load_image_node(graph: dict) -> str | None:
@@ -195,6 +297,7 @@ def inject(
     negative_prompt: str | None = None,
     out_prefix: str | None = None,
     latent: tuple[int, int] | None = None,
+    flags: dict[str, bool] | None = None,
 ) -> dict:
     """Deep-copy `workflow` and return a prepared graph: prompt substituted, optional
     out_prefix/latent applied, negative set, BREAK regions chained.
@@ -204,6 +307,9 @@ def inject(
     """
     graph = copy.deepcopy(workflow)
 
+    fix_image_saver_metadata(graph)
+    if flags:
+        apply_flags(graph, **flags)
     if out_prefix:
         apply_out_prefix(graph, out_prefix)
     if latent:

@@ -5,7 +5,7 @@ import os
 import re
 
 import yaml
-from fastapi import File, UploadFile
+from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
 from ...comfy.server import get_server
@@ -22,12 +22,12 @@ def register(app, ctx):
         file tagged with kind (checkpoint/diffusion/vae/clip/lora/…), arch
         (sdxl/sd15/flux/dit/…) read from its tensor header, and a sub-family
         (illustrious/pony/anima/…) layering manual overrides on the folder/arch guess."""
-        from ...comfy.scan import scan_models
+        from ...comfy.scan import cached_scan
         bd = ctx.comfy_base_dir()
         models_dir = (bd / "models") if bd else None
         if not models_dir or not models_dir.is_dir():
             return JSONResponse({"error": "ComfyUI models directory not found", "items": []}, status_code=404)
-        res = scan_models(models_dir)
+        res = cached_scan(models_dir)
         # apply manual family overrides (configs/families.json) keyed by folder-relative name
         ov = config_files.load_families(ctx.root)
         if ov:
@@ -94,6 +94,97 @@ def register(app, ctx):
             return JSONResponse({"error": str(exc)}, status_code=500)
         return {"ok": True, "rel": rel, "name": base}
 
+    @app.post("/api/comfy/models/smart-upload")
+    async def smart_upload(file: UploadFile = File(...), expect: str = Form(None)):
+        """Upload a .safetensors file, classify it from tensor headers, place it in
+        the correct kind folder under the detected family subfolder (e.g. loras/Anima/).
+        Returns {ok, kind, arch, family, rel}.
+
+        When ``expect`` is given ('lora' or 'checkpoint') the classified kind must match
+        — this backs the separate, type-specific import buttons so a checkpoint dropped
+        into the LoRA importer (or vice-versa) is rejected instead of silently misfiled.
+        A bundled diffusion model counts as a 'checkpoint' for this check."""
+        import shutil, tempfile
+        from ...comfy.scan import classify
+        from ...comfy.family import family_of, FOLDER
+        bd = ctx.comfy_base_dir()
+        md = (bd / "models") if bd else None
+        if not md or not md.is_dir():
+            return JSONResponse({"error": "ComfyUI models directory not found"}, status_code=404)
+        base = os.path.basename((file.filename or "").replace("\\", "/"))
+        if not base or base.startswith("."):
+            return JSONResponse({"error": "bad filename"}, status_code=400)
+        # Stream to temp file first so we can classify before committing a location.
+        suffix = os.path.splitext(base)[1]
+        tmp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp_path = tmp.name
+                while chunk := await file.read(1 << 20):
+                    tmp.write(chunk)
+            info = classify(tmp_path)
+            kind = info.get("kind", "unknown")
+            arch = info.get("arch", "") or ""
+            base_folder = {"lora": "loras", "checkpoint": "checkpoints",
+                           "diffusion": "diffusion_models"}.get(kind)
+            if not base_folder:
+                return JSONResponse({"error": f"unrecognised model kind '{kind}' — expected lora or checkpoint"}, status_code=400)
+            # Type-specific importers: reject a file that classifies as the other kind.
+            if expect:
+                # The checkpoints axis covers both bundled checkpoints and split diffusion models.
+                got_group = "checkpoint" if kind in ("checkpoint", "diffusion") else kind
+                if got_group != expect:
+                    return JSONResponse(
+                        {"error": f"this is a {kind}, not a {expect} — use the {got_group} importer"},
+                        status_code=400)
+            family = family_of(base, arch=arch)
+            family_dir = FOLDER.get(family)
+            if family_dir:
+                # Prefer an already-existing same-family subfolder (case-insensitive) so
+                # new uploads land next to existing models rather than creating a second
+                # folder with different casing (e.g. anima/ vs Anima/).
+                base_type_dir = md / base_folder
+                if base_type_dir.is_dir():
+                    for existing in base_type_dir.iterdir():
+                        if existing.is_dir() and existing.name.lower() == family_dir.lower():
+                            family_dir = existing.name
+                            break
+                rel = f"{family_dir}/{base}"
+                target = md / base_folder / family_dir / base
+            else:
+                rel = base
+                target = md / base_folder / base
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(tmp_path, target)
+            tmp_path = None
+            from ...comfy.scan import invalidate_scan_cache
+            invalidate_scan_cache()
+
+            # Auto-push to RunPod network volume if creds are configured.
+            runpod_job_id = None
+            try:
+                from ...runpod.volume import VolumeConfig
+                from ..routers.runpod import VolumeUploadJob
+                vcfg = VolumeConfig()
+                if vcfg.configured:
+                    models_rel = f"{base_folder}/{rel}"
+                    job = VolumeUploadJob([(models_rel, target)], vcfg)
+                    job.start()
+                    runpod_job_id = job.id
+            except Exception:  # noqa: BLE001
+                pass
+
+            return {"ok": True, "kind": kind, "arch": arch, "family": family, "rel": rel, "name": base,
+                    "runpod_job_id": runpod_job_id}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+        finally:
+            if tmp_path:
+                try:
+                    os.unlink(tmp_path)
+                except Exception:  # noqa: BLE001
+                    pass
+
     @app.get("/api/comfy/catalog")
     def comfy_catalog():
         """Browse ComfyUI Manager's cached model catalog (URLs + install folders),
@@ -143,6 +234,8 @@ def register(app, ctx):
                                     last = done
                                     yield f"data: {json.dumps({'type': 'progress', 'done': done, 'total': total})}\n\n"
                 tmp.replace(target)
+                from ...comfy.scan import invalidate_scan_cache
+                invalidate_scan_cache()
                 yield f"data: {json.dumps({'type': 'done', 'rel': rel})}\n\n"
             except Exception as exc:  # noqa: BLE001
                 try:
@@ -189,6 +282,8 @@ def register(app, ctx):
             return JSONResponse({"error": "ComfyUI models directory not found"}, status_code=404)
         res = apply_moves(md, ctx.root, (body or {}).get("moves") or [])
         if res.get("moved"):
+            from ...comfy.scan import invalidate_scan_cache
+            invalidate_scan_cache()
             ctx.reload_settings()  # pick up rewritten lora/checkpoint names
         return res
 
@@ -263,7 +358,8 @@ def register(app, ctx):
             for i, ot in enumerate(out_types):
                 nm = out_names[i] if i < len(out_names) and out_names[i] else (ot if isinstance(ot, str) else f"out{i}")
                 outputs.append({"name": nm, "type": ot if isinstance(ot, str) else "COMBO"})
-            slim[cls] = {"inputs": inputs, "outputs": outputs, "category": spec.get("category", "")}
+            slim[cls] = {"inputs": inputs, "outputs": outputs, "category": spec.get("category", ""),
+                         "description": (spec.get("description") or "").strip()}
         return slim
 
     # -- LoRA subsystem (typed library + named, routable stacks) -------------
@@ -555,6 +651,36 @@ def register(app, ctx):
             yield 'data: {"type": "done"}\n\n'
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/api/loras/grid-render")
+    async def grid_render(body: dict):
+        """Start a TriageJob for one or more render cells.
+
+        Every caller — Grid Tester, Classify grid, TestBench — posts here.
+        The job appears in Activity, errors are logged, and it's cancellable.
+        Returns {ok, id, total}; client subscribes to /api/jobs/{id}/stream.
+
+        Body: {cells: [{key, checkpoint?, lora?, loras?, model?,
+                         weight?, prompt, negative?, steps?, seed?, cache?}]}
+        """
+        from fastapi.concurrency import run_in_threadpool
+
+        from ..triage_job import TriageJob
+
+        body = body or {}
+        cells = body.get("cells") or []
+        if not cells:
+            return JSONResponse({"error": "cells is required"}, status_code=400)
+
+        base = ctx.active_comfy_url()
+        try:
+            await run_in_threadpool(get_server(base).ensure_up)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
+        job = TriageJob(cells, base, ctx)
+        job.start()
+        return {"ok": True, "id": job.id, "total": job.total}
 
     @app.get("/api/loras/triage-cache")
     def triage_cache_list(scope: str = ""):

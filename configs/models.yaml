@@ -23,6 +23,15 @@ models:
       effort: high                # thinking depth (low|medium|high|xhigh|max)
       thinking: adaptive
 
+  # Good balance of quality and cost for story pipeline stages.
+  sonnet:
+    provider: anthropic
+    kind: text
+    options:
+      model: claude-sonnet-4-6
+      max_tokens: 2048
+      thinking: disabled
+
   # A cheaper/faster chat alternative you can point a pipeline at instead.
   haiku:
     provider: anthropic
@@ -33,22 +42,18 @@ models:
       thinking: disabled
 
   # --------------------------------------------------------------------------- #
-  # Anima — the ONE central image workflow.
+  # Anima — the ONE global image workflow for all roles.
   #
-  # All three Anima roles below point at the SAME flattened master graph
-  # (workflows/anima_master_api.json — a faithful API-format port of the Anima
-  # All-In-One pipeline: switchable txt2img/img2img, LLLite refine, face/region
-  # detailers, upscale, and an 8-preset LoRA style switcher). They differ ONLY
-  # by `output_variant`, which splices an Inspyrenet background remover after
-  # the render for the cutout roles. See scripts/flatten_anima_allinone.py for
-  # how the master graph is rebuilt from the source UI workflow.
+  # A single entry covers every generation role (base/sprite/scene/chat).
+  # Per-role output_variant (full vs cutout) lives in configs/image_roles.json,
+  # not here — so there is no reason to duplicate this entry.
   #
-  # LoRA routing: the graph applies its preset style stack via `easy
-  # loraStackApply`; Loom's resolved stack (detail + theme + identity + routed
-  # state) chains on top of it through inject_models — so n LoRAs / any combo
-  # route through that single node. Positive prompt injects at node s890__903
-  # (the primary CLIPTextEncode on the output path); output is the Image Saver
-  # (node 775), or the spliced cutout node when output_variant: cutout.
+  # The graph: a flattened Anima All-In-One master (workflows/anima_master_api.json
+  # — switchable txt2img/img2img, LLLite refine, face/region detailers, upscale,
+  # 8-preset LoRA switcher). LoRA routing chains through inject_models on top of
+  # the preset stack. Positive prompt → node s1284__1325; output → Image Saver
+  # node 775 (Inspyrenet bg-remover spliced in by the provider when the role
+  # requests output_variant: cutout).
   # --------------------------------------------------------------------------- #
   anima:
     provider: comfyui
@@ -57,35 +62,6 @@ models:
       base_url: http://127.0.0.1:8188
       workflow: ./workflows/anima_master_api.json
       inputs:
-        positive: { node: "s890__903", field: "text" }
+        positive: { node: "s1284__1325", field: "text" }
       output_node: "775"        # Image Saver (full pipeline: refine + detail + upscale)
-      output_variant: full      # collect the rendered image as-is (scenes / chat)
-      timeout_s: 900            # full All-In-One pipeline is heavier than the old minimal graph
-
-  # Same master workflow, output routed through the Inspyrenet background remover
-  # so the subject is segmented out of Anima's busy backgrounds. Used for the
-  # base/sprite roles so cutouts composite cleanly onto scenes.
-  anima_cutout:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_master_api.json
-      inputs:
-        positive: { node: "s890__903", field: "text" }
-      output_node: "775"
-      output_variant: cutout    # splices easy imageRemBg after the render → transparent PNG
-      timeout_s: 900
-
-  # Portrait-ratio background plates reuse the master workflow at full output.
-  anima_background:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_master_api.json
-      inputs:
-        positive: { node: "s890__903", field: "text" }
-      output_node: "775"
-      output_variant: full
-      timeout_s: 900
+      timeout_s: 1700           # cold-start model load from the network volume + heavy 29-step er_sde pipeline; stay under the 30-min worker/exec ceiling

@@ -1,0 +1,15 @@
+{
+  "checkpoints": [
+    "anima/hosekiLustrousmixAnima_animaV10.safetensors",
+    "anima/miaomiaoHarem_animaBase.safetensors",
+    "anima/novaAnimeAM_v25.safetensors",
+    "anima/anisnuff_v15-000024.safetensors",
+    "anima/silvermoonmixAnima_v10.safetensors",
+    "miaomiaoHarem_anima12.safetensors",
+    "dit/anima-preview3-base.safetensors"
+  ],
+  "loras": [
+    "dit\\dark_art_style_Anima-step00002750.safetensors",
+    "Futurabbitstyle_animaV1.5-000016.safetensors"
+  ]
+}

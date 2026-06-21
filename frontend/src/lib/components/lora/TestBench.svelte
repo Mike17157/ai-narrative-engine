@@ -3,11 +3,14 @@
   // into tags (tagify), resolve the stack (keyword routing) and render one
   // sample. The prompt field binds the shared global test prompt (img.testPrompt),
   // so the subject is the same one Classify and the Images test modal use.
+  import { onDestroy } from 'svelte';
   import { post } from '$lib/api.js';
+  import { jobStream } from '$lib/sse.js';
   import { app } from '$lib/app.svelte.js';
   import { img } from '$lib/images.svelte.js';
-  import { openLightbox } from '$lib/lightbox.svelte.js';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
+  import ImgCard from '$lib/components/image/ImgCard.svelte';
+  import ProgressBar from '$lib/components/shared/ProgressBar.svelte';
   import { loraLib, famLabel, baseFamByKey } from '$lib/lora-library.svelte.js';
 
   let { stack = '' } = $props();
@@ -25,6 +28,9 @@
   let renderImg = $state(null);
   let renderPct = $state(null);
   let renderErr = $state(null);
+  let _job = null;
+
+  onDestroy(() => { _job?.cancel(); _job = null; });
 
   let imgModelItems = $derived((app.models?.image || []).map((m) => ({ value: m.key, label: m.key, group: famLabel()[baseFamByKey()[m.key]] || 'Other' })));
   let stackItems = $derived(loraLib.cfg.stacks.filter((s) => s.name).map((s) => ({ value: s.name, label: s.name })));
@@ -50,23 +56,23 @@
     if (!resolved || rendering) return;
     rendering = true; renderErr = null; renderImg = null; renderPct = null;
     try {
-      const res = await fetch('/api/lora/sample', {
+      const res = await fetch('/api/loras/grid-render', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model: testModel, checkpoint: resolved.checkpoint, loras: resolved.loras, prompt: img.testPrompt }),
+        body: JSON.stringify({
+          cells: [{ key: 'testbench', model: testModel,
+                    checkpoint_override: resolved.checkpoint || null,
+                    loras: resolved.loras || [], prompt: img.testPrompt }],
+        }),
       });
-      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
-      while (true) {
-        const { value, done } = await reader.read(); if (done) break;
-        buf += dec.decode(value, { stream: true }); let i;
-        while ((i = buf.indexOf('\n\n')) >= 0) {
-          const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-          buf = buf.slice(i + 2); if (!line) continue;
-          const ev = JSON.parse(line.slice(5).trim());
-          if (ev.type === 'progress') renderPct = ev.max ? Math.round((ev.value / ev.max) * 100) : null;
-          else if (ev.type === 'image') renderImg = (ev.images || [])[0] || null;
-          else if (ev.type === 'error') renderErr = ev.error;
-        }
-      }
+      const data = await res.json();
+      if (!data.ok || !data.id) { renderErr = data.error || 'failed to start render'; rendering = false; return; }
+      await new Promise((done) => {
+        _job = jobStream(data.id, (ev) => {
+          if (ev.type === 'cell_progress') renderPct = ev.max ? Math.round((ev.value / ev.max) * 100) : null;
+          else if (ev.type === 'cell_image') renderImg = (ev.images || [])[0] || null;
+          else if (ev.type === 'cell_error') renderErr = ev.error;
+        }, done);
+      });
     } catch (e) { renderErr = String(e); }
     rendering = false;
   }
@@ -113,9 +119,10 @@
   {/if}
   {#if rendering || renderImg}
     <div class="rout">
-      {#if rendering && renderPct !== null}<div class="bar"><span style={`width:${renderPct}%`}></span></div>
-      {:else if rendering}<div class="bar indet"><span></span></div>{/if}
-      {#if renderImg}<button class="imgbtn" onclick={() => openLightbox(renderImg, img.testPrompt)} title="click to enlarge"><img class="rimg" src={renderImg} alt="stack render" /></button>{/if}
+      {#if rendering}<ProgressBar value={renderPct} max={100} height="9px" margin="0 0 10px" />{/if}
+      <div class="render-slot">
+        <ImgCard src={renderImg} caption={img.testPrompt} onRegen={resolved ? render : null} busy={rendering} />
+      </div>
     </div>
   {/if}
 </section>
@@ -144,10 +151,5 @@
   .rscore { font-family: ui-monospace, monospace; font-size: 11px; }
   .rwhy { color: var(--faint); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .rout { margin-top: 14px; }
-  .rimg { max-width: 512px; width: 100%; border-radius: 10px; border: 1px solid var(--border); display: block; }
-  .imgbtn { padding: 0; border: none; background: none; box-shadow: none; cursor: zoom-in; display: block; }
-  .bar { height: 9px; border-radius: 999px; background: var(--elev); overflow: hidden; border: 1px solid var(--border); margin-bottom: 10px; }
-  .bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--accent), #9a6dff); transition: width .3s; }
-  .bar.indet span { width: 30%; animation: slide 1.1s ease-in-out infinite; }
-  @keyframes slide { 0% { margin-left: -30%; } 100% { margin-left: 100%; } }
+  .render-slot { width: 100%; max-width: 512px; aspect-ratio: 1; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
 </style>

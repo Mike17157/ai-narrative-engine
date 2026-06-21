@@ -47,10 +47,14 @@ class ComfyUIProvider:
         self.output_variant: str | None = options.get("output_variant")
 
     def _inject(self, prompt: str, negative_prompt: str | None = None, out_prefix: str | None = None,
-                latent: tuple[int, int] | None = None) -> tuple[dict, str | None]:
+                latent: tuple[int, int] | None = None,
+                flags: dict[str, bool] | None = None) -> tuple[dict, str | None]:
         # Pure graph prep (prompt token, out_prefix, latent, negative, BREAK regions) is shared
         # with the RunPod serverless provider; see loom/providers/_workflow.py.
-        graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent)
+        graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent, flags)
+        # Same-OS ComfyUI: model names must use the host separator (backslash on Windows),
+        # else nested paths injected with '/' fail loader validation ("Value not in list").
+        _workflow.localize_model_paths(graph)
         out = _workflow.apply_output_variant(graph, self.output_node, self.output_variant)
         return graph, out
 
@@ -79,6 +83,7 @@ class ComfyUIProvider:
         init_image: bytes | None = None,
         out_prefix: str | None = None,
         latent: tuple[int, int] | None = None,
+        flags: dict[str, bool] | None = None,
     ) -> ImageResult:
         # Make sure ComfyUI is reachable — connect to a running instance, or
         # (managed mode) launch it headless. Never touches the user's UI.
@@ -86,7 +91,7 @@ class ComfyUIProvider:
 
         get_server(self.base_url).ensure_up()
 
-        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent)
+        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent, flags)
         with httpx.Client(base_url=self.base_url, timeout=60) as client:
             if init_image:
                 self._set_init_image(client, graph, init_image)

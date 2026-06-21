@@ -75,6 +75,12 @@ def detect_desktop_install() -> LaunchConfig | None:
         main_py=str(main_py),
         base_directory=str(base_dir) if base_dir.is_dir() else None,
         front_end_root=str(fe) if fe.is_dir() else None,
+        # ComfyUI Desktop's DynamicVRAM/aimdo weight-offloader (cu12.8+ builds) faults
+        # mid-sample on newer GPUs — observed as "Fault failed: 2" / access violations
+        # rendering the Anima DiT on an RTX 5070 (sm_120). Disabling it falls back to the
+        # classic ModelPatcher (models fit fine without offload here). Recent ComfyUI only;
+        # this is the Desktop autodetect path so the arg is always supported.
+        extra_args=["--disable-dynamic-vram"],
     )
 
 

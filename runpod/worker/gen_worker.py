@@ -121,8 +121,6 @@ NODE_REPO: dict[str, tuple[str, str]] = {
     "SpectrumSDXL": ("https://github.com/ruwwww/comfyui-spectrum-sdxl.git", "Spectrum-SDXL"),
     # ComfyUI_UltimateSDUpscale
     "UltimateSDUpscale": ("https://github.com/ssannels/ComfyUI_UltimateSDUpscale.git", "UltimateSDUpscale"),
-    # Anima-specific patches used by the All-In-One master workflow.
-    "AnimaLLLiteApply": ("https://github.com/kohya-ss/ComfyUI-Anima-LLLite.git", "Anima-LLLite"),
     # NOTE on intentionally-absent packs (left for --online / manual resolution):
     #  - Merge Strings v2 [RvTools] / Lora Stack to String [RvTools]: the
     #    rvage/ComfyUI-RvTools repo is deprecated/removed. These only feed the

@@ -211,8 +211,7 @@ def register(app, ctx):
         # Compose the full-body prompt: the persona's appearance + the identity framing. The
         # appearance tags already carry sex/body/hair/eyes/outfit; framing anchors a full-body shot.
         prompt = _snap_prompt(_safe_image_tags(f"{appearance}, {_PERSONA_FRAMING}"))
-        model = ctx.role_model("base", (body or {}).get("image_model"))
-        provider, model_id = ctx.image_provider(model)
+        provider, model_id = ctx.role_image_provider("base", (body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         _randomize_seeds(provider.workflow)

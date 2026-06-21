@@ -39,10 +39,28 @@ def register(app, ctx):
                 injects.setdefault(str(target["node"]), {})[target["field"]] = role
             except (KeyError, TypeError):
                 pass
+        sections = {}
+        key_nodes = []
+        description = ""
+        recipes = {}
+        meta_path = path.with_suffix(".meta.json")
+        if meta_path.is_file():
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                sections = meta.get("sections", {})
+                key_nodes = meta.get("key_nodes", [])
+                description = meta.get("description", "")
+                recipes = meta.get("recipes", {})
+            except Exception:  # noqa: BLE001
+                pass
         return {
             "model": model, "path": str(path),
             "json": json.loads(path.read_text(encoding="utf-8")),
             "injects": injects,
+            "sections": sections,
+            "key_nodes": key_nodes,
+            "description": description,
+            "recipes": recipes,
         }
 
     @app.post("/api/workflow")

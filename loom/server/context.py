@@ -36,6 +36,14 @@ from .services import prompts as _prompts
 # image_roles.json is the single source of truth for role → workflow mapping.
 IMAGE_ROLES = ("base", "sprite", "scene", "chat")
 _ROLE_PINNED: dict[str, str] = {}
+
+
+def _parse_role_entry(v) -> tuple[str, dict]:
+    """Unpack a roles-config value (plain string OR {model, output_variant, …} object).
+    Returns (model_key, extra_opts) — extra_opts feeds image_provider as overrides."""
+    if isinstance(v, dict):
+        return (v.get("model") or "").strip(), {k: vv for k, vv in v.items() if k != "model"}
+    return (v or "").strip(), {}
 _ROLE_LABELS = {
     "base": "Character base image",
     "sprite": "Outfit / emotion sprites",
@@ -156,6 +164,10 @@ class AppContext:
         from .services.poses import ASPECT_DIMS, resolve_geometry
         return ASPECT_DIMS[resolve_geometry(emo, config_files.load_poses(self.root))["aspect"]]
 
+    def load_pose_library(self) -> dict:
+        """Curated body-language pose palette (configs/pose_library.json or the built-in default)."""
+        return config_files.load_pose_library(self.root)
+
     def load_story_builder(self) -> dict:
         return config_files.load_story_builder(self.root)
 
@@ -215,19 +227,25 @@ class AppContext:
         from .services.img_naming import output_prefix
         return output_prefix(self.workflow_family(model_id), role, character)
 
-    def text_provider_for(self, model_sel: str | None):
+    def text_provider_for(self, model_sel: str | None, params: dict | None = None):
         """Build a text provider for a model selection: a registered model key,
-        or an OpenRouter (etc.) model id run through the active text connection."""
+        or an OpenRouter (etc.) model id run through the active text connection.
+        `params` (temperature/top_p/…) from a config are merged into the provider options."""
         from ..providers.registry import build_provider
 
+        params = params or {}
         s = self.effective_settings()
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
-            return build_provider(s.models[model_sel])
+            md = s.models[model_sel]
+            if params:
+                md = md.model_copy(); md.options = {**md.options, **params}
+            return build_provider(md)
         conn = self.store.active("text")
         if conn:
             return build_provider(ModelDef(
                 provider=conn.provider, kind="text",
-                options={"model": model_sel or conn.model, "api_key": conn.api_key, "base_url": conn.base_url},
+                options={"model": model_sel or conn.model, "api_key": conn.api_key,
+                         "base_url": conn.base_url, **params},
             ))
         return None
 
@@ -241,10 +259,11 @@ class AppContext:
             return None
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=conn.to_model_options()))
 
-    def image_provider(self, model_id: str | None = None):
+    def image_provider(self, model_id: str | None = None, output_variant: str | None = None):
         """A ComfyUIProvider for an image model — an explicit workflow id if given,
         else the active image connection (honouring its base_url override), plus
-        the resolved model id. (provider, id) or (None, error_message)."""
+        the resolved model id. (provider, id) or (None, error_message).
+        output_variant ('full'|'cutout') overrides whatever the model definition says."""
         from ..providers.comfyui_provider import ComfyUIProvider
 
         conn = self.store.active("image")
@@ -255,6 +274,8 @@ class AppContext:
         opts = dict(md.options)
         if conn and conn.base_url:
             opts["base_url"] = conn.base_url
+        if output_variant:
+            opts["output_variant"] = output_variant
         return ComfyUIProvider(opts), model_id
 
     def role_default(self, role: str) -> str | None:
@@ -266,37 +287,52 @@ class AppContext:
         return (conn.model if conn else None) or self.user.defaults.get("image_model")
 
     def role_model(self, role: str, override: str | None = None) -> str | None:
-        """Resolve the workflow for a generation role: explicit request override > configured
-        role override (configs/image_roles.json) > role default."""
+        """Resolve the workflow key for a generation role: explicit override > image_roles.json > default."""
         if override:
             return override
-        v = (self.load_image_roles().get(role) or "").strip()
-        return v if (v and v in self.base_settings.models) else self.role_default(role)
+        key, _ = _parse_role_entry(self.load_image_roles().get(role))
+        return key if (key and key in self.base_settings.models) else self.role_default(role)
 
-    def author_provider(self, model_sel: str | None):
+    def role_extra_opts(self, role: str) -> dict:
+        """Extra provider options for a role from image_roles.json (e.g. output_variant)."""
+        _, opts = _parse_role_entry(self.load_image_roles().get(role))
+        return opts
+
+    def role_image_provider(self, role: str, override: str | None = None):
+        """Convenience: resolve role → (model_key + output_variant) → ComfyUIProvider.
+        When override is set the caller chose a model explicitly — skip role extra opts."""
+        model_id = self.role_model(role, override)
+        variant = None if override else self.role_extra_opts(role).get("output_variant")
+        return self.image_provider(model_id, output_variant=variant)
+
+    def author_provider(self, model_sel: str | None, params: dict | None = None):
         """Text provider for the Story Builder — an explicit (selectable) author
         model if given, else the active chat connection. Always raises the token
-        ceiling (the default 1024 truncates a stage's structured JSON)."""
+        ceiling (the default 1024 truncates a stage's structured JSON). A config's
+        `params` (temperature/…) override, so an explicit max_tokens wins over 4096."""
         from ..providers.registry import build_provider
 
+        params = params or {}
         s = self.effective_settings()
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
             md = s.models[model_sel].model_copy()
-            md.options = {**md.options, "max_tokens": 4096}
+            md.options = {**md.options, "max_tokens": 4096, **params}
             return build_provider(md)
         conn = self.store.active("text")
         if conn is None:
             return None
-        opts = {**conn.to_model_options(), "max_tokens": 4096}
+        opts = {**conn.to_model_options(), "max_tokens": 4096, **params}
         if model_sel:
             opts["model"] = model_sel
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
 
     def builder_ctx(self, body: dict, stage: str | None = None):
         """(provider, systems) for a builder step, or (None, err).
-        Each stage carries its own model config."""
+        Each stage carries its own model + inference params (from its script config)."""
         cfg = self.load_story_builder()
-        provider = self.author_provider(config_files._stage_model(cfg, stage, (body or {}).get("model")))
+        provider = self.author_provider(
+            config_files._stage_model(cfg, stage, (body or {}).get("model")),
+            config_files.stage_params(cfg, stage))
         if provider is None or not hasattr(provider, "generate_text"):
             return None, "no chat connection — connect a chat model first"
         return provider, (cfg.get("systems") or {})

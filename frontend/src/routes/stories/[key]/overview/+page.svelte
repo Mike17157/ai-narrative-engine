@@ -1,12 +1,14 @@
 <script>
+  import { goto } from '$app/navigation';
   import { charName } from '$lib/characters.svelte.js';
-  import { stories, deleteStory, regenStory, expandArc, loadStory, setStoryMode, persistCurrent } from '$lib/stories.svelte.js';
+  import { stories, deleteStory, regenStory, expandArc, generateTimelines, loadStory, setStoryMode, persistCurrent } from '$lib/stories.svelte.js';
   import { patch } from '$lib/api.js';
-  import ChapterCard from '$lib/components/ChapterCard.svelte';
-  import SceneModal  from '$lib/components/SceneModal.svelte';
-  import ArcModal    from '$lib/components/ArcModal.svelte';
-  import StorySettingsModal from '$lib/components/StorySettingsModal.svelte';
-  import StoryGraph  from '$lib/components/StoryGraph.svelte';
+  import ChapterCard from '$lib/components/story/ChapterCard.svelte';
+  import SceneModal  from '$lib/components/story/SceneModal.svelte';
+  import ArcModal    from '$lib/components/story/ArcModal.svelte';
+  import StorySettingsModal from '$lib/components/story/StorySettingsModal.svelte';
+  import StoryGraph  from '$lib/components/graph/StoryGraph.svelte';
+  import SpineDisplay from '$lib/components/story/SpineDisplay.svelte';
 
   let st = $derived(stories.current);
 
@@ -22,6 +24,34 @@
 
   // Whole-story canvas mode (persisted in the store): 'graph' | 'list'
   let mode = $derived(stories.view[st?.key]?.mode || 'graph');
+
+  // Timeline generation state
+  let generatingTimelineArc = $state(null);  // arc.id currently generating
+  let tlPhase = $state('');                  // current phase label
+  let tlStreamsByTl = $state({});           // { [timeline_id]: string } — live delta text
+
+  async function handleGenerateTimelines(arc) {
+    if (generatingTimelineArc) return;
+    generatingTimelineArc = arc.id;
+    tlPhase = '';
+    tlStreamsByTl = {};
+    await generateTimelines(st.key, arc.id, (ev) => {
+      if (ev.type === 'phase')         tlPhase = ev.label;
+      else if (ev.type === 'delta')    tlStreamsByTl = { ...tlStreamsByTl, [ev.timeline_id]: (tlStreamsByTl[ev.timeline_id] || '') + ev.text };
+      else if (ev.type === 'timeline_start') tlStreamsByTl = { ...tlStreamsByTl, [ev.timeline_id]: '' };
+      else if (ev.type === 'result') {
+        // Patch the arc in reactive state so graph rebuilds immediately
+        if (stories.current?.arcs) {
+          const idx = stories.current.arcs.findIndex(a => a.id === arc.id);
+          if (idx >= 0) stories.current.arcs[idx] = { ...stories.current.arcs[idx], ...ev };
+        }
+      }
+    });
+    generatingTimelineArc = null;
+    tlPhase = '';
+    tlStreamsByTl = {};
+    await loadStory(st.key);
+  }
 
   // Arc-details modal
   let arcModal = $state(null);   // { arcIdx }
@@ -52,7 +82,8 @@
     }
     const arc = stories.current?.arcs?.[data.arcIdx];
     const node = arc?.nodes?.[data.nodeId];
-    if (node) openRegenModal(arc, data.arcIdx, node, -1);
+    // data.nodeId is the dict key (e.g. 'n1') — pass it explicitly so saves work
+    if (node) openRegenModal(arc, data.arcIdx, data.nodeId, node, -1);
   }
 
   // Primary character key (always locked in every arc)
@@ -61,6 +92,7 @@
   );
 
   // Walk arc nodes — arc.nodes is a {id: ArcBeat} dict, not an array.
+  // Returns beat objects with _key attached so openRegenModal can save correctly.
   function walkNodes(arc) {
     const nodeMap = arc?.nodes || {};
     const keys = Object.keys(nodeMap);
@@ -72,7 +104,7 @@
       seen.add(curId);
       const cur = nodeMap[curId];
       if (!cur) break;
-      ordered.push(cur);
+      ordered.push({ ...cur, _key: curId });
       curId = cur.next?.[0] || null;
     }
     return ordered;
@@ -117,8 +149,8 @@
     await loadStory(st.key);
   }
 
-  function openRegenModal(arc, arcIdx, node, chapterIdx) {
-    regenModal = { arcIdx, nodeId: node.id, chapter: node, chapterIdx };
+  function openRegenModal(arc, arcIdx, nodeId, node, chapterIdx) {
+    regenModal = { arcIdx, nodeId, chapter: node, chapterIdx };
   }
   function closeRegenModal() { regenModal = null; }
   function handleRegenSave(updated) {
@@ -149,6 +181,7 @@
       </div>
     {/if}
     <span class="sp"></span>
+    <button class="ghost sm" onclick={() => goto(`/stories/${st.key}/workshop`)} title="Talk through changes; revise the story graph">⚒ Iterate</button>
     <button class="ghost sm" onclick={() => settingsOpen = true}>✎ Edit</button>
     <button class="ghost sm" onclick={() => regenStory(st)}>↻ Regenerate</button>
     <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
@@ -181,6 +214,16 @@
       <span class="chip">{t}</span>
     {/each}
   </div>
+
+  <!-- Spine — emotional psychology skeleton -->
+  {#if st.spine?.wound}
+    <details class="spine-details">
+      <summary class="spine-summary">⟳ Emotional Spine</summary>
+      <div style="margin-top:10px">
+        <SpineDisplay spine={st.spine} compact />
+      </div>
+    </details>
+  {/if}
 
   <!-- Intended ending -->
   {#if st.intended_ending}
@@ -244,36 +287,72 @@
             <p class="arc-rat">{arc.rationale}</p>
           {/if}
 
-          <!-- Arc body: chapters or expand button -->
-          {#if nodes.length}
-            <div class="chapter-list">
-              {#each nodes as node, chIdx}
-                <ChapterCard
-                  chapter={node}
-                  index={chIdx}
-                  onRegen={() => openRegenModal(arc, arcIdx, node, chIdx)}
-                />
-              {/each}
-            </div>
-          {:else if expandingArc === arc.id}
-            <!-- Streaming preview while expanding -->
+          <!-- Arc body: timelines, legacy chapters, generating state, or action buttons -->
+          {#if generatingTimelineArc === arc.id}
             <div class="expand-stream">
               <div class="stream-head">
                 <span class="spin"></span>
-                <span>Expanding arc to chapters…</span>
+                <span>{tlPhase || 'Generating timelines…'}</span>
               </div>
-              {#if expandStream}
-                <pre class="stream-text">{expandStream}</pre>
-              {/if}
+              {#each Object.entries(tlStreamsByTl) as [tlId, text]}
+                {#if text}
+                  <div class="tl-stream-block">
+                    <div class="tl-stream-label">{tlId}</div>
+                    <pre class="stream-text">{text}</pre>
+                  </div>
+                {/if}
+              {/each}
+            </div>
+          {:else if arc.timelines?.length}
+            <!-- Timeline rows in list view -->
+            {#each arc.timelines as tl, tlIdx}
+              {@const tlNodes = walkNodes(tl.nodes || {}, tl.start)}
+              <div class="timeline-section">
+                <div class="tl-head-row">
+                  <span class="tl-dot" style={`background:var(--tl${tlIdx}-color,#6db4ff)`}></span>
+                  <span class="tl-name">{tl.name}</span>
+                  {#if tl.premise}<span class="tl-premise">{tl.premise}</span>{/if}
+                </div>
+                {#if tlNodes.length}
+                  <div class="chapter-list">
+                    {#each tlNodes as node, chIdx}
+                      <ChapterCard chapter={node} index={chIdx}
+                        onRegen={() => openRegenModal(arc, arcIdx, node.id, node, chIdx)} />
+                    {/each}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+            <button class="expand-btn regen" onclick={() => handleGenerateTimelines(arc)}
+              disabled={!!generatingTimelineArc} title="Re-derive timelines from persona">
+              ↻ Regenerate timelines
+            </button>
+          {:else if nodes.length}
+            <!-- Legacy flat chapters -->
+            <div class="chapter-list">
+              {#each nodes as node, chIdx}
+                <ChapterCard chapter={node} index={chIdx}
+                  onRegen={() => openRegenModal(arc, arcIdx, node._key, node, chIdx)} />
+              {/each}
+            </div>
+          {:else if expandingArc === arc.id}
+            <div class="expand-stream">
+              <div class="stream-head"><span class="spin"></span><span>Expanding arc…</span></div>
+              {#if expandStream}<pre class="stream-text">{expandStream}</pre>{/if}
             </div>
           {:else}
-            <button
-              class="expand-btn"
-              onclick={() => handleExpand(arc)}
-              disabled={!!expandingArc}
-            >
-              ⊕ Expand to chapters
-            </button>
+            <div class="arc-actions">
+              <button class="expand-btn primary"
+                onclick={() => handleGenerateTimelines(arc)}
+                disabled={!!generatingTimelineArc || !!expandingArc}>
+                ⑂ Generate timelines
+              </button>
+              <button class="expand-btn"
+                onclick={() => handleExpand(arc)}
+                disabled={!!expandingArc || !!generatingTimelineArc}>
+                ⊕ Expand flat
+              </button>
+            </div>
           {/if}
         </div>
       {/each}
@@ -396,6 +475,16 @@
   }
   .cast-chip { font-size: 10.5px; }
 
+  /* ── Spine details ─────────────────────────────────────────────────────────── */
+  .spine-details { margin: 8px 0; }
+  .spine-summary {
+    cursor: pointer; user-select: none; list-style: none;
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--faint, #555b78); padding: 4px 0;
+  }
+  .spine-summary::-webkit-details-marker { display: none; }
+  .spine-summary:hover { color: var(--muted, #8a92b0); }
+
   /* ── Ending callout ───────────────────────────────────────────────────────── */
   .ending-callout {
     display: flex;
@@ -480,21 +569,40 @@
     gap: 10px;
   }
 
-  /* Expand button */
+  /* Action row for two-button state */
+  .arc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  /* Expand / generate buttons */
   .expand-btn {
     align-self: flex-start;
-    font-size: 12.5px;
-    font-weight: 600;
-    padding: 7px 14px;
-    border-radius: 8px;
-    background: var(--elev);
-    border: 1px solid var(--border);
-    color: var(--text);
-    cursor: pointer;
-    box-shadow: none;
+    font-size: 12.5px; font-weight: 600;
+    padding: 7px 14px; border-radius: 8px;
+    background: var(--elev); border: 1px solid var(--border);
+    color: var(--text); cursor: pointer; box-shadow: none;
   }
   .expand-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); filter: none; }
   .expand-btn:disabled { opacity: .45; cursor: not-allowed; }
+  .expand-btn.primary {
+    background: rgba(109,140,255,.12); border-color: rgba(109,140,255,.35);
+    color: var(--accent);
+  }
+  .expand-btn.primary:hover:not(:disabled) { background: rgba(109,140,255,.22); filter: none; }
+  .expand-btn.regen { font-size: 11.5px; opacity: .7; }
+  .expand-btn.regen:hover:not(:disabled) { opacity: 1; }
+
+  /* Timeline rows in list mode */
+  .timeline-section { display: flex; flex-direction: column; gap: 8px; }
+  .tl-head-row { display: flex; align-items: baseline; gap: 8px; }
+  .tl-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .tl-name { font-size: 12px; font-weight: 800; color: var(--text); }
+  .tl-premise { font-size: 11.5px; color: var(--faint); font-style: italic; }
+
+  /* Timeline streaming blocks */
+  .tl-stream-block { border-top: 1px solid var(--border-soft); }
+  .tl-stream-label {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--faint); padding: 4px 12px 0;
+  }
 
   /* Streaming preview */
   .expand-stream {

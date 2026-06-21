@@ -1,0 +1,217 @@
+"""Unified world-state engine — the mutable working memory of a playthrough.
+
+A lorebook is the *reference manual* (canon, retrieved). This is the *save file*: the
+evolving truth of THIS thread — where characters are, how they feel, what they know,
+relationships, inventory, plot flags, the clock, and a rolling episodic log. It's read
+into every prompt and rewritten every turn.
+
+Flow each turn: render_state() → prompt → the narrator/scribe emits `state_deltas`
+(small, uniform ops) → apply_deltas() mutates the doc, writes `fact` deltas back into a
+dynamic lorebook scope (so established facts become retrievable canon), and appends to
+the log. The same machinery drives interactive play AND the autonomous simulation.
+
+State is a plain dict (persisted in the session JSON), shape:
+    { entities: {name: {kind, location, mood, status, relationships:{target:int}}},
+      flags: {key: value}, inventory: [str], location: str, clock: str,
+      log: [str], revision: int }
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+# ── Delta vocabulary ─────────────────────────────────────────────────────────────
+# One uniform envelope for every op (heterogeneous unions are brittle under strict
+# json_schema / grammar decoding). Unused fields are "" / []. The model fills only
+# what each op needs.
+_OPS = ["set_flag", "move", "mood", "rel", "item_add", "item_remove", "fact", "log", "entity"]
+
+STATE_DELTA_ITEM = {
+    "type": "object", "additionalProperties": False,
+    "required": ["op", "name", "key", "value", "title", "keywords"],
+    "properties": {
+        "op": {"type": "string", "enum": _OPS,
+               "description": "set_flag(key,value) | move(name->value=location) | mood(name,value) | "
+                              "rel(name,key=target,value=±N) | item_add(value) | item_remove(value) | "
+                              "fact(title,keywords,value=content) | log(value=text) | entity(name,value=status)"},
+        "name": {"type": "string", "description": "character/entity the op concerns ('' if n/a)"},
+        "key": {"type": "string", "description": "flag key, or relationship target ('' if n/a)"},
+        "value": {"type": "string", "description": "the op's value ('' if n/a)"},
+        "title": {"type": "string", "description": "fact title ('' if n/a)"},
+        "keywords": {"type": "array", "items": {"type": "string"},
+                     "description": "fact trigger keywords ([] if n/a)"},
+    },
+}
+
+STATE_DELTAS_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["state_deltas"],
+    "properties": {"state_deltas": {"type": "array", "items": STATE_DELTA_ITEM}},
+}
+
+_LOG_CAP = 20          # keep the doc bounded; compaction trims the oldest beats
+_REL_MIN, _REL_MAX = -10, 10
+
+
+# ── State doc helpers ────────────────────────────────────────────────────────────
+
+def empty_state() -> dict:
+    return {"entities": {}, "flags": {}, "inventory": [], "location": "",
+            "clock": "", "log": [], "revision": 0}
+
+
+def normalize(ws: dict | None) -> dict:
+    """Coerce a (possibly partial / legacy) doc into the full shape."""
+    ws = dict(ws or {})
+    base = empty_state()
+    for k, v in base.items():
+        ws.setdefault(k, v)
+    if not isinstance(ws.get("entities"), dict):
+        ws["entities"] = {}
+    for ent in ws["entities"].values():
+        if isinstance(ent, dict) and not isinstance(ent.get("relationships"), dict):
+            ent["relationships"] = {}
+    for k in ("flags",):
+        if not isinstance(ws.get(k), dict):
+            ws[k] = {}
+    for k in ("inventory", "log"):
+        if not isinstance(ws.get(k), list):
+            ws[k] = []
+    return ws
+
+
+def _entity(ws: dict, name: str) -> dict:
+    name = (name or "").strip()
+    if not name:
+        return {}
+    ents = ws["entities"]
+    if name not in ents:
+        ents[name] = {"kind": "character", "location": "", "mood": "", "status": "",
+                      "relationships": {}}
+    return ents[name]
+
+
+def _to_int(s: str) -> int:
+    m = re.search(r"-?\d+", str(s or ""))
+    return int(m.group()) if m else 0
+
+
+def _coerce_scalar(v: str):
+    s = str(v).strip()
+    low = s.lower()
+    if low in ("true", "yes", "on"):
+        return True
+    if low in ("false", "no", "off"):
+        return False
+    if re.fullmatch(r"-?\d+", s):
+        return int(s)
+    return s
+
+
+# ── Apply deltas (with lorebook write-back) ──────────────────────────────────────
+
+def apply_deltas(ws: dict, deltas: list[dict], *, root: Path | None = None,
+                 scope: str | None = None) -> dict:
+    """Apply a list of delta ops to *ws* (mutates + returns). `fact` ops are written
+    back into the lorebook *scope* (provenance source='auto') so they become retrievable
+    canon. `log` ops append to episodic memory. Unknown ops are ignored."""
+    ws = normalize(ws)
+    for d in (deltas or []):
+        if not isinstance(d, dict):
+            continue
+        op = (d.get("op") or "").strip()
+        name = (d.get("name") or "").strip()
+        key = (d.get("key") or "").strip()
+        value = (d.get("value") or "").strip()
+        # Guard against a common misfill: the model echoing the op verb (or a field name)
+        # into `name`/`key` instead of leaving them blank.
+        if name in _OPS:
+            name = ""
+        if key in _OPS or key in ("flags", "key", "value", "name"):
+            key = ""
+
+        if op == "set_flag" and key and value:   # ignore empty/echoed flags
+            ws["flags"][key] = _coerce_scalar(value)
+        elif op == "move" and name:
+            _entity(ws, name)["location"] = value
+        elif op == "mood" and name:
+            _entity(ws, name)["mood"] = value
+        elif op == "rel" and name:
+            target = key or "you"
+            rels = _entity(ws, name)["relationships"]
+            rels[target] = max(_REL_MIN, min(_REL_MAX, int(rels.get(target, 0)) + _to_int(value)))
+        elif op == "item_add" and value:
+            if value not in ws["inventory"]:
+                ws["inventory"].append(value)
+        elif op == "item_remove" and value:
+            ws["inventory"] = [i for i in ws["inventory"] if i.lower() != value.lower()]
+        elif op == "entity" and name:
+            _entity(ws, name)["status"] = value
+        elif op == "log" and value:
+            ws["log"].append(value)
+        elif op == "fact" and value and root and scope:
+            _write_fact(root, scope, title=(d.get("title") or value[:60]),
+                        keywords=[k for k in (d.get("keywords") or []) if k], content=value)
+            ws["log"].append(f"(established: {(d.get('title') or value)[:80]})")
+
+    if len(ws["log"]) > _LOG_CAP:
+        ws["log"] = ws["log"][-_LOG_CAP:]
+    ws["revision"] = int(ws.get("revision", 0)) + 1
+    return ws
+
+
+def _write_fact(root: Path, scope: str, *, title: str, keywords: list[str], content: str) -> None:
+    """Upsert an engine-established fact into a dynamic lorebook scope (deduped by title)."""
+    try:
+        from ..config.schema import LoreEntry
+        from ..server.services import lorebook_store as LS
+        eid = "auto-" + re.sub(r"[^\w\-]+", "-", title.lower()).strip("-")[:40] or "auto-fact"
+        if not keywords:  # derive crude triggers from the title so it's retrievable
+            keywords = [w for w in re.findall(r"[A-Za-z][A-Za-z\-']{2,}", title)][:6]
+        LS.upsert_entry(root, scope, LoreEntry(
+            id=eid, title=title[:70], keywords=keywords, content=content,
+            priority=1, source="auto"))
+    except Exception:  # noqa: BLE001 — write-back is best-effort, never break the turn
+        pass
+
+
+# ── Render for the prompt ────────────────────────────────────────────────────────
+
+def render_state(ws: dict) -> str:
+    """The WORLD STATE block injected into the narrator/scribe prompt."""
+    ws = normalize(ws)
+    if not (ws["entities"] or ws["flags"] or ws["inventory"] or ws["log"] or ws["location"]):
+        return ""
+    lines = ["WORLD STATE — the current, evolving truth of this playthrough. Honor it; "
+             "do not contradict it. Report any changes via state_deltas."]
+    if ws["location"]:
+        lines.append(f"Location: {ws['location']}")
+    if ws["clock"]:
+        lines.append(f"Time: {ws['clock']}")
+    if ws["entities"]:
+        lines.append("Characters:")
+        for nm, e in ws["entities"].items():
+            bits = []
+            if e.get("location"):
+                bits.append(f"at {e['location']}")
+            if e.get("mood"):
+                bits.append(f"feeling {e['mood']}")
+            if e.get("status"):
+                bits.append(e["status"])
+            rels = e.get("relationships") or {}
+            if rels:
+                bits.append("relations: " + ", ".join(f"{t} {v:+d}" for t, v in rels.items()))
+            lines.append(f"- {nm}" + (f" — {'; '.join(bits)}" if bits else ""))
+    if ws["inventory"]:
+        lines.append("Inventory: " + ", ".join(ws["inventory"]))
+    if ws["flags"]:
+        lines.append("Flags: " + "; ".join(f"{k}={v}" for k, v in ws["flags"].items()))
+    if ws["log"]:
+        lines.append("Recently: " + " | ".join(ws["log"][-6:]))
+    return "\n".join(lines)
+
+
+def summary(ws: dict) -> dict:
+    """Compact, UI-friendly snapshot (counts + the doc) for the state panel / telemetry."""
+    ws = normalize(ws)
+    return {"entities": len(ws["entities"]), "flags": len(ws["flags"]),
+            "inventory": len(ws["inventory"]), "revision": ws["revision"], "state": ws}

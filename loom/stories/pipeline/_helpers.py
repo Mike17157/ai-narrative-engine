@@ -153,7 +153,61 @@ _OUTFIT_RULE = (
 # Per-stage default system prompts
 # ---------------------------------------------------------------------------
 
+SPINE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["wound", "lie", "truth", "heart", "beats", "logline", "tone", "themes"],
+    "properties": {
+        "wound": {"type": "string"},
+        "lie": {"type": "string"},
+        "truth": {"type": "string"},
+        "heart": {"type": "string"},
+        "logline": {"type": "string"},
+        "tone": {"type": "string"},
+        "themes": {"type": "array", "items": {"type": "string"}},
+        "beats": {
+            "type": "array",
+            "items": {
+                "type": "object", "additionalProperties": False,
+                "required": ["inflection", "description"],
+                "properties": {
+                    "inflection": {"type": "string"},
+                    "description": {"type": "string"},
+                }
+            }
+        },
+    }
+}
+
+
 DEFAULT_SYSTEMS = {
+    "spine": (
+        "You are a character psychologist and story architect. You do NOT outline events — you map "
+        "the INNER JOURNEY of a person.\n\n"
+        "Given a character's persona (and optionally a story premise), produce their EMOTIONAL SPINE: "
+        "the psychological skeleton that every great character-driven arc hangs from.\n\n"
+        "THE FOUR ANCHORS:\n"
+        "• WOUND: The specific unhealed hurt this character carries. Not a flaw or trait — the "
+        "formative event or pattern that carved them. Concrete, specific, rooted in something real.\n"
+        "• LIE: The false belief they formed to protect themselves from the wound. This is the "
+        "central dramatic engine — the whole story exists to dismantle it. Make it specific and "
+        "psychologically honest, not abstract.\n"
+        "• TRUTH: What they must ultimately accept to grow. The genuine opposite of the lie — "
+        "not given as a gift, earned through cost.\n"
+        "• HEART: The human resonance at the center of their story. The thing a complete stranger "
+        "would recognise in themselves. One resonant sentence.\n\n"
+        "EMOTIONAL BEATS — 4-7 psychological stations from wound-reinforcement to truth-acceptance:\n"
+        "Each beat is NOT a plot event. It is an INTERNAL psychological shift that external story "
+        "events must FORCE. Name each inflection evocatively (e.g. 'The Lie Solidifies', 'First "
+        "Crack', 'The Real Cost', 'Exposure', 'The Choice', 'Acceptance') and describe what it "
+        "looks like from the outside — what happens in the character's behaviour/demeanour when this "
+        "shift occurs. The beats form a complete inner arc from lie to truth.\n\n"
+        "Also produce: a LOGLINE (one-sentence emotional hook — what kind of person this story is "
+        "for, not a plot summary), a TONE (3-5 evocative words), and 3-5 THEMES.\n\n"
+        "Study the persona deeply before writing. The wound and lie must be completely consistent "
+        "with who they already are — you are REVEALING the psychology already there, not inventing a "
+        "new one.\n\n"
+        "OUTPUT: structured JSON only."
+    ),
     "storyboard": (
         "You are a story architect — part structural engineer, part emotional cartographer. You "
         "outline a story as the CHAPTERS OF A BOOK: a deliberate, tactical plan rooted in genuine "
@@ -367,7 +421,7 @@ DEFAULT_SYSTEMS = {
     ),
 }
 
-STAGES = ["storyboard", "scenes", "characters"]
+STAGES = ["spine", "storyboard", "scenes", "characters"]
 
 # Stages that require a VISION-capable model (currently none — base_image uses text).
 NEEDS_IMAGE: set[str] = set()

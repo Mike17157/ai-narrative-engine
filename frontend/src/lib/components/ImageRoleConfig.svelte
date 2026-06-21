@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
-  import Combobox from '$lib/components/Combobox.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   // One imaging aspect's ComfyUI image WORKFLOW (image_roles.json). Compatible workflows only —
   // these are image graphs, distinct from the text generation models. Saves instantly, shared

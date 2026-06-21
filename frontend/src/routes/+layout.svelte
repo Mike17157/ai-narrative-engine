@@ -8,11 +8,12 @@
   import { post } from '$lib/api.js';
   import { askNewPersona } from '$lib/newpersona.svelte.js';
   import { treeFor } from '$lib/nav.svelte.js';
-  import ActivityMenu from '$lib/components/ActivityMenu.svelte';
-  import Lightbox from '$lib/components/Lightbox.svelte';
-  import ConfirmModal from '$lib/components/ConfirmModal.svelte';
-  import NewPersonaModal from '$lib/components/NewPersonaModal.svelte';
-  import TagGraphModal from '$lib/components/TagGraphModal.svelte';
+  import ActivityMenu from '$lib/components/shared/ActivityMenu.svelte';
+  import Lightbox from '$lib/components/shared/Lightbox.svelte';
+  import ConfirmModal from '$lib/components/shared/ConfirmModal.svelte';
+  import NewPersonaModal from '$lib/components/shared/NewPersonaModal.svelte';
+  import TagGraphModal from '$lib/components/image/TagGraphModal.svelte';
+  import ConfigModal from '$lib/components/ConfigModal.svelte';
 
   let { children } = $props();
 
@@ -24,7 +25,7 @@
   let path = $derived($page.url.pathname);
   let search = $derived($page.url.search || '');
   let section = $derived(path.split('/')[1] || '');
-  let tree = $derived(new Set(['characters', 'stories', 'images', 'training', 'settings']).has(section) ? treeFor(section, path) : []);
+  let tree = $derived(new Set(['characters', 'stories', 'images', 'training', 'settings', 'lorebooks']).has(section) ? treeFor(section, path) : []);
   let activeHref = $derived(path + search);
 
   let comfyUp = $derived(app.health?.comfyui?.up);
@@ -41,8 +42,10 @@
   }
 
   const nav = [
+    { id: 'chat',       label: 'Chat',       icon: '💬', href: '/chat' },
     { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
     { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories' },
+    { id: 'lorebooks',  label: 'Lorebooks',  icon: '📚', href: '/lorebooks' },
     { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/graph' },
     { id: 'training',   label: 'Training',   icon: '🎓', href: '/training' },
     { id: 'settings',   label: 'Settings',   icon: '⚙',  href: '/settings/system' },
@@ -186,6 +189,8 @@
               </div>
             {/if}
           </div>
+        {:else if node.action}
+          <button class="snbtn" onclick={node.action}>{node.label}</button>
         {:else}
           <a href={node.href} class="snbtn" class:on={nodeActive(node)}
              class:dimmed={node.dimmed} class:done={node.done}>{node.label}</a>
@@ -201,6 +206,7 @@
 <ConfirmModal />
 <NewPersonaModal />
 <TagGraphModal />
+<ConfigModal />
 
 <style>
   .shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }

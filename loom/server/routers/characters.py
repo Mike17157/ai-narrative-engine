@@ -51,6 +51,15 @@ def register(app, ctx):
         return {"poses": [row(k) for k in keys],
                 "framings": list(FRAMING_TAGS.keys()), "aspects": list(ASPECT_DIMS.keys())}
 
+    @app.get("/api/pose-library")
+    def get_pose_library() -> dict:
+        """The curated body-language pose palette generated poses pick from — real Danbooru pose
+        tags grouped by body facet. Returns {facets:[{key,desc,tags}], count}."""
+        lib = ctx.load_pose_library()
+        facets = [{"key": k, "desc": (v or {}).get("desc", ""), "tags": list((v or {}).get("tags") or [])}
+                  for k, v in lib.items() if isinstance(v, dict) and v.get("tags")]
+        return {"facets": facets, "count": sum(len(f["tags"]) for f in facets)}
+
     @app.post("/api/poses")
     def set_poses(body: dict):
         """Save shot-geometry overrides. Accepts one {key, framing?, aspect?} or {config:{key:entry}}.
@@ -108,7 +117,7 @@ def register(app, ctx):
             from ..services import config_files as _cfiles
             _w_cfg = ctx.load_story_builder()
             _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe"))
-            pp = _compose_poses(_w_prov, _persona_text(c))
+            pp = _compose_poses(_w_prov, _persona_text(c), ctx.load_pose_library())
         else:
             emo = (body.get("emotion") or "").strip()
             if emo not in EMOTION_KEYS:
@@ -597,8 +606,7 @@ def register(app, ctx):
         expr = ((outfit.get("expression_prompts") or {}).get(emotion)
                 or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
         # Every outfit picture is FULL BODY (the expression sprite shows the whole look + the face).
-        model = ctx.role_model("sprite", body.get("image_model"))
-        provider, model_id = ctx.image_provider(model)
+        provider, model_id = ctx.role_image_provider("sprite", body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
@@ -652,8 +660,7 @@ def register(app, ctx):
         outfits = [o for o in m.get("outfits", []) if (not only or o.get("id") == only)]
         if not outfits:
             return JSONResponse({"error": "no outfits to render"}, status_code=400)
-        model = ctx.role_model("sprite", body.get("image_model"))
-        provider, model_id = ctx.image_provider(model)
+        provider, model_id = ctx.role_image_provider("sprite", body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         appearance = (ch.fields or {}).get("appearance") or ""
@@ -798,8 +805,7 @@ def register(app, ctx):
             return JSONResponse({"error": "no such outfit"}, status_code=404)
         attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
         is_unified = outfit.get("unified", False)
-        model = ctx.role_model("sprite", (body or {}).get("image_model"))
-        provider, model_id = ctx.image_provider(model)
+        provider, model_id = ctx.role_image_provider("sprite", (body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         # Unified outfits embed appearance; legacy outfits need it prepended.
@@ -909,8 +915,7 @@ def register(app, ctx):
         # (see GET .../base-prompt); else use the character's own appearance (NOT a hardcoded
         # fallback — that mis-genders e.g. Darek).
         prompt = (body.get("prompt") or "").strip() or _base_prompt(ch)
-        model = ctx.role_model("base", body.get("image_model"))
-        provider, model_id = ctx.image_provider(model)
+        provider, model_id = ctx.role_image_provider("base", body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         _randomize_seeds(provider.workflow)  # fresh seed each call → a batch of 4 varies

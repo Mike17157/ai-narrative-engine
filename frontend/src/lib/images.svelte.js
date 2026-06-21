@@ -2,6 +2,7 @@
 // consumed by the configure/json pages). Lifted out of the old ImagePanel so the
 // workflow + test-render state survives navigating between Image sub-routes.
 import { get, post } from './api.js';
+import { consumeSse } from './sse.js';
 import { app, setActiveImage } from './app.svelte.js';
 
 // Persisted test prompt + a suite of camera angles for evaluating a model/LoRA
@@ -62,6 +63,12 @@ const _testCells = () =>
 export const img = $state({
   workflow: null,
   injects: {},
+  sections: {},     // { prefix: { name, color, order, desc } } from meta.json — drives NodeTree grouping
+  keyNodes: [],     // node IDs pinned to the Essentials section (checkpoint, LoRA anchor, samplers)
+  activeSection: null, // currently focused section key (null = all visible)
+  description: '',  // workflow-level prose (meta.json description) shown in the graph pane
+  recipes: {},      // { id: { label, desc, flags, variant, latent, sections } } — Compose presets
+  activeRecipe: null, // selected Compose preset id (dims non-active sections, drives the info panel)
   choices: {},
   objectInfo: {}, // slim ComfyUI node schema (class_type -> {inputs, outputs})
   embeddings: [], // textual-inversion embedding names (for the text-encode picker)
@@ -140,6 +147,34 @@ export async function loadWorkflow() {
   img.loading = false;
   if (r.error) { img.workflow = null; img.msg = { err: true, text: r.error }; return; }
   img.workflow = r.json; img.injects = r.injects || {};
+  img.sections = r.sections || {};
+  img.keyNodes = r.key_nodes || [];
+  img.description = r.description || '';
+  img.recipes = r.recipes || {};
+  img.activeRecipe = null;
+  img.activeSection = null;
+}
+
+// Map a Compose recipe's boolean flags onto the live workflow's ComfySwitchNode
+// gates, located by their _meta.title (mirrors loom/providers/_workflow.apply_flags
+// so the editor and the backend agree on what each flag toggles). Mutates img.workflow.
+const FLAG_TITLES = {
+  detailer: ['Use Detailer'],
+  upscale: ['Using USDU'],
+  highrez: ['Use HighRez'],
+};
+export function applyRecipeFlags(recipe) {
+  const wf = img.workflow;
+  if (!wf || !recipe?.flags) return;
+  const titleFlag = {};
+  for (const [flag, titles] of Object.entries(FLAG_TITLES))
+    for (const t of titles) titleFlag[t] = flag;
+  for (const n of Object.values(wf)) {
+    if (n?.class_type !== 'ComfySwitchNode') continue;
+    const flag = titleFlag[n._meta?.title];
+    if (flag && flag in recipe.flags) (n.inputs ||= {}).switch = !!recipe.flags[flag];
+  }
+  img.layoutNonce = (img.layoutNonce || 0) + 1;
 }
 
 export async function loadChoices() { img.choices = await get('/comfy/choices'); }
@@ -497,24 +532,11 @@ async function _renderCell(cell, prompt, graph) {
         width: cell.width || undefined, height: cell.height || undefined  // per-pose latent (sprite test)
       })
     });
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let i;
-      while ((i = buf.indexOf('\n\n')) >= 0) {
-        const line = buf.slice(0, i).split('\n').find((l) => l.startsWith('data:'));
-        buf = buf.slice(i + 2);
-        if (!line) continue;
-        const ev = JSON.parse(line.slice(5).trim());
-        if (ev.type === 'progress') cell.pct = ev.max ? Math.round((ev.value / ev.max) * 100) : null;
-        else if (ev.type === 'image') cell.image = (ev.images || [])[0] || null;
-        else if (ev.type === 'error') cell.error = ev.error;
-      }
-    }
+    await consumeSse(res, (ev) => {
+      if (ev.type === 'progress') cell.pct = ev.max ? Math.round((ev.value / ev.max) * 100) : null;
+      else if (ev.type === 'image') cell.image = (ev.images || [])[0] || null;
+      else if (ev.type === 'error') cell.error = ev.error;
+    });
     if (!cell.image && !cell.error) cell.error = _testCancelled ? 'cancelled' : 'no image';
   } catch (e) {
     cell.error = (_testCancelled || e?.name === 'AbortError') ? 'cancelled' : String(e);
