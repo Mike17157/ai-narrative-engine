@@ -301,12 +301,53 @@ class AppContext:
         _, opts = _parse_role_entry(self.load_image_roles().get(role))
         return opts
 
-    def role_image_provider(self, role: str, override: str | None = None):
+    def role_image_provider(self, role: str, override: str | None = None,
+                            image_preset: str | None = None):
         """Convenience: resolve role → (model_key + output_variant) → ComfyUIProvider.
-        When override is set the caller chose a model explicitly — skip role extra opts."""
+        When override is set the caller chose a model explicitly — skip role extra opts.
+        The active (or per-render `image_preset`) LoRA stack is injected before return — the
+        single chokepoint every normal render path funnels through."""
         model_id = self.role_model(role, override)
         variant = None if override else self.role_extra_opts(role).get("output_variant")
-        return self.image_provider(model_id, output_variant=variant)
+        provider, mid = self.image_provider(model_id, output_variant=variant)
+        if provider is not None:
+            self._apply_image_preset(provider, image_preset)
+        return provider, mid
+
+    def _apply_image_preset(self, provider, preset_id: str | None) -> None:
+        """Neutralize the workflow's baked LoRA styles, then inject the chosen image preset's
+        stack. `preset_id` None/"" → the global-default active preset; "none" → vanilla base."""
+        from ..comfy.stack import inject_models, neutralize_baked_stack, resolve_lora_names
+        from .services import image_presets as IP
+
+        neutralize_baked_stack(provider.workflow)
+        pid = preset_id or IP.load_image_presets(self.root).get("active")
+        preset = IP.get_image_preset(self.root, pid)
+        if not preset or preset["id"] == "none" or not preset.get("loras"):
+            return                                  # vanilla base model (baked styles defused)
+        # Presets store LoraManager bare names; map them to real ComfyUI lora filenames.
+        loras = resolve_lora_names(list(preset["loras"]), self.available_loras())
+        provider.workflow = inject_models(
+            provider.workflow, preset.get("base_checkpoint") or None, loras)
+
+    _loras_cache: list | None = None
+
+    def available_loras(self) -> list[str]:
+        """The ComfyUI LoraLoader filename list (cached per process). Empty if unreachable."""
+        if self._loras_cache is not None:
+            return self._loras_cache
+        loras: list[str] = []
+        try:
+            import httpx
+            r = httpx.get(self.active_comfy_url().rstrip("/") + "/object_info/LoraLoader", timeout=10)
+            r.raise_for_status()
+            v = (r.json().get("LoraLoader", {}).get("input", {}).get("required", {}).get("lora_name"))
+            if isinstance(v, list) and v and isinstance(v[0], list):
+                loras = list(v[0])
+        except Exception:  # noqa: BLE001
+            pass
+        self._loras_cache = loras
+        return loras
 
     def allow_nsfw(self) -> bool:
         """The global content gate (configs/app.json). When False, nsfw-rated lorebooks are

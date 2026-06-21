@@ -1362,7 +1362,7 @@
   "s890__1365": {
     "class_type": "UNet loader with Name (Image Saver)",
     "inputs": {
-      "unet_name": "anima\novaAnimeAM_v25.safetensors",
+      "unet_name": "anima/novaAnimeAM_v25.safetensors",
       "weight_dtype": "default"
     },
     "_meta": {
@@ -1748,7 +1748,7 @@
       "blend_w": 1.0,
       "cheby_degree": 1,
       "ridge_lambda": 10.0,
-      "enabled": true,
+      "enabled": false,
       "history_size": 100,
       "one_sampler_only": false,
       "verbose": false
@@ -1944,7 +1944,7 @@
       "blend_w": 1.0,
       "cheby_degree": 1,
       "ridge_lambda": 10.0,
-      "enabled": true,
+      "enabled": false,
       "history_size": 100,
       "one_sampler_only": false,
       "verbose": false

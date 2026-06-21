@@ -85,6 +85,38 @@
     selLoras.flatMap((l) => l.weights.map((w) => ({ lora: l.name, weight: w })))
   );
 
+  // --- build a preset from chosen columns (each column is a LoRA @ weight) ---
+  // Select the winning columns, then save them as a stacked image preset.
+  let selCols = $state(new Set());           // keys: `${lora}||${weight}`
+  const colKey = (col) => `${col.lora}||${col.weight}`;
+  function toggleCol(col) {
+    const k = colKey(col); const s = new Set(selCols);
+    s.has(k) ? s.delete(k) : s.add(k); selCols = s;
+  }
+  let savingPreset = $state(false);
+  let presetMsg = $state(null);              // {ok, text} | null
+  async function saveAsPreset() {
+    const chosen = columns.filter((c) => selCols.has(colKey(c)));
+    if (!chosen.length || savingPreset) return;
+    savingPreset = true; presetMsg = null;
+    const name = (window.prompt('Name this image preset:', 'Grid preset') || '').trim();
+    if (!name) { savingPreset = false; return; }
+    // Dedupe by lora name, last weight wins (matches inject_models semantics).
+    const loras = [...new Map(chosen.map((c) => [c.lora, { name: c.lora, weight: c.weight }])).values()];
+    try {
+      const res = await fetch('/api/image-presets', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, family: 'anima', category: 'Custom', loras }),
+      });
+      const data = await res.json();
+      presetMsg = data.id
+        ? { ok: true, text: `Saved “${name}” → Library ▸ Image Presets` }
+        : { ok: false, text: data.error || 'save failed' };
+      if (data.id) selCols = new Set();
+    } catch (e) { presetMsg = { ok: false, text: String(e) }; }
+    savingPreset = false;
+  }
+
   // --- cell state ---
   let cells = $state({});
   const ck = (ckpt, lora, w) => `${ckpt}||${lora}||${w}`;
@@ -458,6 +490,13 @@
     {#if syncMsg}
       <span class="m" class:bad={!syncMsg.ok}>{syncMsg.text}</span>
     {/if}
+    <button class="ghost save-preset" onclick={saveAsPreset} disabled={savingPreset || !selCols.size}
+      title="Save the selected LoRA columns as a stacked image preset">
+      {savingPreset ? 'Saving…' : `＋ Save preset${selCols.size ? ` (${selCols.size})` : ''}`}
+    </button>
+    {#if presetMsg}
+      <span class="m" class:bad={!presetMsg.ok}>{presetMsg.text}</span>
+    {/if}
   </div>
 
   <!-- Grid -->
@@ -472,10 +511,12 @@
       <div class="grid" style="grid-template-columns: 150px repeat({columns.length}, 180px);">
         <div class="corner"></div>
         {#each columns as col (`${col.lora}||${col.weight}`)}
-          <div class="ch">
+          <button class="ch" class:picked={selCols.has(`${col.lora}||${col.weight}`)}
+            onclick={() => toggleCol(col)} title="Click to add this LoRA @ {col.weight} to a saved preset">
             <span class="cn" title={col.lora}>{shortName(col.lora)}</span>
             <span class="cw">@{col.weight}</span>
-          </div>
+            {#if selCols.has(`${col.lora}||${col.weight}`)}<span class="ckmark">✓</span>{/if}
+          </button>
         {/each}
         {#each selCkpts as ckpt (ckpt)}
           <div class="rh" title={ckpt}>{shortName(ckpt)}</div>
@@ -675,7 +716,11 @@
   .grid-empty { display: flex; align-items: center; justify-content: center; height: 100px; color: var(--faint); font-size: 13px; }
   .grid { display: grid; gap: 1px; background: var(--border-soft); min-width: max-content; }
   .corner { background: var(--panel); }
-  .ch { background: var(--elev); padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; justify-content: flex-end; min-height: 50px; min-width: 180px; }
+  .ch { position: relative; background: var(--elev); padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; justify-content: flex-end; min-height: 50px; min-width: 180px; box-shadow: none; border: 1px solid transparent; border-radius: 0; cursor: pointer; text-align: left; font: inherit; }
+  .ch:hover { background: var(--elev-2); filter: none; }
+  .ch.picked { border-color: var(--accent); background: rgba(109,140,255,.14); }
+  .ckmark { position: absolute; top: 4px; right: 6px; font-size: 11px; font-weight: 700; color: var(--accent); }
+  .save-preset { font-size: 12px; padding: 4px 12px; }
   .cn { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cw { color: var(--accent); font-size: 10.5px; font-weight: 700; }
   .rh { background: var(--elev); padding: 6px 8px; font-size: 10.5px; color: var(--text); display: flex; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; min-width: 150px; }

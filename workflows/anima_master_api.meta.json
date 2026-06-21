@@ -11,45 +11,168 @@
   "sampler_count": 3,
   "note": "Flattened from the Anima All-In-One UI workflow. Loom injects the prompt at positive_node.text and collects images from output_node. inject_models rebuilds the LoRA chain at lora_anchor.",
   "description": "Anima all-in-one image pipeline. A single base render flows left→right through optional refinement stages, each gated by a switch so it can be skipped: face detailer, an UltimateSDUpscale pass, and two hi-res latent passes. Loom drives the gates per generation type — pick a Compose mode below to see which stages run for sprites, scenes, or standard images.",
-  "key_nodes": ["s890__1365", "s890__1281", "s1284__1325", "s1284__1326", "s1284__1353"],
+  "key_nodes": [
+    "s890__905",
+    "1193",
+    "1248",
+    "1244",
+    "1578",
+    "1580",
+    "1583",
+    "1651",
+    "1654",
+    "1787",
+    "1805",
+    "s890__1365",
+    "s890__1281",
+    "s1284__1325",
+    "s1284__1326",
+    "s1284__1353"
+  ],
   "sections": {
-    "s1736":    { "name": "Input / VAE",      "color": "#5c85d6", "order": 0,   "desc": "Loads the VAE and the img2img path: when a source image is supplied it is encoded to latent here; a switch selects txt2img (empty latent) vs img2img." },
-    "s890":     { "name": "Model Setup",      "color": "#4a90d9", "order": 1,   "desc": "Assembles the diffusion model: UNet + CLIP loaders, the LoRA stack apply, AuraFlow model-sampling, optional Anima Mod Guidance, KSampler config, and the base positive/negative prompt encode. inject_models rebuilds the LoRA chain here." },
-    "s893":     { "name": "SAM3 Load",        "color": "#95a5a6", "order": 2,   "desc": "Segmentation model load slot (vestigial in the flattened graph — no active nodes; the detailer uses its own SAM/Impact loaders)." },
-    "s900":     { "name": "Resolution",       "color": "#27ae60", "order": 3,   "desc": "Canvas sizing: width/height primitives plus square/landscape toggles drive the EmptyLatentImage. Loom overrides this per render (portrait sprite vs landscape scene)." },
-    "__styles__": { "name": "Style Presets",  "color": "#e91e8c", "order": 3.5, "desc": "A bank of selectable LoRA style stacks (Lora Stacker nodes) routed through an ImpactSwitch — choose one preset to bias the look without touching the model setup." },
-    "s1284":    { "name": "Primary Sampler",  "color": "#8e44ad", "order": 4,   "desc": "The core render: the main KSampler with Anima LLLite + Mod Guidance, then VAEDecode to the base image. A new-seed switch controls whether each run re-rolls the seed. Everything after this is optional refinement." },
-    "s1508":    { "name": "Routing",          "color": "#546e7a", "order": 4.5, "desc": "A single switch that routes the primary render either straight to output or into the detailer/upscale chain. The 'Use Detailer' gate at the top of the post-processing fork." },
-    "s1530":    { "name": "Face Detailer",    "color": "#1abc9c", "order": 5,   "desc": "FaceDetailer pass: detects faces and re-renders them at higher fidelity (with optional DCW + Spectrum patches). Gated by 'Use Detailer' — on for character gens, off for scenes. → detailer flag." },
-    "s1541":    { "name": "Upscale",          "color": "#f39c12", "order": 6,   "desc": "UltimateSDUpscale: tiled upscale with an upscale model for final-resolution detail. Slow; gated by 'Using USDU'. → upscale flag." },
-    "s1633":    { "name": "Hi-Res Pass A",    "color": "#e74c3c", "order": 7,   "desc": "First hi-res fix: latent/image upscale feeding a second KSampler for added detail. Gated by 'Use HighRez'. → highrez flag." },
-    "s1634":    { "name": "Hi-Res Pass B",    "color": "#c0392b", "order": 8,   "desc": "Second hi-res refinement KSampler pass, chained after Pass A for extra sharpening. Part of the highrez chain." },
-    "__top__":  { "name": "Output & Config",  "color": "#607d8b", "order": 9,   "desc": "Final plumbing: Image Saver, seed source, sampler/scheduler selectors, prompt string assembly, the LoadImage img2img source, and the preview bridge." }
+    "s1736": {
+      "name": "Input / VAE",
+      "color": "#5c85d6",
+      "order": 0,
+      "desc": "Loads the VAE and the img2img path: when a source image is supplied it is encoded to latent here; a switch selects txt2img (empty latent) vs img2img."
+    },
+    "s890": {
+      "name": "Model Setup",
+      "color": "#4a90d9",
+      "order": 1,
+      "desc": "Assembles the diffusion model: UNet + CLIP loaders, the LoRA stack apply, AuraFlow model-sampling, optional Anima Mod Guidance, KSampler config, and the base positive/negative prompt encode. inject_models rebuilds the LoRA chain here."
+    },
+    "s893": {
+      "name": "SAM3 Load",
+      "color": "#95a5a6",
+      "order": 2,
+      "desc": "Segmentation model load slot (vestigial in the flattened graph — no active nodes; the detailer uses its own SAM/Impact loaders)."
+    },
+    "s900": {
+      "name": "Resolution",
+      "color": "#27ae60",
+      "order": 3,
+      "desc": "Canvas sizing: width/height primitives plus square/landscape toggles drive the EmptyLatentImage. Loom overrides this per render (portrait sprite vs landscape scene)."
+    },
+    "__styles__": {
+      "name": "Style Presets",
+      "color": "#e91e8c",
+      "order": 3.5,
+      "desc": "A bank of selectable LoRA style stacks (Lora Stacker nodes) routed through an ImpactSwitch — choose one preset to bias the look without touching the model setup."
+    },
+    "s1284": {
+      "name": "Primary Sampler",
+      "color": "#8e44ad",
+      "order": 4,
+      "desc": "The core render: the main KSampler with Anima LLLite + Mod Guidance, then VAEDecode to the base image. A new-seed switch controls whether each run re-rolls the seed. Everything after this is optional refinement."
+    },
+    "s1508": {
+      "name": "Routing",
+      "color": "#546e7a",
+      "order": 4.5,
+      "desc": "A single switch that routes the primary render either straight to output or into the detailer/upscale chain. The 'Use Detailer' gate at the top of the post-processing fork."
+    },
+    "s1530": {
+      "name": "Face Detailer",
+      "color": "#1abc9c",
+      "order": 5,
+      "desc": "FaceDetailer pass: detects faces and re-renders them at higher fidelity (with optional DCW + Spectrum patches). Gated by 'Use Detailer' — on for character gens, off for scenes. → detailer flag."
+    },
+    "s1541": {
+      "name": "Upscale",
+      "color": "#f39c12",
+      "order": 6,
+      "desc": "UltimateSDUpscale: tiled upscale with an upscale model for final-resolution detail. Slow; gated by 'Using USDU'. → upscale flag."
+    },
+    "s1633": {
+      "name": "Hi-Res Pass A",
+      "color": "#e74c3c",
+      "order": 7,
+      "desc": "First hi-res fix: latent/image upscale feeding a second KSampler for added detail. Gated by 'Use HighRez'. → highrez flag."
+    },
+    "s1634": {
+      "name": "Hi-Res Pass B",
+      "color": "#c0392b",
+      "order": 8,
+      "desc": "Second hi-res refinement KSampler pass, chained after Pass A for extra sharpening. Part of the highrez chain."
+    },
+    "__top__": {
+      "name": "Output & Config",
+      "color": "#607d8b",
+      "order": 9,
+      "desc": "Final plumbing: Image Saver, seed source, sampler/scheduler selectors, prompt string assembly, the LoadImage img2img source, and the preview bridge."
+    }
   },
   "recipes": {
     "standard": {
       "label": "Standard image",
       "desc": "Single base render at full quality, background intact. No detailer or upscale — the fast path. Use for general illustrations and establishing shots.",
-      "flags": { "detailer": false, "upscale": false, "highrez": false },
+      "flags": {
+        "detailer": false,
+        "upscale": false,
+        "highrez": false
+      },
       "variant": "full",
-      "latent": [1024, 1536],
-      "sections": ["s1736", "s890", "s900", "__styles__", "s1284", "__top__"]
+      "latent": [
+        1024,
+        1536
+      ],
+      "sections": [
+        "s1736",
+        "s890",
+        "s900",
+        "__styles__",
+        "s1284",
+        "__top__"
+      ]
     },
     "sprite": {
       "label": "Clipped sprite",
       "desc": "Character portrait with the face detailer on and the background removed, producing a transparent cutout for layering in chat. Portrait framing, no upscale.",
-      "flags": { "detailer": true, "upscale": false, "highrez": false },
+      "flags": {
+        "detailer": true,
+        "upscale": false,
+        "highrez": false
+      },
       "variant": "cutout",
-      "latent": [832, 1216],
-      "sections": ["s1736", "s890", "s900", "__styles__", "s1284", "s1508", "s1530", "__top__"]
+      "latent": [
+        832,
+        1216
+      ],
+      "sections": [
+        "s1736",
+        "s890",
+        "s900",
+        "__styles__",
+        "s1284",
+        "s1508",
+        "s1530",
+        "__top__"
+      ]
     },
     "scene": {
       "label": "Scene",
       "desc": "Full-background environment in landscape, with the UltimateSDUpscale pass on for crisp detail across the frame. Face detailer off — scenes rarely need it.",
-      "flags": { "detailer": false, "upscale": true, "highrez": false },
+      "flags": {
+        "detailer": false,
+        "upscale": true,
+        "highrez": false
+      },
       "variant": "full",
-      "latent": [1536, 1024],
-      "sections": ["s1736", "s890", "s900", "__styles__", "s1284", "s1508", "s1541", "__top__"]
+      "latent": [
+        1536,
+        1024
+      ],
+      "sections": [
+        "s1736",
+        "s890",
+        "s900",
+        "__styles__",
+        "s1284",
+        "s1508",
+        "s1541",
+        "__top__"
+      ]
     }
   }
 }

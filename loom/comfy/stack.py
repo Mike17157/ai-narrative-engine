@@ -13,7 +13,43 @@ checkpoint and LoRAs change.
 from __future__ import annotations
 
 import copy
+import os
 from typing import Any
+
+
+def _lora_keys(filename: str):
+    """Lookup keys a LoRA filename can be matched by: itself, sans extension, basename,
+    basename sans extension — both separator variants — so a bare name (as stored in
+    LoraManager `<lora:NAME:w>` tags) resolves to the real ComfyUI lora_name filename."""
+    variants = {filename, filename.replace("\\", "/"), filename.replace("/", "\\")}
+    keys = set()
+    for v in variants:
+        base = v.rsplit(".", 1)[0]                       # strip extension
+        leaf = os.path.basename(v.replace("\\", "/"))
+        leaf_base = leaf.rsplit(".", 1)[0]
+        keys.update({v, base, leaf, leaf_base})
+    return keys
+
+
+def resolve_lora_names(loras: list[dict], available: list[str]) -> list[dict]:
+    """Map each LoRA's `name` to a real ComfyUI filename from `available`. LoRA presets store
+    LoraManager-style bare names (no folder/extension); a standard LoraLoader needs the exact
+    filename. Unresolved names pass through unchanged (ComfyUI then surfaces "Value not in list").
+    No-op when `available` is empty (ComfyUI unreachable — don't strip valid names blindly)."""
+    if not available:
+        return [dict(l) for l in loras]
+    avail = set(available)
+    index: dict[str, str] = {}
+    for f in available:
+        for k in _lora_keys(f):
+            index.setdefault(k, f)
+    out = []
+    for lr in loras:
+        name = str(lr.get("name") or "")
+        resolved = name if name in avail else (
+            index.get(name) or index.get(name.replace("\\", "/")) or index.get(name.replace("/", "\\")))
+        out.append({**lr, "name": resolved or name})
+    return out
 
 # Loaders we recognise as "the checkpoint" — the source of the MODEL/CLIP the
 # LoRA chain hangs off.
@@ -92,6 +128,36 @@ def _find_first(graph: dict, types: tuple[str, ...]) -> str | None:
 
 def _find_checkpoint(graph: dict) -> str | None:
     return _find_first(graph, _CKPT_TYPES)
+
+
+def neutralize_baked_stack(graph: dict) -> dict:
+    """Defuse the anima workflow's baked-in style presets so an EXTERNAL image preset can be
+    injected cleanly (see ``AppContext._apply_image_preset``).
+
+    The graph applies a selected ``style_N`` LoRA stack via an ``easy loraStackApply`` node fed
+    by an ImpactSwitch. ``inject_models`` hangs a fresh LoRA chain off that apply node's *output*
+    but leaves the switch feeding its input — so the baked style would still apply underneath
+    (double-stack). Here we repoint the apply node at the ROOT base Lora Stacker (the one with no
+    upstream ``lora_stack``) and blank its text, so the apply emits an EMPTY stack: no baked
+    styles, no double-counted base (the base LoRA lives inside each external preset instead).
+
+    Mutates and returns *graph*. No-op when there's no loraStackApply (non-anima workflows)."""
+    apply_id = _find_first(graph, _LORA_APPLY_TYPES)
+    if not apply_id:
+        return graph
+    base_id = None
+    for nid, node in graph.items():
+        if not isinstance(node, dict) or node.get("class_type") != "Lora Stacker (LoraManager)":
+            continue
+        ls = (node.get("inputs") or {}).get("lora_stack")
+        if not (isinstance(ls, list) and len(ls) == 2):
+            base_id = nid          # a root stacker (chain head)
+            break
+    if base_id is None:
+        return graph
+    graph[base_id].setdefault("inputs", {})["text"] = ""
+    graph[apply_id].setdefault("inputs", {})["lora_stack"] = [base_id, 0]
+    return graph
 
 
 def inject_models(

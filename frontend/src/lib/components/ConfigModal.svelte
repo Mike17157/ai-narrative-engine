@@ -10,6 +10,7 @@
   import { configModal, closeConfigModal } from '$lib/configModal.svelte.js';
   import Combobox from '$lib/components/shared/Combobox.svelte';
   import LorebookPicker from '$lib/components/shared/LorebookPicker.svelte';
+  import ImagePresetPicker from '$lib/components/shared/ImagePresetPicker.svelte';
   import Modal from '$lib/components/shared/Modal.svelte';
 
   // Point-of-use picker: just the per-surface chat Config + attached Lorebooks. Models &
@@ -28,9 +29,9 @@
     catch { textModels = []; }
   }
 
-  onMount(async () => { await refreshAll(); await loadTextModels(); await loadPresets(); });
+  onMount(async () => { await refreshAll(); await loadTextModels(); await loadPresets(); await loadImagePreset(); });
   // Refresh model lists whenever the modal (re)opens, so a just-saved connection shows up.
-  $effect(() => { if (configModal.open) { refreshAll(); loadTextModels(); } });
+  $effect(() => { if (configModal.open) { refreshAll(); loadTextModels(); loadImagePreset(); } });
 
   // ════════════════════════════ Configs tab — chat preset picker ════════════════════════════
   // The Configs tab is purely a PRESET picker now: free chat (and every surface) is driven by a
@@ -58,6 +59,16 @@
   async function activatePreset(id) {
     const r = await post(`/presets/${id}/activate`);
     if (r.data?.active) presetLib = { ...presetLib, active: r.data.active };
+  }
+
+  // ── Image preset (the global-default LoRA-stack "look" applied to all image generation) ──
+  let imgPresetActive = $state('none');
+  async function loadImagePreset() {
+    try { imgPresetActive = (await get('/image-presets')).active || 'none'; } catch {}
+  }
+  async function activateImagePreset(id) {
+    const r = await post(`/image-presets/${id}/activate`);
+    if (r.data?.active) imgPresetActive = r.data.active;
   }
 
   // ════════════════════════════ Lorebooks tab ════════════════════════════
@@ -152,6 +163,13 @@
               {/if}
             </section>
           {/if}
+
+          <!-- Image preset: the global-default LoRA-stack "look" for all image generation. -->
+          <section class="card presetpick">
+            <div class="pphead"><h4>Image preset</h4><a class="liblink" href="/library/image-presets" onclick={closeConfigModal}>Edit in Library →</a></div>
+            <p class="hint">The LoRA stack applied to generated images. “None” = the base model as-is.</p>
+            <ImagePresetPicker value={imgPresetActive} onchange={activateImagePreset} />
+          </section>
 
         <!-- ══ Lorebooks ══ -->
         {:else if configModal.tab === 'lorebooks'}

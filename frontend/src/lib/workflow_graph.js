@@ -269,7 +269,12 @@ export function toGraph(workflow, objectInfo = {}, nodeSizes = {}, hintUsedSlots
       seen.add(name);
       const val = node.inputs?.[name];
       const linked = Array.isArray(val) && val.length === 2 && typeof val[1] === 'number';
-      const isWidget = di ? di.widget : !linked;
+      // LoraManager's "Lora Stacker" exposes its whole stack through a `text` input
+      // that its ComfyUI schema marks as a NON-widget — so it renders as an
+      // un-editable connection slot and every LoRA is invisible. Force it to a widget
+      // (when not actually wired) so the inline LoRA chip editor shows the stack.
+      const forceWidget = name === 'text' && !linked && (node.class_type || '').includes('Lora Stacker');
+      const isWidget = forceWidget || (di ? di.widget : !linked);
       if (!isWidget) {
         // connection slot — show if wired, or required (so it's wireable even when empty)
         if (!linked && di && di.required === false) return;
@@ -305,15 +310,16 @@ export function toGraph(workflow, objectInfo = {}, nodeSizes = {}, hintUsedSlots
         // Normalize ComfyUI string-booleans ('True'/'False') so they render as checkboxes.
         const normV = v === 'True' ? true : v === 'False' ? false : v;
 
-        // Some node types always warrant a textarea regardless of current string length —
-        // Lora Stacker's `text` holds LoRA tag stacks that grow as stacks are chained.
-        const alwaysMultiline = !di
-          && name === 'text'
+        // Lora Stacker's `text` holds the LoRA tag stack → always render it as the
+        // multiline LoRA chip editor, even when ComfyUI's schema does NOT mark the
+        // widget multiline (LoraManager's schema doesn't, which otherwise collapsed
+        // the whole stack into an unreadable single-line input — "can't see the LoRAs").
+        const alwaysMultiline = name === 'text'
           && (node.class_type || '').includes('Lora Stacker');
 
-        const multiline = di
+        const multiline = alwaysMultiline || (di
           ? di.multiline && di.type === 'STRING'
-          : alwaysMultiline || (typeof normV === 'string' && (normV.includes('\n') || normV.length > 40));
+          : (typeof normV === 'string' && (normV.includes('\n') || normV.length > 40)));
         const options = di?.type === 'COMBO' ? di.options : null;
         // text-encode nodes get an embedding-picker chip row above the textarea;
         // reserve a little extra height so it doesn't crowd the node below.

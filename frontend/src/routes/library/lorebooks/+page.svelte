@@ -43,11 +43,13 @@
   // Filters driven by the subnav query (?rating=sfw|nsfw, ?import=1).
   let ratingFilter = $derived(page.url.searchParams.get('rating') || '');
   let catFilter = $state('');
+  let scopeFilter = $state('');   // '' = all | 'global' | 'local'
 
   let filtered = $derived(
     books.filter((b) =>
       (!ratingFilter || b.rating === ratingFilter) &&
       (!catFilter || b.category === catFilter) &&
+      (!scopeFilter || (b.scope || 'global') === scopeFilter) &&
       (!search.trim() || (b.name + ' ' + b.id + ' ' + b.description).toLowerCase().includes(search.toLowerCase())))
   );
 
@@ -291,6 +293,11 @@
     {#if bin}
       <div class="binbanner">♻ Recycle bin — archived books, hidden from chats & pickers</div>
     {:else}
+      <div class="scopes">
+        <button class="cat" class:on={!scopeFilter} onclick={() => (scopeFilter = '')}>All</button>
+        <button class="cat" class:on={scopeFilter === 'global'} onclick={() => (scopeFilter = scopeFilter === 'global' ? '' : 'global')}>🌐 Global</button>
+        <button class="cat" class:on={scopeFilter === 'local'} onclick={() => (scopeFilter = scopeFilter === 'local' ? '' : 'local')}>📌 Local</button>
+      </div>
       <div class="cats">
         <button class="cat" class:on={!catFilter} onclick={() => (catFilter = '')}>All</button>
         {#each CATEGORIES as c}
@@ -513,6 +520,7 @@
   .binbtn.on { border-color: var(--accent); color: var(--accent); }
   .binbanner { font-size: 11.5px; color: var(--muted); background: var(--elev); border: 1px solid var(--border-soft);
     border-radius: 8px; padding: 6px 10px; }
+  .scopes { display: flex; gap: 4px; }
   .cats { display: flex; flex-wrap: wrap; gap: 4px; }
   .cat { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--elev); border: 1px solid var(--border); color: var(--muted); text-transform: capitalize; }
   .cat.on { background: var(--elev-2); color: #fff; border-color: var(--accent); }

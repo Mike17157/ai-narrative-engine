@@ -27,6 +27,7 @@ from .routers import (
     characters,
     chat,
     comfy,
+    image_presets,
     jobs,
     lora,
     lorebooks,
@@ -93,6 +94,7 @@ _ROUTERS = (
     runpod,
     lorebooks,
     presets,
+    image_presets,
 )
 
 

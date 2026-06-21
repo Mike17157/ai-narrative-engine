@@ -105,6 +105,7 @@ export function libraryTree() {
   return [
     { id: 'lib-presets',   label: 'Presets',   href: '/library/presets' },
     { id: 'lib-lorebooks', label: 'Lorebooks', href: '/library/lorebooks' },
+    { id: 'lib-image-presets', label: 'Image Presets', href: '/library/image-presets' },
   ];
 }
 
