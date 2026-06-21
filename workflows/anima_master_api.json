@@ -86,10 +86,7 @@
         "1221",
         0
       ],
-      "path": [
-        "1560",
-        0
-      ],
+      "path": "",
       "steps": [
         "919",
         9
@@ -1365,7 +1362,7 @@
   "s890__1365": {
     "class_type": "UNet loader with Name (Image Saver)",
     "inputs": {
-      "unet_name": "ANIMA\\anima_baseV10.safetensors",
+      "unet_name": "anima\\miaomiaoHarem_animaBase.safetensors",
       "weight_dtype": "default"
     },
     "_meta": {

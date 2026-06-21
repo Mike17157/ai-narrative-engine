@@ -1,20 +1,19 @@
 <script>
   // Iterate a SAVED story as a graph, conversationally. Seeds the console from the
   // story's graph; "Save changes" persists the edited graph back (storyboard + arcs).
-  import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import StoryConsole from '$lib/components/story/StoryConsole.svelte';
   import { storyToGraph, graphToBoard, graphToArcs } from '$lib/story_graph_model.js';
   import { stories, loadStory, expandGraphRequest } from '$lib/stories.svelte.js';
   import { put } from '$lib/api.js';
 
+  // The [key] layout only renders this page once the story is loaded into the shared
+  // store. Guard on a key match so a transient store value can't reach StoryConsole.
   let key = $derived($page.params.key);
-  let story = $state(stories.current?.key === ($page.params.key) ? stories.current : null);
+  let story = $derived(stories.current?.key === key ? stories.current : null);
   let saving = $state(false);
   let drafting = $state(false);
   let msg = $state(null);
-
-  onMount(async () => { if (!story) story = await loadStory(key); });
 
   let charKey = $derived(
     story?.fields?.source_character ||
@@ -26,7 +25,7 @@
     const body = { storyboard: graphToBoard(graph, story?.storyboard || {}), arcs: graphToArcs(graph) };
     const r = await put(`/stories/${key}`, body);
     msg = r.ok ? { ok: true, text: '✓ Saved' } : { err: true, text: r.data?.error || 'save failed' };
-    if (r.ok) story = await loadStory(key);
+    if (r.ok) await loadStory(key);   // refreshes stores.current → `story` derived updates
   }
 
   // Save the graph as-is (developmental skeleton).
@@ -53,13 +52,13 @@
       <h2>Iterate — {story?.name || key}</h2>
       <p class="lo">Talk through changes; the consultant revises the graph. Drag to branch or merge beats. Save when you're happy.</p>
     </div>
-    <a class="back" href={`/stories/${key}/overview`}>← Overview</a>
+    <a class="back" href={`/stories/${key}/overview`} title="Arc / timeline tools, chapter cards & story settings">Details →</a>
   </div>
 
   {#if msg}<div class="msg" class:ok={msg.ok} class:err={msg.err}>{msg.text}</div>{/if}
 
   {#if story}
-    {#key story.key}
+    {#key key}
       <StoryConsole
         character={charKey}
         {charName}

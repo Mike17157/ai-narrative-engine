@@ -9,7 +9,9 @@
       "lorebooks": [],
       "params": {},
       "script": "",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_storyboard",
@@ -19,7 +21,9 @@
       "lorebooks": [],
       "params": {},
       "script": "storyboard",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_locations",
@@ -29,7 +33,9 @@
       "lorebooks": [],
       "params": {},
       "script": "locations",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_characters",
@@ -39,7 +45,9 @@
       "lorebooks": [],
       "params": {},
       "script": "characters",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_wardrobe",
@@ -49,7 +57,9 @@
       "lorebooks": [],
       "params": {},
       "script": "wardrobe",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_base_image",
@@ -59,7 +69,9 @@
       "lorebooks": [],
       "params": {},
       "script": "base_image",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_chatgen",
@@ -69,7 +81,9 @@
       "lorebooks": [],
       "params": {},
       "script": "chatgen",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_promptgen",
@@ -79,7 +93,9 @@
       "lorebooks": [],
       "params": {},
       "script": "promptgen",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_image_base",
@@ -89,7 +105,9 @@
       "lorebooks": [],
       "params": {},
       "script": "image:base",
-      "workflow": "anima"
+      "workflow": "anima",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_image_style",
@@ -99,7 +117,9 @@
       "lorebooks": [],
       "params": {},
       "script": "image:style",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_image_sprite",
@@ -109,7 +129,9 @@
       "lorebooks": [],
       "params": {},
       "script": "image:sprite",
-      "workflow": "anima"
+      "workflow": "anima",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_image_scene",
@@ -119,7 +141,9 @@
       "lorebooks": [],
       "params": {},
       "script": "image:scene",
-      "workflow": "anima"
+      "workflow": "anima",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "script_image_chat",
@@ -129,7 +153,9 @@
       "lorebooks": [],
       "params": {},
       "script": "image:chat",
-      "workflow": "anima"
+      "workflow": "anima",
+      "mode": "",
+      "context": {}
     },
     {
       "id": "default",
@@ -139,7 +165,9 @@
       "lorebooks": [],
       "params": {},
       "script": "",
-      "workflow": ""
+      "workflow": "",
+      "mode": "",
+      "context": {}
     }
   ]
 }

@@ -139,7 +139,7 @@
       <div class="bulk">
         <button class="ghost sm dgr" onclick={regenCast} disabled={!!bulkJob}>↻ Regenerate whole cast</button>
         <button class="ghost sm" onclick={planAll} disabled={!!bulkJob}>✨ Plan outfits for all</button>
-        <button class="ghost sm" onclick={() => openConfigModal({ tab: 'models' })} title="Models, configs &amp; connections">⚙</button>
+        <button class="ghost sm" onclick={() => openConfigModal({ tab: 'configs' })} title="Configs & lorebooks">⚙</button>
       </div>
     </div>
     {#if bulkErr}<div class="err">⚠ {bulkErr}</div>{/if}

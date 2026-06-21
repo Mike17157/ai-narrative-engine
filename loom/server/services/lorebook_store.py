@@ -67,9 +67,10 @@ CREATE TABLE IF NOT EXISTS books (
   name        TEXT DEFAULT '',
   description TEXT DEFAULT '',
   rating      TEXT DEFAULT 'sfw',    -- 'sfw' | 'nsfw'
-  category    TEXT DEFAULT 'world',  -- world|story|rpg|character|craft|intimacy
+  category    TEXT DEFAULT 'world',  -- world|story|rpg|character|craft|intimacy|guard|function
   builtin     INTEGER DEFAULT 0,     -- seeded/reserved; UI guards destructive edits
   enabled     INTEGER DEFAULT 1,
+  preset      TEXT DEFAULT '',       -- bound model PRESET id (Function→Lorebook→Preset); '' = none
   updated     REAL DEFAULT 0
 );
 """
@@ -121,7 +122,8 @@ def _conn(root: Path):
         for _ddl in ("ALTER TABLE lore ADD COLUMN source TEXT DEFAULT ''",
                      "ALTER TABLE lore ADD COLUMN trig TEXT DEFAULT 'input'",
                      "ALTER TABLE lore ADD COLUMN script TEXT DEFAULT ''",
-                     "ALTER TABLE lore ADD COLUMN embedding F32_BLOB(384)"):
+                     "ALTER TABLE lore ADD COLUMN embedding F32_BLOB(384)",
+                     "ALTER TABLE books ADD COLUMN preset TEXT DEFAULT ''"):
             try:
                 con.execute(_ddl)
             except Exception:  # noqa: BLE001 — already present
@@ -171,13 +173,13 @@ def _book_upsert(con, book_id: str, *, builtin: bool = False, **f) -> None:
     """Insert a book row, or fill in only the columns the caller supplied (COALESCE so
     a re-seed never clobbers user edits to name/description/rating/etc.)."""
     con.execute(
-        "INSERT INTO books(id,name,description,rating,category,builtin,enabled,updated) "
-        "VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+        "INSERT INTO books(id,name,description,rating,category,builtin,enabled,preset,updated) "
+        "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
         "name=COALESCE(?,name), description=COALESCE(?,description), "
-        "rating=COALESCE(?,rating), category=COALESCE(?,category)",
+        "rating=COALESCE(?,rating), category=COALESCE(?,category), preset=COALESCE(?,preset)",
         (book_id, f.get("name", ""), f.get("description", ""), f.get("rating", "sfw"),
-         f.get("category", "world"), 1 if builtin else 0, 1, time.time(),
-         f.get("name"), f.get("description"), f.get("rating"), f.get("category")),
+         f.get("category", "world"), 1 if builtin else 0, 1, f.get("preset", ""), time.time(),
+         f.get("name"), f.get("description"), f.get("rating"), f.get("category"), f.get("preset")),
     )
 
 
@@ -223,6 +225,24 @@ def _seed_books(root: Path, con) -> None:
             con.execute("DELETE FROM lore WHERE scope='_refusal' "
                         "AND (entry_id='refusal-floor' OR trig IS NULL OR trig='input')")
             _insert(con, "_refusal", LoreEntry(**canon))
+
+    # Ensure new built-in function entries land in EXISTING DBs (insert by id only when
+    # missing, so user edits/deletions of the others are never clobbered or resurrected).
+    for bid, entries in (("_graph_fns", _GRAPH_FNS_ENTRIES), ("_location_fns", _LOCATION_FNS_ENTRIES),
+                         ("_character_fns", _CHARACTER_FNS_ENTRIES)):
+        if con.execute("SELECT 1 FROM books WHERE id=?", (bid,)).fetchone():
+            have = {r[0] for r in con.execute("SELECT entry_id FROM lore WHERE scope=?", (bid,)).fetchall()}
+            for e in entries:
+                if e["id"] not in have:
+                    _insert(con, bid, LoreEntry(**e))
+
+    # Bind the built-in function books to their model PRESET (Function→Lorebook→Preset),
+    # only when unset so a user's choice in the manager is never clobbered.
+    for bid, pid in (("_graph_fns", "story_consultant"), ("_location_fns", "story_consultant"),
+                     ("_character_fns", "story_consultant")):
+        row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
+        if row is not None and not (row[0] or ""):
+            con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
     con.commit()
 
 
@@ -253,23 +273,24 @@ def list_books(root: Path) -> list[dict]:
     for (s,) in orphans:
         ensure_book(root, s)
     rows = con.execute(
-        "SELECT b.id,b.name,b.description,b.rating,b.category,b.builtin,b.enabled,"
+        "SELECT b.id,b.name,b.description,b.rating,b.category,b.builtin,b.enabled,b.preset,"
         "(SELECT COUNT(*) FROM lore l WHERE l.scope=b.id) AS n "
         "FROM books b ORDER BY b.builtin DESC, b.name").fetchall()
     return [{"id": r[0], "name": r[1] or r[0], "description": r[2] or "", "rating": r[3] or "sfw",
              "category": r[4] or "world", "builtin": bool(r[5]), "enabled": bool(r[6]),
-             "entries": int(r[7] or 0)} for r in rows]
+             "preset": r[7] or "", "entries": int(r[8] or 0)} for r in rows]
 
 
 def get_book(root: Path, book_id: str) -> dict | None:
     con = _conn(root)
     r = con.execute(
-        "SELECT id,name,description,rating,category,builtin,enabled FROM books WHERE id=?",
+        "SELECT id,name,description,rating,category,builtin,enabled,preset FROM books WHERE id=?",
         (book_id,)).fetchone()
     if not r:
         return None
     return {"id": r[0], "name": r[1] or r[0], "description": r[2] or "", "rating": r[3] or "sfw",
-            "category": r[4] or "world", "builtin": bool(r[5]), "enabled": bool(r[6])}
+            "category": r[4] or "world", "builtin": bool(r[5]), "enabled": bool(r[6]),
+            "preset": r[7] or ""}
 
 
 def upsert_book(root: Path, book_id: str, **fields) -> dict:
@@ -278,7 +299,7 @@ def upsert_book(root: Path, book_id: str, **fields) -> dict:
     exists = con.execute("SELECT builtin FROM books WHERE id=?", (book_id,)).fetchone()
     if exists:
         sets, vals = [], []
-        for col in ("name", "description", "rating", "category"):
+        for col in ("name", "description", "rating", "category", "preset"):
             if fields.get(col) is not None:
                 sets.append(f"{col}=?"); vals.append(fields[col])
         if fields.get("enabled") is not None:
@@ -287,11 +308,11 @@ def upsert_book(root: Path, book_id: str, **fields) -> dict:
         con.execute(f"UPDATE books SET {', '.join(sets)} WHERE id=?", (*vals, book_id))
     else:
         con.execute(
-            "INSERT INTO books(id,name,description,rating,category,builtin,enabled,updated) "
-            "VALUES(?,?,?,?,?,?,?,?)",
+            "INSERT INTO books(id,name,description,rating,category,builtin,enabled,preset,updated) "
+            "VALUES(?,?,?,?,?,?,?,?,?)",
             (book_id, fields.get("name") or book_id, fields.get("description", ""),
              fields.get("rating", "sfw"), fields.get("category", "world"), 0,
-             1 if fields.get("enabled", True) else 0, time.time()))
+             1 if fields.get("enabled", True) else 0, fields.get("preset", ""), time.time()))
     con.commit()
     return get_book(root, book_id) or {}
 
@@ -423,16 +444,18 @@ def _fts_query(text: str) -> str:
     return " OR ".join(f'"{t}"' for t in toks[:48])
 
 
-def _bm25_search(con, query: str, scopes: list[str], ph: str, limit: int) -> list[LoreEntry]:
+def _bm25_search(con, query: str, scopes: list[str], ph: str, limit: int, allow_nsfw: bool = True) -> list[LoreEntry]:
     q = _fts_query(query)
     if not q:
         return []
+    nsfw_clause = "" if allow_nsfw else "AND (b.rating IS NULL OR b.rating <> 'nsfw') "
     sql = (
         f"SELECT {_COLS}, bm25(lore_fts, 5.0, 10.0, 1.0) AS rank "
         "FROM lore_fts JOIN lore l ON l.rowid = lore_fts.rowid "
         "LEFT JOIN books b ON b.id = l.scope "
         "WHERE l.enabled=1 AND (b.enabled IS NULL OR b.enabled=1) "
         "AND (l.trig IS NULL OR l.trig='input') "
+        f"{nsfw_clause}"
         f"AND l.scope IN ({ph}) AND lore_fts MATCH ? ORDER BY rank LIMIT ?"
     )
     try:
@@ -442,18 +465,20 @@ def _bm25_search(con, query: str, scopes: list[str], ph: str, limit: int) -> lis
     return [_row_to_entry(r) for r in rows]
 
 
-def _vector_search(con, query: str, scopes: list[str], ph: str, limit: int) -> list[LoreEntry]:
+def _vector_search(con, query: str, scopes: list[str], ph: str, limit: int, allow_nsfw: bool = True) -> list[LoreEntry]:
     from . import embeddings as _emb
     if not _emb.available():
         return []
     vec = _emb.embed_query(query)
     if not vec:
         return []
+    nsfw_clause = "" if allow_nsfw else "AND (b.rating IS NULL OR b.rating <> 'nsfw') "
     sql = (
         f"SELECT {_COLS}, vector_distance_cos(l.embedding, vector32(?)) AS d "
         "FROM lore l LEFT JOIN books b ON b.id = l.scope "
         "WHERE l.enabled=1 AND (b.enabled IS NULL OR b.enabled=1) "
         "AND (l.trig IS NULL OR l.trig='input') AND l.embedding IS NOT NULL "
+        f"{nsfw_clause}"
         f"AND l.scope IN ({ph}) ORDER BY d LIMIT ?"
     )
     try:
@@ -464,9 +489,10 @@ def _vector_search(con, query: str, scopes: list[str], ph: str, limit: int) -> l
 
 
 def retrieve(root: Path, query: str, scopes: list[str], top_k: int = 5,
-             one_per_facet: bool = True) -> list[LoreEntry]:
+             one_per_facet: bool = True, allow_nsfw: bool = True) -> list[LoreEntry]:
     """Top-k entries across *scopes*, fusing lexical BM25 + semantic vector ranks (RRF),
-    with a small priority nudge and one-entry-per-facet collapsing."""
+    with a small priority nudge and one-entry-per-facet collapsing. `allow_nsfw=False`
+    (the global content gate) excludes entries from nsfw-rated books."""
     scopes = [s for s in (scopes or []) if s]
     if not scopes:
         return []
@@ -474,8 +500,8 @@ def retrieve(root: Path, query: str, scopes: list[str], top_k: int = 5,
     ph = ",".join("?" * len(scopes))
     pool = top_k * 5
 
-    bm = _bm25_search(con, query, scopes, ph, pool)
-    vec = _vector_search(con, query, scopes, ph, pool)
+    bm = _bm25_search(con, query, scopes, ph, pool, allow_nsfw)
+    vec = _vector_search(con, query, scopes, ph, pool, allow_nsfw)
     if not bm and not vec:
         return []
 
@@ -517,7 +543,127 @@ def top_by_priority(root: Path, scope: str, n: int) -> list[LoreEntry]:
 # Each: (book_id, metadata, [entry dicts]). Entries are keyword-triggered and editable
 # in the manager; they're examples to build on, not load-bearing config.
 
+def _gfn(fn: str, describe: str, keywords: list, params: dict, ops: list) -> dict:
+    """A graph-FUNCTION lore entry: its content is a JSON op-spec (see stories/graph_ops.py),
+    its keywords are the trigger terms. Authoring a function == adding one of these entries."""
+    return {"id": fn, "title": fn, "keywords": keywords, "facet": "fn",
+            "content": json.dumps({"fn": fn, "describe": describe, "params": params, "ops": ops},
+                                  ensure_ascii=False)}
+
+
+_GRAPH_FNS_ENTRIES = [
+    _gfn("add_beat", "Add a new beat to the arc of change.",
+         ["add a beat", "new beat", "insert beat", "add beat", "another beat"],
+         {"title": "the beat's title", "after": "id of the beat it follows (optional)"},
+         [{"op": "add", "path": "/nodes/-",
+           "value": {"id": "{{id}}", "title": "{{title}}", "inflection": "", "start": "",
+                     "end": "", "what_happened": "", "next": []}},
+          {"op": "append", "path": "/nodes/#{{after}}/next", "value": "{{id}}"}]),
+    _gfn("insert_between", "Insert a new beat BETWEEN two connected beats (rewires the arrow through it).",
+         ["insert between", "in between", "split the arrow", "between"],
+         {"a": "id of the beat before", "b": "id of the beat after", "title": "the new beat's title"},
+         [{"op": "add", "path": "/nodes/-",
+           "value": {"id": "{{id}}", "title": "{{title}}", "inflection": "", "start": "",
+                     "end": "", "what_happened": "", "next": []}},
+          {"op": "pull", "path": "/nodes/#{{a}}/next", "value": "{{b}}"},
+          {"op": "append", "path": "/nodes/#{{a}}/next", "value": "{{id}}"},
+          {"op": "append", "path": "/nodes/#{{id}}/next", "value": "{{b}}"}]),
+    _gfn("set_beat_field", "Set a field on an existing beat.",
+         ["rename", "retitle", "change the", "edit the beat", "set the", "update beat"],
+         {"id": "beat id", "field": "one of: title, inflection, start, end, what_happened, location",
+          "value": "new text"},
+         [{"op": "set", "path": "/nodes/#{{id}}/{{field}}", "value": "{{value}}"}]),
+    _gfn("connect", "Connect one beat to another (draw an arrow source -> target).",
+         ["connect", "branch", "link", "leads to", "arrow", "then", "sequence"],
+         {"source": "id the arrow starts from", "target": "id it points to"},
+         [{"op": "append", "path": "/nodes/#{{source}}/next", "value": "{{target}}"}]),
+    _gfn("disconnect", "Remove the arrow from one beat to another.",
+         ["disconnect", "unlink", "remove arrow", "detach"],
+         {"source": "id the arrow starts from", "target": "id it currently points to"},
+         [{"op": "pull", "path": "/nodes/#{{source}}/next", "value": "{{target}}"}]),
+    _gfn("delete_beat", "Delete a beat from the graph.",
+         ["delete", "remove beat", "drop the beat", "cut the beat"],
+         {"id": "id of the beat to delete"},
+         [{"op": "remove", "path": "/nodes/#{{id}}"}]),
+    _gfn("move_beat", "Reposition a beat to sit right after another in the sequence.",
+         ["move", "reposition", "put after", "relocate", "moved"],
+         {"id": "id of the beat to move", "after": "id of the beat it should follow (blank = end)"},
+         [{"op": "move", "path": "/nodes", "value": "{{id}}", "after": "{{after}}"}]),
+    _gfn("reorder_beats", "Set the full beat order at once (give every beat id in the new order).",
+         ["reorder", "re-order", "order the beats", "sequence them", "rearrange"],
+         {"order": "the complete list of beat ids in the desired order"},
+         [{"op": "reorder", "path": "/nodes", "value": "{{order}}"}]),
+    _gfn("set_spine", "Set a top-level spine field (logline, wound, lie, or truth).",
+         ["wound", "lie", "truth", "logline", "spine", "misbelief"],
+         {"field": "one of: logline, wound, lie, truth", "value": "new text"},
+         [{"op": "set", "path": "/{{field}}", "value": "{{value}}"}]),
+]
+
+
+# A second example function book — operates on a LOCATIONS artifact ({start, locations:[…]}),
+# proving the engine is artifact-agnostic (same op dialect, different JSON document).
+_LOCATION_FNS_ENTRIES = [
+    _gfn("add_location", "Add a neutral location to the story.",
+         ["add a location", "new location", "another place", "add place", "new place"],
+         {"name": "the place's name", "description": "the place objectively (no people/events)"},
+         [{"op": "add", "path": "/locations/-",
+           "value": {"id": "{{id}}", "name": "{{name}}", "description": "{{description}}",
+                     "background_prompt": ""}}]),
+    _gfn("set_location_field", "Set a field on an existing location.",
+         ["rename location", "change the place", "edit location", "set the location", "update place"],
+         {"id": "location id", "field": "one of: name, description, background_prompt", "value": "new text"},
+         [{"op": "set", "path": "/locations/#{{id}}/{{field}}", "value": "{{value}}"}]),
+    _gfn("remove_location", "Delete a location.",
+         ["remove location", "delete place", "drop the location", "cut the place"],
+         {"id": "id of the location to delete"},
+         [{"op": "remove", "path": "/locations/#{{id}}"}]),
+    _gfn("set_start", "Set which location the story opens in.",
+         ["start location", "opening location", "begins at", "starts in", "set start"],
+         {"id": "id of the starting location"},
+         [{"op": "set", "path": "/start", "value": "{{id}}"}]),
+]
+
+
+# A third example function book — operates on a CAST artifact ({cast:[…]}), the wizard's
+# characters step. Cast members carry an `id` (seeded by the step) so set/remove can target
+# them; add_character mints a fresh one. Same op dialect, different JSON document.
+_CHARACTER_FNS_ENTRIES = [
+    _gfn("add_character", "Add a character to the cast.",
+         ["add a character", "new character", "another character", "add npc", "new npc",
+          "add a cast member", "introduce a character"],
+         {"name": "the character's name", "role": "their role in the story (e.g. mentor, rival)",
+          "persona": "who they are — personality, voice, wants (a paragraph)"},
+         [{"op": "add", "path": "/cast/-",
+           "value": {"id": "{{id}}", "name": "{{name}}", "role": "{{role}}", "persona": "{{persona}}",
+                     "appearance": "", "base_prompt": "", "primary": False}}]),
+    _gfn("set_character_field", "Set a field on an existing character.",
+         ["rename character", "change the character", "edit character", "set the character",
+          "update character", "change their role", "rewrite the persona"],
+         {"id": "character id", "field": "one of: name, role, persona, appearance, base_prompt",
+          "value": "new text"},
+         [{"op": "set", "path": "/cast/#{{id}}/{{field}}", "value": "{{value}}"}]),
+    _gfn("remove_character", "Remove a character from the cast (never the ★ main character).",
+         ["remove character", "delete character", "drop the character", "cut the character",
+          "remove npc", "kill off"],
+         {"id": "id of the character to remove"},
+         [{"op": "remove", "path": "/cast/#{{id}}"}]),
+]
+
+
 _STARTER_BOOKS = [
+    ("_graph_fns", {"name": "Graph Functions", "category": "function", "rating": "sfw",
+                    "description": "Functions the story workshop can call to edit the development graph. "
+                                   "Each entry IS a function (its content is a JSON op-spec); its keywords "
+                                   "are trigger terms. Attach this book to a step and author your own."},
+     _GRAPH_FNS_ENTRIES),
+    ("_location_fns", {"name": "Location Functions", "category": "function", "rating": "sfw",
+                       "description": "Functions for editing the story's locations as a chat flow "
+                                      "(operate on a {start, locations:[…]} document)."},
+     _LOCATION_FNS_ENTRIES),
+    ("_character_fns", {"name": "Character Functions", "category": "function", "rating": "sfw",
+                        "description": "Functions for editing the story's cast as a chat flow "
+                                       "(operate on a {cast:[…]} document)."},
+     _CHARACTER_FNS_ENTRIES),
     ("rpg-sim", {"name": "RPG Simulation", "category": "rpg", "rating": "sfw",
                  "description": "Turn the chat into a lightweight tabletop RPG: skill checks, "
                                 "combat turns, inventory, and consequences."}, [

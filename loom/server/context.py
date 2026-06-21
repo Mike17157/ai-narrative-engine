@@ -227,10 +227,13 @@ class AppContext:
         from .services.img_naming import output_prefix
         return output_prefix(self.workflow_family(model_id), role, character)
 
-    def text_provider_for(self, model_sel: str | None, params: dict | None = None):
-        """Build a text provider for a model selection: a registered model key,
-        or an OpenRouter (etc.) model id run through the active text connection.
-        `params` (temperature/top_p/…) from a config are merged into the provider options."""
+    def text_provider_for(self, model_sel: str | None, params: dict | None = None,
+                          connection: str | None = None):
+        """Build a text provider for a model selection: a registered model key, or an
+        OpenRouter (etc.) model id run through a connection. `connection` (a preset's bound
+        connection id) is used when given — so different presets can target different
+        providers; otherwise the active text connection. `params` (temperature/top_p/…) are
+        merged into the provider options."""
         from ..providers.registry import build_provider
 
         params = params or {}
@@ -240,7 +243,7 @@ class AppContext:
             if params:
                 md = md.model_copy(); md.options = {**md.options, **params}
             return build_provider(md)
-        conn = self.store.active("text")
+        conn = (self.store.get(connection) if connection else None) or self.store.active("text")
         if conn:
             return build_provider(ModelDef(
                 provider=conn.provider, kind="text",
@@ -304,6 +307,12 @@ class AppContext:
         model_id = self.role_model(role, override)
         variant = None if override else self.role_extra_opts(role).get("output_variant")
         return self.image_provider(model_id, output_variant=variant)
+
+    def allow_nsfw(self) -> bool:
+        """The global content gate (configs/app.json). When False, nsfw-rated lorebooks are
+        excluded from retrieval everywhere."""
+        from .services import config_files as _cf
+        return bool(_cf.load_app_flags(self.root).get("allow_nsfw", True))
 
     def author_provider(self, model_sel: str | None, params: dict | None = None):
         """Text provider for the Story Builder — an explicit (selectable) author

@@ -188,6 +188,8 @@ def serve(
     dev: bool = typer.Option(None, "--dev/--prod",
         help="Dev mode (DEFAULT) serves the live Vite dev server (hot reload — no rebuild) and "
              "points the browser at it. Opt out with --prod, LOOM_MODE=prod, or LOOM_DEV=0."),
+    no_vite: bool = typer.Option(False, "--no-vite", help="In dev, don't launch Vite from here "
+        "(the backend still runs with reload) — for when Vite runs in its own window."),
 ):
     """Run the Loom web app and open it in your browser.
 
@@ -212,12 +214,13 @@ def serve(
         browse_url = f"http://{host}:{front_port}"
         typer.secho(f"Loom (dev) — UI http://{host}:{front_port} (Vite HMR) · API http://{host}:{port}",
                     fg=typer.colors.GREEN)
-        try:
-            # shell=True so Windows resolves npm.cmd; Vite logs stream to this console.
-            vite = subprocess.Popen("npm run dev", cwd=str(frontend), shell=True)
-        except OSError as exc:
-            typer.secho(f"Could not start Vite ({exc}); is Node/npm installed and `npm install` run?",
-                        fg=typer.colors.RED)
+        if not no_vite:
+            try:
+                # shell=True so Windows resolves npm.cmd; Vite logs stream to this console.
+                vite = subprocess.Popen("npm run dev", cwd=str(frontend), shell=True)
+            except OSError as exc:
+                typer.secho(f"Could not start Vite ({exc}); is Node/npm installed and `npm install` run?",
+                            fg=typer.colors.RED)
     else:
         browse_url = f"http://{host}:{port}"
         typer.secho(f"Loom running at {browse_url}" + (" (reload)" if reload else ""), fg=typer.colors.GREEN)

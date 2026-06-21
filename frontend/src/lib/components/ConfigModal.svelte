@@ -6,37 +6,30 @@
   // configModal store.
   import { onMount } from 'svelte';
   import { get, post, put, del } from '$lib/api.js';
-  import { app, refreshAll, setActiveImage } from '$lib/app.svelte.js';
+  import { refreshAll } from '$lib/app.svelte.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
   import { configModal, closeConfigModal } from '$lib/configModal.svelte.js';
   import Combobox from '$lib/components/shared/Combobox.svelte';
-  import ConnectionPanel from '$lib/components/ConnectionPanel.svelte';
   import LorebookPicker from '$lib/components/shared/LorebookPicker.svelte';
   import Modal from '$lib/components/shared/Modal.svelte';
 
+  // Point-of-use picker: just the per-surface chat Config + attached Lorebooks. Models &
+  // connections live INSIDE presets now (Library ▸ Presets), not here.
   const TABS = [
-    { id: 'configs',     label: 'Configs' },
-    { id: 'models',      label: 'Models' },
-    { id: 'connections', label: 'Connections' },
-    { id: 'lorebooks',   label: 'Lorebooks' },
+    { id: 'configs',   label: 'Configs' },
+    { id: 'lorebooks', label: 'Lorebooks' },
   ];
 
-  // ── Text-model items (shared by Configs + Models) ──
+  // ── Text-model items (Configs model picker + augment) ──
   let textModels = $state([]);
-  let textConnected = $state(false);
   let modelItems = $derived(textModels.map((m) => ({ value: m.id, label: m.name })));
 
-  // ── Image workflow items (Models tab) ──
-  const famCap = (f) => (f && f !== 'unknown' ? f[0].toUpperCase() + f.slice(1) : 'Other');
-  let imageItems = $derived((app.models.image || []).map((m) => ({ value: m.key, label: m.key, group: famCap(m.family) })));
-  let imageActive = $derived(app.conns.active?.image);
-
   async function loadTextModels() {
-    try { const r = await get('/text-models'); textModels = r.models || []; textConnected = !!r.connected; }
-    catch { textModels = []; textConnected = false; }
+    try { const r = await get('/text-models'); textModels = r.models || []; }
+    catch { textModels = []; }
   }
 
-  onMount(async () => { await refreshAll(); await loadTextModels(); await loadScripts(); await loadConfigs(); });
+  onMount(async () => { await refreshAll(); await loadTextModels(); await loadScripts(); await loadConfigs(); await loadPresets(); });
   // Refresh model lists whenever the modal (re)opens, so a just-saved connection shows up.
   $effect(() => { if (configModal.open) { refreshAll(); loadTextModels(); } });
 
@@ -56,6 +49,20 @@
   let selIsImage = $derived((sel?.script || '').startsWith('image:'));
   let selIsScript = $derived(!!(sel?.script));
 
+  // Address mode — how the model is framed. '' = auto (assist for script-bound flows,
+  // roleplay for free chat); explicit overrides win.
+  const MODES = [
+    { v: '', label: 'Auto' },
+    { v: 'roleplay', label: 'Roleplay' },
+    { v: 'assist', label: 'Assist' },
+  ];
+  let resolvedMode = $derived(sel?.mode || (selIsScript ? 'assist' : 'roleplay'));
+  const CONTEXT_FIELDS = [
+    { k: 'history_turns', label: 'History turns', step: 1, min: 0, ph: 'all', hint: 'Keep only the last N messages (0 = all)' },
+    { k: 'lore_top_k', label: 'Lore entries', step: 1, min: 0, ph: '6', hint: 'How many lorebook entries to retrieve into context' },
+  ];
+  let showCtx = $state(false);
+
   // Advanced inference controls (forwarded to the provider; blank = model default).
   const PARAM_FIELDS = [
     { k: 'temperature', label: 'Temperature', step: 0.05, min: 0, max: 2, ph: '1.0', hint: 'Higher = more random / creative' },
@@ -68,16 +75,34 @@
   let showAdv = $state(false);
   let paramCount = $derived(Object.values(sel?.params || {}).filter((v) => v !== '' && v != null).length);
 
-  const GROUP_ORDER = ['Chat', 'Story builder', 'Prompts', 'Image roles'];
+  // Free-chat is driven by PRESETS now (not chat-configs). The Chat group is gone from the
+  // config editor; what remains are the pipeline stage configs (Story builder/Prompts/Image roles).
+  const GROUP_ORDER = ['Story builder', 'Prompts', 'Image roles'];
   let grouped = $derived.by(() => {
     const m = {};
-    for (const c of lib.configs) { const g = scriptOf(c)?.group || 'Chat'; (m[g] ||= []).push(c); }
+    for (const c of lib.configs) { const g = scriptOf(c)?.group || 'Chat'; if (g === 'Chat') continue; (m[g] ||= []).push(c); }
     return GROUP_ORDER.filter((g) => m[g]).map((g) => ({ group: g, configs: m[g] }));
   });
 
+  // ── Chat preset picker ──
+  let presetLib = $state({ active: '', presets: [] });
+  let presetGroups = $derived.by(() => {
+    const rp = presetLib.presets.filter((p) => (p.mode || '') === 'roleplay');
+    const as = presetLib.presets.filter((p) => (p.mode || '') !== 'roleplay');
+    return [{ label: 'Roleplay', items: rp }, { label: 'Assist', items: as }].filter((g) => g.items.length);
+  });
+  async function loadPresets() {
+    try { presetLib = await get('/presets'); } catch { /* none */ }
+  }
+  async function activatePreset(id) {
+    const r = await post(`/presets/${id}/activate`);
+    if (r.data?.active) presetLib = { ...presetLib, active: r.data.active };
+  }
+
   async function loadConfigs() {
     lib = await get('/chat-configs');
-    if (!selId || !lib.configs.some((c) => c.id === selId)) selId = lib.active;
+    // Default selection is a pipeline (script-bound) config; free-chat configs are retired.
+    if (!selId || !lib.configs.some((c) => c.id === selId)) selId = (lib.configs.find((c) => c.script) || {}).id || null;
     cfgSnap = sel ? JSON.stringify(sel) : null;
   }
   async function loadScripts() {
@@ -100,7 +125,7 @@
     if (r.data?.configs) { lib = { active: r.data.active, configs: r.data.configs }; cfgSnap = JSON.stringify(sel); }
   }
   async function newConfig() {
-    const r = await post('/chat-configs', { name: 'New config', model: '', system: '', lorebooks: [], invention: 'balanced' });
+    const r = await post('/chat-configs', { name: 'New config', model: '', system: '', lorebooks: [] });
     if (r.data?.configs) { lib = { active: r.data.active, configs: r.data.configs }; selId = r.data.id; cfgSnap = JSON.stringify(sel); }
   }
   async function deleteConfig() {
@@ -114,16 +139,6 @@
     const r = await post(`/chat-configs/${sel.id}/activate`);
     if (r.data?.active) lib.active = r.data.active;
   }
-
-  // ════════════════════════════ Models tab ════════════════════════════
-  let modelMsg = $state(null);
-  async function pickChatModel(model) {
-    modelMsg = { text: 'Setting…' };
-    const r = await post('/text/model', { model });
-    if (r.data?.ok) { modelMsg = { ok: true, text: '✓ ' + model }; await refreshAll(); }
-    else modelMsg = { err: true, text: r.data?.error || 'failed' };
-  }
-  let activeChatModel = $derived(app.conns.connections.find((c) => c.id === app.conns.active?.text)?.model || null);
 
   // ════════════════════════════ Lorebooks tab ════════════════════════════
   // Surface attachment (the chat/play thread's books) lives in the store; mirror locally.
@@ -191,6 +206,25 @@
       <div class="body">
         <!-- ══ Configs ══ -->
         {#if configModal.tab === 'configs'}
+          <!-- Chat is driven by a PRESET — pick which one is active here; edit it in Library. -->
+          <section class="card presetpick">
+            <div class="pphead"><h4>Chat preset</h4><a class="liblink" href="/library/presets" onclick={closeConfigModal}>Edit in Library →</a></div>
+            <p class="hint">The preset drives this chat's model, mode, prompt slots & sampling.</p>
+            {#each presetGroups as g (g.label)}
+              <div class="pgroup">{g.label}</div>
+              <div class="prow-wrap">
+                {#each g.items as p (p.id)}
+                  <button class="prow" class:on={p.id === presetLib.active} onclick={() => activatePreset(p.id)} title={p.description}>
+                    <span class="pname">{p.name}</span>
+                    {#if p.id === presetLib.active}<span class="badge">active</span>{/if}
+                  </button>
+                {/each}
+              </div>
+            {/each}
+          </section>
+
+          {#if grouped.length}
+          <div class="pipehd">Pipeline stages <span class="lo">— the builder/prompt jobs (presets coming)</span></div>
           <div class="cfgwrap">
             <div class="cfglist">
               {#each grouped as grp (grp.group)}
@@ -198,11 +232,9 @@
                 {#each grp.configs as c (c.id)}
                   <button class="cfgrow" class:on={c.id === selId} onclick={() => { selId = c.id; cfgSnap = JSON.stringify(c); }}>
                     <span class="cfgname">{c.name || c.id}</span>
-                    {#if c.script === '' && c.id === lib.active}<span class="badge">active</span>{/if}
                   </button>
                 {/each}
               {/each}
-              <button class="newcfg" onclick={newConfig}>＋ New chat config</button>
             </div>
 
             {#if sel}
@@ -228,6 +260,19 @@
                     <Combobox items={[{ value: '', label: 'Use active chat model' }, ...modelItems]}
                       value={sel.model} placeholder="Use active chat model" onpick={(v) => (sel.model = v)} />
                   </div>
+                  <div class="erow">
+                    <label title="Roleplay = the model becomes the character. Assist = it helps you build the document and never roleplays.">Address</label>
+                    <div class="seg">
+                      {#each MODES as m}
+                        <button class="segbtn" class:on={(sel.mode || '') === m.v} onclick={() => (sel.mode = m.v)}>{m.label}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <p class="hint">
+                    {#if resolvedMode === 'assist'}<b>Assist</b> — a craft collaborator that develops the document with you; never roleplays a character.
+                    {:else}<b>Roleplay</b> — the model speaks in-character.{/if}
+                    {#if !sel.mode}<span class="lo"> (auto from script)</span>{/if}
+                  </p>
                   <div class="erow col">
                     <label>System prompt <span class="lo">— the rules</span></label>
                     <textarea class="fld ta" rows="6" bind:value={sel.system}
@@ -257,53 +302,41 @@
                       <button class="ghost xsm" onclick={() => (sel.params = {})}>Reset to defaults</button>
                     {/if}
                   </div>
+
+                  <div class="adv">
+                    <button class="advhdr" onclick={() => (showCtx = !showCtx)}>
+                      <span class="advarr" class:open={showCtx}>▸</span> Context
+                      <span class="lo">— how much history & lore to feed in (blank = default)</span>
+                    </button>
+                    {#if showCtx}
+                      <div class="advgrid">
+                        {#each CONTEXT_FIELDS as p (p.k)}
+                          <div class="pfield">
+                            <label title={p.hint}>{p.label}</label>
+                            <input class="fld" type="number" step={p.step} min={p.min}
+                              placeholder={p.ph} bind:value={sel.context[p.k]} />
+                          </div>
+                        {/each}
+                        <label class="pfield ckrow" title="Include the character persona as reference context (Assist mode)">
+                          <input type="checkbox" checked={sel.context.include_persona !== false}
+                            onchange={(e) => (sel.context.include_persona = e.currentTarget.checked)} />
+                          <span>Persona context</span>
+                        </label>
+                      </div>
+                    {/if}
+                  </div>
                 {/if}
 
                 <div class="cfgactions">
                   {#if !selIsScript && sel.id !== lib.active}<button class="primary sm" onclick={activateConfig}>Make active</button>{/if}
                   {#if !selIsScript}<button class="ghost sm danger" onclick={deleteConfig} disabled={grouped[0]?.configs.length <= 1}>Delete</button>{/if}
                   <span class="hint">Auto-saves{selIsScript ? ' · drives the pipeline' : ''}</span>
+                  <a class="liblink sm" href="/library/presets" onclick={closeConfigModal}>Presets & infra in Library →</a>
                 </div>
               </div>
             {/if}
           </div>
-
-        <!-- ══ Models ══ -->
-        {:else if configModal.tab === 'models'}
-          <section class="card">
-            <h4>Chat model</h4>
-            {#if textConnected}
-              <p class="hint">The active text model — used for chat and all text work. {textModels.length} available.</p>
-              <Combobox items={modelItems} value={activeChatModel} placeholder="search models…" onpick={pickChatModel} />
-              {#if modelMsg}<div class="msg" class:ok={modelMsg.ok} class:err={modelMsg.err}>{modelMsg.text}</div>{/if}
-            {:else}
-              <p class="hint">No language connection yet — set one up in the <button class="link" onclick={() => (configModal.tab = 'connections')}>Connections</button> tab.</p>
-            {/if}
-          </section>
-          <section class="card">
-            <h4>Image workflow</h4>
-            {#if imageActive}
-              <p class="hint">The workflow used to render pictures. {imageItems.length} available.</p>
-              {#if imageItems.length}
-                <Combobox items={imageItems} value={app.activeImage} placeholder="workflow…" onpick={(v) => setActiveImage(v)} />
-              {:else}
-                <p class="hint">Connected, but no workflows found.</p>
-              {/if}
-            {:else}
-              <p class="hint">No image connection yet — connect ComfyUI in the <button class="link" onclick={() => (configModal.tab = 'connections')}>Connections</button> tab.</p>
-            {/if}
-          </section>
-
-        <!-- ══ Connections ══ -->
-        {:else if configModal.tab === 'connections'}
-          <section class="card">
-            <h4>Language API <span class="sub">chat · text</span></h4>
-            <ConnectionPanel kind="text" />
-          </section>
-          <section class="card">
-            <h4>Image backend <span class="sub">ComfyUI · RunPod</span></h4>
-            <ConnectionPanel kind="image" />
-          </section>
+          {/if}
 
         <!-- ══ Lorebooks ══ -->
         {:else if configModal.tab === 'lorebooks'}
@@ -392,6 +425,33 @@
   .erow.col > label { width: auto; }
   .erow .fld, .erow :global(.combo) { flex: 1; min-width: 0; }
   .cfgactions { display: flex; align-items: center; gap: 10px; margin-top: 2px; }
+  .liblink { display: inline-block; font-size: 12px; color: var(--accent); text-decoration: none; }
+  .liblink:hover { text-decoration: underline; }
+  .liblink.sm { margin-left: auto; }
+
+  /* Chat-preset picker */
+  .presetpick { gap: 6px; }
+  .pphead { display: flex; align-items: center; gap: 10px; }
+  .pphead h4 { flex: 1; margin: 0; }
+  .pgroup { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); margin-top: 6px; }
+  .prow-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
+  .prow { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 999px; cursor: pointer;
+    background: var(--bg); border: 1px solid var(--border-soft); color: var(--text); box-shadow: none; font-size: 12.5px; }
+  .prow:hover { background: var(--elev); filter: none; }
+  .prow.on { border-color: var(--accent); background: rgba(109,140,255,.12); color: var(--accent); }
+  .pname { font-weight: 600; }
+  .pipehd { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin: 4px 0 2px; }
+
+  /* Address-mode segmented control */
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .segbtn { background: var(--bg); border: 0; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 600;
+    padding: 6px 13px; cursor: pointer; border-right: 1px solid var(--border-soft); }
+  .segbtn:last-child { border-right: 0; }
+  .segbtn:hover { color: var(--text); background: var(--elev); filter: none; }
+  .segbtn.on { color: #fff; background: var(--accent); }
+  .ckrow { flex-direction: row !important; align-items: center; gap: 7px; }
+  .ckrow input { width: 15px; height: 15px; }
+  .ckrow span { font-size: 11.5px; color: var(--muted); }
 
   /* Advanced inference */
   .adv { border-top: 1px solid var(--border-soft); padding-top: 10px; display: flex; flex-direction: column; gap: 8px; }

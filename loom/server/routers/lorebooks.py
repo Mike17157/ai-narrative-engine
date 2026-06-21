@@ -30,7 +30,7 @@ from ..services import lorebook_store as LS
 from ..services import lorebook_import as LI
 
 _RATINGS = {"sfw", "nsfw"}
-_CATEGORIES = {"world", "story", "rpg", "character", "craft", "intimacy", "guard"}
+_CATEGORIES = {"world", "story", "rpg", "character", "craft", "intimacy", "guard", "function"}
 
 
 def _slug(name: str) -> str:
@@ -50,6 +50,8 @@ def _clean_meta(body: dict) -> dict:
         out["category"] = body["category"] if body["category"] in _CATEGORIES else "world"
     if body.get("enabled") is not None:
         out["enabled"] = bool(body["enabled"])
+    if body.get("preset") is not None:
+        out["preset"] = str(body["preset"]).strip()   # bound model preset id ('' = none)
     return out
 
 

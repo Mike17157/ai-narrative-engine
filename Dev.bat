@@ -12,7 +12,9 @@ if not exist ".venv\Scripts\python.exe" (
   pause & popd & exit /b 1
 )
 
-start "Loom API" cmd /k ".venv\Scripts\python.exe -m loom.cli serve --no-open --host 127.0.0.1 --port 8000"
+rem --dev forces dev mode (reload) regardless of LOOM_MODE; --no-vite keeps Vite to the
+rem dedicated window below so it isn't started twice on :5173.
+start "Loom API" cmd /k ".venv\Scripts\python.exe -m loom.cli serve --dev --no-vite --no-open --host 127.0.0.1 --port 8000"
 start "Loom UI (dev)" cmd /k "cd frontend && npm run dev"
 
 echo  Dev servers starting...

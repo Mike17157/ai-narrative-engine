@@ -16,7 +16,9 @@ export const configModal = $state({
 });
 
 export function openConfigModal(opts = {}) {
-  configModal.tab = opts.tab || 'configs';
+  // Models & connections moved into presets (Library) — coerce old openers to a live tab.
+  const tab = opts.tab || 'configs';
+  configModal.tab = (tab === 'configs' || tab === 'lorebooks') ? tab : 'configs';
   configModal.lorebooks = opts.lorebooks ? [...opts.lorebooks] : [];
   configModal.onLorebooks = opts.onLorebooks || null;
   configModal.open = true;

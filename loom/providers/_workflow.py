@@ -199,6 +199,21 @@ def fix_image_saver_metadata(graph: dict) -> None:
             ins["scheduler_name"] = scheduler
 
 
+def sanitize_image_saver_path(graph: dict) -> None:
+    """Neutralise the Anima ``Image Saver`` node's absolute output path.
+
+    Its ``path`` input is wired to a StringConcatenate that yields ``\\V19`` — an
+    absolute drive-root subfolder that lands outside ComfyUI's output dir, so the
+    saved PNG can't be fetched back through ``/view`` (Loom collects empty bytes).
+    When no out_prefix is supplied (grid tester, plain test renders), repoint
+    ``path`` to "" so the image saves into the output root and stays collectable.
+    Filename (its own template node) is left untouched. ``apply_out_prefix`` does
+    the equivalent when a prefix IS given, so this only fires otherwise."""
+    for node in graph.values():
+        if isinstance(node, dict) and node.get("class_type") == "Image Saver":
+            node.setdefault("inputs", {})["path"] = ""
+
+
 _MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf", ".sft")
 
 
@@ -312,6 +327,8 @@ def inject(
         apply_flags(graph, **flags)
     if out_prefix:
         apply_out_prefix(graph, out_prefix)
+    else:
+        sanitize_image_saver_path(graph)
     if latent:
         apply_latent(graph, latent)
 

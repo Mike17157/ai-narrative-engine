@@ -1,5 +1,5 @@
 // Shared reactive app state (Svelte 5 universal reactivity in a .svelte.js module).
-import { get, post } from './api.js';
+import { get, post, put } from './api.js';
 
 // Persist the last-used character so the Characters pane opens on it next session.
 const LS_ACTIVE_CHAR = 'loom.activeChar';
@@ -22,6 +22,7 @@ export const app = $state({
   health: null,
   models: { text: [], image: [] },
   conns: { active: { text: null, image: null }, connections: [] },
+  allowNsfw: true,                    // global content gate (configs/app.json) — gates nsfw books
   activity: { jobs: [], running: 0 }, // live server-resident workloads
   localJobs: [],                      // client-driven workloads (renders, generation) + history
   // pending deep-link target (consumed by +page / panels), e.g. Settings ↔ Train
@@ -209,6 +210,15 @@ export async function refreshActivity() {
   try { app.activity = await get('/activity'); } catch { /* transient */ }
 }
 
+export async function refreshFlags() {
+  try { app.allowNsfw = !!(await get('/app-flags')).allow_nsfw; } catch { /* keep default */ }
+}
+
+export async function setAllowNsfw(v) {
+  app.allowNsfw = !!v;
+  try { await put('/app-flags', { allow_nsfw: !!v }); } catch { /* best-effort */ }
+}
+
 export async function refreshAll() {
-  await Promise.all([refreshHealth(), refreshModels(), refreshConns()]);
+  await Promise.all([refreshHealth(), refreshModels(), refreshConns(), refreshFlags()]);
 }

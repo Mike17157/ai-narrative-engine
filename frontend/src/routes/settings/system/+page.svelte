@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
-  import { app, refreshHealth } from '$lib/app.svelte.js';
+  import { app, refreshHealth, refreshFlags, setAllowNsfw } from '$lib/app.svelte.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
 
   // ── System / Backend ────────────────────────────────────────────
@@ -120,6 +120,7 @@
 
   onMount(async () => {
     loadSrv();
+    refreshFlags();
     gpu = await get('/trainer/detect');
     await loadTrainer();
     const j = await get('/train/job');
@@ -128,6 +129,20 @@
 </script>
 
 <div class="screen">
+
+  <!-- Content gate -->
+  <section class="card">
+    <div class="card-head">
+      <h3>Content</h3>
+      <span class="card-sub">global rating gate</span>
+    </div>
+    <label class="nsfwrow">
+      <input type="checkbox" checked={app.allowNsfw} onchange={(e) => setAllowNsfw(e.currentTarget.checked)} />
+      <span class="nsfwlabel">Allow NSFW content
+        <span class="nsfwsub">When off, nsfw-rated lorebooks are excluded from retrieval everywhere.</span>
+      </span>
+    </label>
+  </section>
 
   <!-- Row 1: Environment + Backend -->
   <div class="row2">
@@ -340,4 +355,8 @@
   .msg { font-size: 12.5px; margin-top: 4px; }
   .ok  { color: var(--good); }
   .err { color: var(--bad); }
+  .nsfwrow { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
+  .nsfwrow input { width: 16px; height: 16px; margin-top: 2px; flex: none; }
+  .nsfwlabel { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--text); }
+  .nsfwsub { font-size: 11.5px; color: var(--muted); }
 </style>

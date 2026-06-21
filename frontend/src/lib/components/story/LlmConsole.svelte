@@ -6,8 +6,6 @@
   // This is the standardized surface for *every* LLM interaction (the story
   // workshop is its first tenant) — model/prompt/lorebook config lives here, in
   // the same window as the chat, rather than scattered across the settings pages.
-  import Combobox from '$lib/components/shared/Combobox.svelte';
-  import LorebookPicker from '$lib/components/shared/LorebookPicker.svelte';
   import { openConfigModal } from '$lib/configModal.svelte.js';
 
   let {
@@ -31,7 +29,6 @@
   } = $props();
 
   let userInput = $state('');
-  let showConfig = $state(false);
   let msgBox;
 
   // Context-budget dial maths.
@@ -77,42 +74,11 @@
           <span class="dlabel">{k(usage.tokens)} / {k(usage.window)}</span>
         </div>
       {/if}
-      <button class="gear" class:on={showConfig} title="Model, lorebooks & tools"
-        onclick={() => (showConfig = !showConfig)}>⚙</button>
+      {#if onImage}<button class="tool" onclick={onImage} title="Invoke image">🖼</button>{/if}
+      <button class="gear" title="Model, configs, connections & lorebooks"
+        onclick={() => openConfigModal({ tab: 'configs', lorebooks, onLorebooks: (v) => (lorebooks = v) })}>⚙</button>
     </div>
   </div>
-
-  <!-- ── Config drawer ──────────────────────────────────────────────────────── -->
-  {#if showConfig}
-    <div class="cfg">
-      <div class="cfg-row">
-        <label class="cfg-lbl">Model</label>
-        <div class="cfg-ctl">
-          <Combobox
-            items={[{ value: '', label: 'Default (configured)' }, ...models]}
-            value={model}
-            placeholder="Default (configured)"
-            onpick={(v) => (model = v)} />
-        </div>
-      </div>
-
-      <div class="cfg-row">
-        <label class="cfg-lbl">Lorebooks</label>
-        <div class="cfg-ctl chips">
-          <span class="scope locked" title="Always-on craft knowledge">🧠 craft</span>
-          <LorebookPicker value={lorebooks} exclude={['_craft']} onchange={(v) => (lorebooks = v)} />
-        </div>
-      </div>
-
-      <div class="cfg-row">
-        <label class="cfg-lbl">{onImage ? 'Tools' : 'More'}</label>
-        <div class="cfg-ctl tools">
-          {#if onImage}<button class="tool" onclick={onImage}>🖼 Invoke image</button>{/if}
-          <button class="tool" onclick={() => openConfigModal({ tab: 'connections', lorebooks, onLorebooks: (v) => (lorebooks = v) })}>⚙ Connections, configs &amp; lore tools</button>
-        </div>
-      </div>
-    </div>
-  {/if}
 
   <!-- ── Two-pane body ──────────────────────────────────────────────────────── -->
   <div class="con-body">

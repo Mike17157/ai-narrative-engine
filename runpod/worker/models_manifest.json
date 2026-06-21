@@ -25,6 +25,11 @@
     "bytes": 228468468
   },
   {
+    "local": "diffusion_models/anima/miaomiaoHarem_animaBase.safetensors",
+    "key": "models/diffusion_models/anima/miaomiaoHarem_animaBase.safetensors",
+    "bytes": 4182218328
+  },
+  {
     "local": "ultralytics/bbox/face_yolov8m.pt",
     "key": "models/ultralytics/bbox/face_yolov8m.pt",
     "bytes": 52026019

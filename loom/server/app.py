@@ -32,6 +32,7 @@ from .routers import (
     lorebooks,
     models_conn,
     personas,
+    presets,
     runpod,
     server,
     tags,
@@ -91,6 +92,7 @@ _ROUTERS = (
     jobs,
     runpod,
     lorebooks,
+    presets,
 )
 
 

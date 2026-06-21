@@ -3,13 +3,13 @@
   import Combobox from '$lib/components/shared/Combobox.svelte';
   import StoryWorkshop from '$lib/components/story/StoryWorkshop.svelte';
   import StoryConsole from '$lib/components/story/StoryConsole.svelte';
+  import FlowConsole from '$lib/components/story/FlowConsole.svelte';
   import SpineDisplay from '$lib/components/story/SpineDisplay.svelte';
   import { autosize } from '$lib/autosize.js';
   import { boardToGraph, graphToBoard, graphToArcs } from '$lib/story_graph_model.js';
   import {
     stories, generateSpine, genStoryboard, regenStoryboard, genScenes, genCharacters, saveStory,
     draftFromGraph, cancelWizard, cancelGen,
-    addLocation, removeLocation, addNpc, removeNpc
   } from '$lib/stories.svelte.js';
 
   // One wizard step per route; `step` selects which to render. Transitions navigate.
@@ -20,8 +20,6 @@
   let boardGraph = $state(null);   // live graph from the storyboard-step console
   $effect(() => { if (wz.streaming && wz.streamText && streamBox) streamBox.scrollTop = streamBox.scrollHeight; });
 
-  const csv = (a) => (a || []).join(', ');
-  function setCsv(beat, v) { beat.characters = v.split(',').map((s) => s.trim()).filter(Boolean); }
   let themesStr = $state('');
   let themesSeed = $state(null);
   $effect(() => { if (wz.board && themesSeed !== wz.board) { themesStr = (wz.board.themes || []).join(', '); themesSeed = wz.board; } });
@@ -58,9 +56,29 @@
     themesSeed = null;   // re-seed the themes string from the refreshed board
   }
   function continueToScenes(g) { applyGraph(g); toScenes(); }
+
+  // Scenes step as a CHAT FLOW: edit the locations document via FlowConsole + functions.
+  let scenesKey = $state(0);
+  function syncLocations(art) {
+    if (!art) return;
+    if (art.start !== undefined) wz.start = art.start;
+    if (Array.isArray(art.locations)) wz.locations = art.locations;
+  }
+  async function regenScenes() { await genScenes(); scenesKey++; }
+
+  // Characters step as a CHAT FLOW: edit the {cast:[…]} document via FlowConsole + functions.
+  // Cast members need a stable `id` so set/remove ops can target them (functions navigate by
+  // id); mint one for any that lacks it, in place, so it persists through save.
+  let charsKey = $state(0);
+  function castWithIds() {
+    (wz.cast || []).forEach((c, i) => { if (!c.id) c.id = `cast-${i + 1}-${(c.name || 'x').toLowerCase().replace(/\W+/g, '') || i}`; });
+    return { cast: wz.cast || [] };
+  }
+  function syncCast(art) { if (art && Array.isArray(art.cast)) wz.cast = art.cast; }
+  async function regenChars() { await genCharacters(); charsKey++; }
 </script>
 
-<div class="wiz" class:wide={step === 'setup' || step === 'storyboard'}>
+<div class="wiz" class:wide={step === 'setup' || step === 'storyboard' || step === 'scenes' || step === 'characters'}>
   {#if wz.error}<div class="err">⚠ {wz.error}</div>{/if}
 
   {#if step === 'setup'}
@@ -173,52 +191,46 @@
     {/if}
 
   {:else if step === 'scenes' && wz.locations}
-    <div class="panel">
-      <h3>Scenes <span class="lo">— neutral locations; pure backgrounds</span></h3>
-      <div class="blkhead"><span class="lo">{wz.locations.length} location{wz.locations.length === 1 ? '' : 's'}</span><button class="ghost sm" onclick={addLocation}>＋ Location</button></div>
-      {#each wz.locations as loc, i (loc.id)}
-        <div class="loc" class:start={wz.start === loc.id}>
-          <div class="loctop">
-            <input class="fld title" placeholder="name" bind:value={loc.name} />
-            <code class="lid">{loc.id}</code>
-            <label class="startsel"><input type="radio" name="startloc" value={loc.id} bind:group={wz.start} /> start</label>
-            <button class="x" onclick={() => removeLocation(i)}>✕</button>
-          </div>
-          <input class="fld" placeholder="description (the place, objectively)" bind:value={loc.description} />
-          <textarea class="fld ta" use:autosize={loc.background_prompt} placeholder="background prompt — pure environment, no characters" bind:value={loc.background_prompt}></textarea>
-        </div>
-      {/each}
-      <div class="acts">
-        <button class="ghost" onclick={() => at('storyboard')}>← Back</button>
-        <button class="ghost" onclick={genScenes} disabled={wz.busy}>↻ Regenerate</button>
-        <button onclick={toChars} disabled={wz.busy}>{wz.busy ? 'Extracting…' : 'Extract characters →'}</button>
-      </div>
-    </div>
+    {#key scenesKey}
+      <FlowConsole
+        character={wz.character}
+        config="script_locations"
+        title="Scenes"
+        subtitle="Talk through the locations — or let functions add/edit them. Then continue."
+        artifactLabel="LOCATIONS"
+        initialArtifact={{ start: wz.start, locations: wz.locations }}
+        lorebooks={['_location_fns', wz.character, '_global'].filter(Boolean)}
+        onArtifactChange={syncLocations}
+      >
+        {#snippet actions({ busy })}
+          <button class="ghost" onclick={() => at('storyboard')}>← Back</button>
+          <button class="ghost" onclick={regenScenes} disabled={wz.busy}>↻ Regenerate</button>
+          <span style="flex:1"></span>
+          <button onclick={toChars} disabled={busy || wz.busy}>{wz.busy ? 'Extracting…' : 'Extract characters →'}</button>
+        {/snippet}
+      </FlowConsole>
+    {/key}
 
   {:else if step === 'characters' && wz.cast}
-    <div class="panel">
-      <h3>Characters <span class="lo">— the whole cast; the ★ main character is saved as the primary, with the reference image</span></h3>
-
-      <div class="blkhead"><span class="lo">{wz.cast.length} character{wz.cast.length === 1 ? '' : 's'}</span><button class="ghost sm" onclick={addNpc}>＋ Character</button></div>
-      {#each wz.cast as c, i (i)}
-        <div class="npc" class:lead={c.primary}>
-          <div class="npctop">
-            {#if c.primary}<span class="leadbadge">★ main</span>{/if}
-            <input class="fld nm" placeholder="name" bind:value={c.name} />
-            <input class="fld role" placeholder="role" bind:value={c.role} />
-            {#if !c.primary}<button class="x" onclick={() => removeNpc(i)}>✕</button>{/if}
-          </div>
-          <textarea class="fld ta" use:autosize={c.base_prompt || ''} placeholder="✨ image prompt — booru tags (from the appearance pipeline)" bind:value={c.base_prompt}></textarea>
-          <textarea class="fld ta" use:autosize={c.persona} placeholder="persona" bind:value={c.persona}></textarea>
-        </div>
-      {/each}
-      {#if !wz.cast.length}<p class="lo">No characters yet.</p>{/if}
-      <div class="acts">
-        <button class="ghost" onclick={() => at('scenes')}>← Back</button>
-        <button class="ghost" onclick={genCharacters} disabled={wz.busy || stories.saving}>↻ Regenerate</button>
-        <button onclick={saveStory} disabled={wz.busy || stories.saving}>{stories.saving ? 'Saving…' : '✓ Save story'}</button>
-      </div>
-    </div>
+    {#key charsKey}
+      <FlowConsole
+        character={wz.character}
+        config="script_characters"
+        title="Characters"
+        subtitle="Talk through the cast — or let functions add/edit them. The ★ main character is saved as primary with the reference image. Then save."
+        artifactLabel="CAST"
+        initialArtifact={castWithIds()}
+        lorebooks={['_character_fns', wz.character, '_global'].filter(Boolean)}
+        onArtifactChange={syncCast}
+      >
+        {#snippet actions({ busy })}
+          <button class="ghost" onclick={() => at('scenes')}>← Back</button>
+          <button class="ghost" onclick={regenChars} disabled={wz.busy || stories.saving}>↻ Regenerate</button>
+          <span style="flex:1"></span>
+          <button onclick={saveStory} disabled={busy || wz.busy || stories.saving}>{stories.saving ? 'Saving…' : '✓ Save story'}</button>
+        {/snippet}
+      </FlowConsole>
+    {/key}
   {/if}
 </div>
 

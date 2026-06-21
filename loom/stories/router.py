@@ -639,7 +639,11 @@ def register(app, ctx):
             world_scopes = [body["character"], "_global"]
         world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in world_scopes]
         world_scopes = [s for s in world_scopes if s and s != "_craft"]
-        world_hits = _LS.retrieve(ctx.root, query_text, world_scopes, top_k=5) if world_scopes else []
+        world_hits = _LS.retrieve(ctx.root, query_text, world_scopes, top_k=5,
+                                  allow_nsfw=ctx.allow_nsfw()) if world_scopes else []
+        # Function-book entries are functions, not world facts — never inject their specs as lore.
+        from . import graph_ops as _GO
+        world_hits = [e for e in world_hits if not _GO.is_function_entry(e)]
         if world_hits:
             system = system + "\n\n" + format_lore_block(world_hits)
 
@@ -722,6 +726,66 @@ def register(app, ctx):
             yield 'data: {"type": "done"}\n\n'
 
         return StreamingResponse(events(), media_type="text/event-stream")
+
+    @app.post("/api/stories/graph-ops")
+    def story_graph_ops(body: dict):
+        """Data-driven graph FUNCTIONS. Attached *function books* (lorebooks whose entries
+        carry a function spec) define operations on the development graph. The transcript's
+        trigger terms OFFER the relevant functions; the model DECIDES which to call (emits
+        `graph_ops`); we apply them to the working graph and return it. See graph_ops.py."""
+        from ..server.services import lorebook_store as _LS
+        from . import graph_ops as GO
+
+        body = body or {}
+        graph = body.get("graph") if isinstance(body.get("graph"), dict) else {}
+        messages = body.get("messages") or []
+        transcript = "\n".join(str(m.get("content", "")) for m in messages if isinstance(m, dict))
+
+        # Collect function definitions from every attached book (function entries only).
+        fns: list = []
+        for b in (body.get("lorebooks") or []):
+            scope = re.sub(r"[^\w\-]+", "_", str(b))
+            fns += GO.parse_functions(_LS.load_lorebook(ctx.root, scope))
+        off = GO.offered(fns, transcript)
+        if not off:
+            return {"ok": True, "graph": graph, "applied": [], "offered": []}
+
+        # Provider follows the SAME chain as the chat turn: Function → Lorebook → Preset.
+        # The attached function book binds a preset (model+params); that drives the ops call
+        # — it never crosses over to the free-chat config. Falls back to a builder stage /
+        # the workshop default only when no book is bound.
+        from ..server.services import presets as _P
+        script = body.get("script")
+        preset = _P.preset_for_books(ctx.root, body.get("lorebooks"))
+        if preset is not None:
+            provider = ctx.text_provider_for((preset.get("model") or "").strip() or None,
+                                             preset.get("params") or {},
+                                             connection=preset.get("connection") or None)
+        else:
+            provider, _systems = ctx.builder_ctx(body, script or "workshop")
+        if provider is None or not hasattr(provider, "generate_text"):
+            return JSONResponse({"error": "no chat connection — connect a chat model first"}, status_code=400)
+
+        label = (body.get("artifact_label") or "DOCUMENT").strip()
+        system = (
+            f"You edit a JSON {label} by calling functions, filling each function's params from "
+            "the conversation.\n\n"
+            + GO.functions_prompt(off)
+            + f"\n\nCURRENT {label}:\n" + json.dumps(graph, ensure_ascii=False)
+            + "\n\nEmit `graph_ops` — the function calls that apply the changes the writer asked "
+            "for. Fill EVERY param each function needs (never leave a name/value blank) and use "
+            "EXACT ids from the document above. When you ADD a new item, set ALL its fields in "
+            "that same add call's params — a new item's id is assigned afterward, so you cannot "
+            "reference it later in the same batch. Emit an empty list if no change is called for. "
+            "Only call functions from the list above by their exact name; never invent names."
+        )
+        prompt = transcript or f"Apply the appropriate functions to the {label.lower()}."
+        try:
+            data = provider.generate_text(system=system, prompt=prompt, emits=GO.ops_schema(off)).data or {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"graph-ops failed: {exc}"}, status_code=500)
+        new_graph, log = GO.apply_ops(graph, data.get("graph_ops") or [], fns)
+        return {"ok": True, "graph": new_graph, "applied": log, "offered": [f.name for f in off]}
 
     # ── Story session checkpoints (server-side) ───────────────────────────────
 

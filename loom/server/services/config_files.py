@@ -11,6 +11,34 @@ import json
 from pathlib import Path
 
 
+# -- app-wide flags ----------------------------------------------------------
+# Small global switches (not per-config). `allow_nsfw` is the content gate: when False,
+# nsfw-rated lorebooks are excluded from retrieval everywhere. Stored in configs/app.json.
+APP_FLAGS_DEFAULT = {"allow_nsfw": True}
+
+
+def load_app_flags(root: Path) -> dict:
+    path = root / "configs" / "app.json"
+    cfg = dict(APP_FLAGS_DEFAULT)
+    if path.is_file():
+        try:
+            cfg.update(json.loads(path.read_text(encoding="utf-8")) or {})
+        except (ValueError, OSError):
+            pass
+    cfg["allow_nsfw"] = bool(cfg.get("allow_nsfw", True))
+    return cfg
+
+
+def save_app_flags(root: Path, data: dict) -> dict:
+    cfg = load_app_flags(root)
+    if (data or {}).get("allow_nsfw") is not None:
+        cfg["allow_nsfw"] = bool(data["allow_nsfw"])
+    path = root / "configs" / "app.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
+    return cfg
+
+
 # -- story builder -----------------------------------------------------------
 STORY_BUILDER_DEFAULT = {"model": "", "models": {}, "systems": {}, "inventions": {}}
 
@@ -180,21 +208,53 @@ def _default_chat_config() -> dict:
     # `script` binds a config to a pipeline action ('' = free chat). `workflow` is the
     # ComfyUI workflow for image-role scripts (text scripts/chat use `model` instead).
     # `params` holds inference controls (temperature, top_p, …) — see _PARAM_SPEC.
+    # `mode` is the ADDRESS mode — how the model is framed:
+    #   '' (auto) → roleplay for free chat, assist for script-bound flows
+    #   'roleplay' → the model BECOMES the character (in-character dialogue)
+    #   'assist'   → the model is a developmental collaborator working WITH the writer
+    #                ON the document; the character is the SUBJECT, never inhabited.
+    # `context` holds context-window controls (history depth, what extra context to inject).
     return {"id": "default", "name": "Default", "model": "", "system": "",
-            "lorebooks": [], "params": {}, "script": "", "workflow": ""}
+            "lorebooks": [], "params": {}, "script": "", "workflow": "",
+            "mode": "", "context": {}}
 
 
 CHAT_CONFIGS_DEFAULT = {"active": "default", "configs": [_default_chat_config()]}
 
 # The editable fields of a single config (stray UI keys are dropped on save).
 _CHAT_CONFIG_FIELDS = ("id", "name", "model", "system", "lorebooks", "params",
-                       "script", "workflow")
+                       "script", "workflow", "mode", "context")
+
+# Context-window controls a config may set (key → coercion). Blank = sensible default.
+_CONTEXT_SPEC = {"history_turns": int, "lore_top_k": int, "include_persona": bool}
+
+
+def _clean_context(raw: dict) -> dict:
+    out: dict = {}
+    for k, cast in _CONTEXT_SPEC.items():
+        v = (raw or {}).get(k)
+        if v is None or v == "":
+            continue
+        try:
+            out[k] = cast(v)
+        except (TypeError, ValueError):
+            pass
+    return out
+
+
+def address_mode(cfg: dict) -> str:
+    """Resolve a config's effective address mode. Explicit 'roleplay'/'assist' wins;
+    otherwise script-bound configs assist the writer and free chat roleplays."""
+    m = (cfg or {}).get("mode") or ""
+    if m in ("roleplay", "assist"):
+        return m
+    return "assist" if (cfg or {}).get("script") else "roleplay"
 
 # Inference controls a config may set (subset; key → coercion). Only the ones a user
 # actually sets are stored and forwarded to the provider; the rest use model defaults.
-_PARAM_SPEC = {"temperature": float, "top_p": float, "top_k": int, "max_tokens": int,
-               "frequency_penalty": float, "presence_penalty": float,
-               "repetition_penalty": float, "min_p": float}
+_PARAM_SPEC = {"temperature": float, "top_p": float, "top_k": int, "top_a": float, "min_p": float,
+               "max_tokens": int, "frequency_penalty": float, "presence_penalty": float,
+               "repetition_penalty": float, "seed": int}
 
 
 def _clean_params(raw: dict) -> dict:
@@ -238,6 +298,8 @@ def _clean_chat_config(raw: dict) -> dict:
     cfg["lorebooks"] = [str(b) for b in (cfg.get("lorebooks") or []) if b]
     cfg["script"] = str(cfg.get("script") or "")
     cfg["params"] = _clean_params(cfg.get("params") or {})
+    cfg["mode"] = cfg.get("mode") if cfg.get("mode") in ("roleplay", "assist") else ""
+    cfg["context"] = _clean_context(cfg.get("context") or {})
     return cfg
 
 
@@ -325,10 +387,12 @@ def _stage_lore_block(root: Path, books: list) -> str:
 
         from .lorebook import format_lore_block
         from . import lorebook_store as _LS
+        from ...stories.graph_ops import is_function_entry
         entries = []
         for b in books:
             scope = _re.sub(r"[^\w\-]+", "_", str(b))
-            entries += [e for e in _LS.load_lorebook(root, scope) if e.enabled and e.content]
+            entries += [e for e in _LS.load_lorebook(root, scope)
+                        if e.enabled and e.content and not is_function_entry(e)]
             if len(entries) >= 8:
                 break
         return format_lore_block(entries[:8]) if entries else ""

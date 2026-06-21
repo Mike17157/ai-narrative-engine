@@ -8,7 +8,7 @@
   import LlmConsole from '$lib/components/story/LlmConsole.svelte';
   import StoryGraphCanvas from '$lib/components/graph/StoryGraphCanvas.svelte';
   import { stories, loadModels } from '$lib/stories.svelte.js';
-  import { get, put } from '$lib/api.js';
+  import { get, put, post } from '$lib/api.js';
   import { consumeSse } from '$lib/sse.js';
 
   let {
@@ -21,7 +21,11 @@
     openingMessage = '',    // first user turn (defaults to the endpoint's character read)
     sessionId = '',         // server-side checkpoint id; '' = no persistence
     onGraphChange = null,   // (graph) => void — fires on model AND user edits
-    actions = null,         // snippet(ctx) — ctx = { graph, busy, hasExchange, lastAssistant, ready }
+    // The host's action buttons. Aliased to `hostActions` so it doesn't collide with the
+    // `{#snippet actions()}` we pass down to LlmConsole — that shadowing made
+    // `{@render actions(...)}` recurse into the local snippet (invalid_snippet_arguments
+    // → stack overflow), which is what crashed the workshop.
+    actions: hostActions = null,   // snippet(ctx) — ctx = { graph, busy, hasExchange, lastAssistant, ready }
   } = $props();
 
   const SPINE_MARKER = '<<<SPINE>>>';
@@ -136,11 +140,34 @@
     } finally {
       busy = false;
       saveSession();   // checkpoint the turn (conversation + graph) server-side
+      if (autoFns) void runGraphOps();   // apply graph functions as part of the turn
     }
   }
 
   function send(text) {
     callWorkshop([...messages.filter((m) => m.content || m.role === 'user'), { role: 'user', content: text }]);
+  }
+
+  // Data-driven graph FUNCTIONS: attached function books expose ops; the transcript's
+  // trigger terms offer them and the model decides which to call (graph_ops). Applied
+  // server-side to the working graph; we swap the canvas to the result.
+  let fnBusy = $state(false);
+  let fnMsg = $state(null);
+  let autoFns = $state(false);   // run graph functions automatically after each turn
+  async function runGraphOps() {
+    if (fnBusy || busy) return;
+    fnBusy = true; fnMsg = null;
+    const r = await post('/stories/graph-ops', {
+      character, graph: workingGraph || {}, lorebooks, artifact_label: 'DEVELOPMENT GRAPH',
+      messages: messages.filter((m) => m.content),
+    });
+    fnBusy = false;
+    if (r.data?.ok) {
+      if (r.data.graph) setGraph(r.data.graph, true);
+      const ok = (r.data.applied || []).filter((a) => a.ok);
+      fnMsg = ok.length ? `✓ ${ok.map((a) => a.fn).join(', ')}`
+        : ((r.data.offered || []).length ? 'no changes called for' : 'attach a function book first');
+    } else fnMsg = r.data?.error || 'failed';
   }
 </script>
 
@@ -164,6 +191,26 @@
   {/snippet}
 
   {#snippet actions()}
-    {#if actions}{@render actions({ graph: workingGraph, busy, hasExchange, lastAssistant, ready })}{/if}
+    <button class="fnbtn" onclick={runGraphOps} disabled={busy || fnBusy}
+      title="Apply graph functions from attached function books — triggers offer, the model decides">
+      {fnBusy ? '⚙ working…' : '⚙ Functions'}
+    </button>
+    <label class="fnauto" title="Run graph functions automatically after every turn">
+      <input type="checkbox" bind:checked={autoFns} /> auto
+    </label>
+    {#if fnMsg}<span class="fnmsg">{fnMsg}</span>{/if}
+    {#if hostActions}{@render hostActions({ graph: workingGraph, busy, hasExchange, lastAssistant, ready })}{/if}
   {/snippet}
 </LlmConsole>
+
+<style>
+  .fnbtn {
+    font-size: 12px; padding: 7px 12px; border-radius: 8px; cursor: pointer;
+    background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted);
+  }
+  .fnbtn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  .fnbtn:disabled { opacity: .5; cursor: not-allowed; }
+  .fnauto { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; color: var(--muted); cursor: pointer; }
+  .fnauto input { width: 13px; height: 13px; }
+  .fnmsg { font-size: 11.5px; color: var(--muted); align-self: center; }
+</style>

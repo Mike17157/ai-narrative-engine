@@ -7,7 +7,7 @@
   import { get } from '$lib/api.js';
   import { app } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
-  import { openConfigModal } from '$lib/configModal.svelte.js';
+  import { openConfigModal, configModal } from '$lib/configModal.svelte.js';
 
   let active = $derived(chars.list.find((c) => c.key === app.activeChar) || null);
   let persona = $derived(app.personas.find((p) => p.id === app.activePersona) || null);
@@ -20,20 +20,22 @@
   let abortCtl = null;
   let msgBox;
 
-  // Active chat config (label in the header) + this thread's attached lorebooks.
-  let cfgLib = $state({ active: 'default', configs: [] });
-  let activeCfg = $derived(cfgLib.configs.find((c) => c.id === cfgLib.active) || null);
-  let lorebooks = $state([]);   // override for this thread; seeded from the config's defaults
+  // The active PRESET drives free chat now (model + mode + prompt slots + params). Shown in
+  // the header; chosen via the ⚙. This thread's attached lorebooks are separate (the surface
+  // owns them) and feed retrieval / can bind a function preset.
+  let presetLib = $state({ active: '', presets: [] });
+  let activePreset = $derived(presetLib.presets.find((p) => p.id === presetLib.active) || null);
+  let lorebooks = $state([]);   // this thread's attached books
 
   async function loadCfg() {
-    try {
-      cfgLib = await get('/chat-configs');
-      // Seed thread lorebooks from the active config unless the user already set some.
-      if (!lorebooks.length) lorebooks = [...(activeCfg?.lorebooks || [])];
-    } catch { /* no configs */ }
+    try { presetLib = await get('/presets'); } catch { /* no presets */ }
   }
 
   onMount(async () => { if (!chars.list.length) await loadChars(); await loadCfg(); scrollBottom(); });
+
+  // Re-read the active preset whenever the ⚙ modal closes (it may have changed there).
+  let wasOpen = false;
+  $effect(() => { if (wasOpen && !configModal.open) loadCfg(); wasOpen = configModal.open; });
 
   function scrollBottom() { tick().then(() => { if (msgBox) msgBox.scrollTop = msgBox.scrollHeight; }); }
 
@@ -113,7 +115,7 @@
       {#if active?.avatar}<img class="av" src={active.avatar} alt={active.name} />{:else}<div class="av ph">{(active?.name?.[0] || '∅')}</div>{/if}
       <div class="whometa">
         <span class="cname">{active?.name || 'No character'}</span>
-        <span class="csub">{persona ? `as ${persona.name}` : 'neutral persona'}{activeCfg ? ` · ${activeCfg.name}` : ''}</span>
+        <span class="csub">{persona ? `as ${persona.name}` : 'neutral persona'}{activePreset ? ` · ${activePreset.name}` : ''}</span>
       </div>
     </div>
     <div class="tools">

@@ -39,13 +39,25 @@ class OpenAICompatProvider:
         )
         self.model: str = options.get("model", "openai/gpt-4o-mini")
         self.max_tokens: int = int(options.get("max_tokens", 1024))
-        # Optional sampling controls — only those explicitly set are forwarded.
+        # Optional sampling controls — only those explicitly set are forwarded straight to
+        # /chat/completions (OpenRouter forwards model-specific ones where supported).
         self.sampling: dict[str, Any] = {}
-        for k in ("temperature", "top_p", "top_k", "frequency_penalty",
-                  "presence_penalty", "repetition_penalty", "min_p"):
+        for k in ("temperature", "top_p", "top_k", "top_a", "min_p",
+                  "frequency_penalty", "presence_penalty", "repetition_penalty", "seed"):
             v = options.get(k)
             if v is not None and v != "":
                 self.sampling[k] = v
+        # Stop sequences (string or list) and reasoning effort (reasoning models).
+        stop = options.get("stop")
+        if isinstance(stop, str) and stop.strip():
+            stop = [stop.strip()]
+        if isinstance(stop, (list, tuple)):
+            stop = [str(s) for s in stop if str(s).strip()]
+            if stop:
+                self.sampling["stop"] = stop
+        effort = options.get("reasoning_effort")
+        if effort in ("low", "medium", "high"):
+            self.sampling["reasoning"] = {"effort": effort}
 
     def _err(self, resp) -> str:
         """Surface the provider's real error body, not a bare 'HTTP 404'."""
