@@ -40,6 +40,11 @@ loom/data/
 # Local model weights (GGUF) — large binaries, never tracked
 *.gguf
 
+# Runtime-generated state (not source): lorebook DB, wizard drafts, play sessions
+configs/lorebooks.db
+configs/stories/drafts/
+configs/story_sessions/
+
 # Third-party trainer clone
 trainer/
 
