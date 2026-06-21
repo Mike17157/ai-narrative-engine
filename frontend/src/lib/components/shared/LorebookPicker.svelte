@@ -20,7 +20,9 @@
   function browse() {
     openBrowse({
       kind: 'lorebook', multi: true, value, title: 'Attach lorebooks',
-      filter: exclude.length ? (b) => !exclude.includes(b.id) : null,
+      // Only offer GLOBAL books — local ones (function/craft/character) belong to a place,
+      // not a hand-attached chat. Keep any already-attached book visible so it can be removed.
+      filter: (b) => !exclude.includes(b.id) && (b.scope !== 'local' || value.includes(b.id)),
       onConfirm: (ids) => onchange?.(ids),
     });
   }

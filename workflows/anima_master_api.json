@@ -208,7 +208,7 @@
   "403": {
     "class_type": "PrimitiveStringMultiline",
     "inputs": {
-      "value": "worst quality, low quality, score_1, score_2, score_3, (simple background, outside border, white border), (ai-generated), unfinished, work-in-progress, construction lines, blank, letterboxed, blurry, jpeg artifacts, sepia, mutated, mutated digits, missing fingers, extra digit, fewer digits, artistic error, unusual anatomy, (watermark, patreon username, web address, patreon logo, weibo username, weibo logo, watermark:1.25), multiple views, (anime screenshot:0.75), monochrome, distorted anatomy, anime coloring, comic, western comics \\(style\\), furry, english text, anatomically incorrect, spot color, doodle on background,  "
+      "value": "bad anatomy, bad hands, signature, censored, worst quality, low quality, score_1, score_2, score_3, (simple background, outside border, white border), (ai-generated), unfinished, work-in-progress, construction lines, blank, letterboxed, blurry, jpeg artifacts, sepia, mutated, mutated digits, missing fingers, extra digit, fewer digits, artistic error, unusual anatomy, (watermark, patreon username, web address, patreon logo, weibo username, weibo logo, watermark:1.25), multiple views, (anime screenshot:0.75), monochrome, distorted anatomy, anime coloring, comic, western comics \\(style\\), furry, english text, anatomically incorrect, spot color, doodle on background,  "
     },
     "_meta": {
       "title": "negative"
@@ -1340,9 +1340,9 @@
   "s890__905": {
     "class_type": "KSampler Config (rgthree)",
     "inputs": {
-      "steps_total": 29,
-      "refiner_step": 16,
-      "cfg": 5,
+      "steps_total": 24,
+      "refiner_step": 13,
+      "cfg": 4,
       "sampler_name": "er_sde",
       "scheduler": "sgm_uniform"
     },
@@ -1362,7 +1362,7 @@
   "s890__1365": {
     "class_type": "UNet loader with Name (Image Saver)",
     "inputs": {
-      "unet_name": "anima\\miaomiaoHarem_animaBase.safetensors",
+      "unet_name": "anima\novaAnimeAM_v25.safetensors",
       "weight_dtype": "default"
     },
     "_meta": {

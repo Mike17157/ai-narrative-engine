@@ -44,6 +44,7 @@
       tab,
       lorebooks,
       onLorebooks: (v) => { lorebooks = v; },
+      presetGroup: 'Chat',   // the chat surface only offers Chat presets
     });
   }
 

@@ -54,6 +54,20 @@
   let books = $state([]);
   let boundBooks = $derived((p) => books.filter((b) => b.preset === p));
 
+  // Group presets by function, ordered by `order` (the pipeline flow); ungrouped trail last.
+  let groupedPresets = $derived.by(() => {
+    const m = new Map();
+    for (const p of [...presets].sort((a, b) => (a.order || 0) - (b.order || 0))) {
+      const g = p.group || 'Other';
+      if (!m.has(g)) m.set(g, []);
+      m.get(g).push(p);
+    }
+    // Order groups by their lowest member order so the flow reads top-to-bottom.
+    return [...m.entries()]
+      .map(([group, items]) => ({ group, items, ord: Math.min(...items.map((p) => p.order || 0)) }))
+      .sort((a, b) => a.ord - b.ord);
+  });
+
   const MODES = [
     { v: '', label: 'Auto', hint: 'Roleplay for free chat, Assist for function flows' },
     { v: 'roleplay', label: 'Roleplay', hint: 'Speaks in-character' },
@@ -143,17 +157,20 @@
 
 <div class="wrap">
   <div class="list">
-    <div class="lhead">Presets <span class="lo">— model + mode + params</span></div>
-    {#each presets as p (p.id)}
-      <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
-        <span class="nm">{p.name || p.id}</span>
-        <span class="tags">
-          <span class="mtag" class:assist={(p.mode || '') === 'assist'} class:rp={(p.mode || '') === 'roleplay'}>
-            {p.mode || 'auto'}
+    <div class="lhead">Presets <span class="lo">— grouped by function, in pipeline order</span></div>
+    {#each groupedPresets as grp (grp.group)}
+      <div class="pgroup">{grp.group}</div>
+      {#each grp.items as p (p.id)}
+        <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
+          <span class="nm">{p.name || p.id}</span>
+          <span class="tags">
+            <span class="mtag" class:assist={(p.mode || '') === 'assist'} class:rp={(p.mode || '') === 'roleplay'}>
+              {p.mode || 'auto'}
+            </span>
+            {#if boundBooks(p.id).length}<span class="btag" title="lorebooks bound to this preset">{boundBooks(p.id).length}📚</span>{/if}
           </span>
-          {#if boundBooks(p.id).length}<span class="btag" title="lorebooks bound to this preset">{boundBooks(p.id).length}📚</span>{/if}
-        </span>
-      </button>
+        </button>
+      {/each}
     {/each}
     <button class="new" onclick={newPreset}>＋ New preset</button>
   </div>
@@ -164,6 +181,16 @@
         <label>Name</label>
         <input class="fld" bind:value={sel.name} />
       </div>
+      <div class="erow">
+        <label>Group</label>
+        <input class="fld" list="preset-groups" bind:value={sel.group} placeholder="e.g. Story arc" title="Buckets presets in the list & picker" />
+        <label class="ordl" title="Sort order within the flow (lower = earlier)">order
+          <input class="fld onum" type="number" step="1" bind:value={sel.order} />
+        </label>
+      </div>
+      <datalist id="preset-groups">
+        {#each [...new Set(presets.map((p) => p.group).filter(Boolean))] as g}<option value={g}></option>{/each}
+      </datalist>
       <div class="erow col">
         <label>Description <span class="lo">— what this preset is for</span></label>
         <textarea class="fld ta" rows="1" use:autosize={sel.description} bind:value={sel.description}></textarea>
@@ -265,6 +292,11 @@
   .row.on { border-color: var(--accent); background: var(--elev-2); }
   .nm { flex: 1; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tags { display: flex; align-items: center; gap: 5px; flex: none; }
+  .pgroup { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); padding: 10px 4px 3px; }
+  .pgroup:first-child { padding-top: 2px; }
+  .ordl { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+  .onum { width: 60px; flex: none; padding: 6px 8px; font-size: 12.5px; }
   .mtag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--faint);
     background: var(--elev); border-radius: 999px; padding: 1px 7px; }
   .mtag.assist { color: var(--accent); background: rgba(109,140,255,.14); }

@@ -25,9 +25,16 @@ from .config_files import _clean_params
 
 _MODES = ("", "roleplay", "assist")
 
+# Built-in preset ids that were renamed/removed — dropped on load so they don't linger.
+# 'extractor' (generic "Structured Extractor") → 'location_builder' (a real function).
+_RETIRED_PRESETS = {"extractor"}
+
 
 def _default_preset() -> dict:
     return {"id": "default", "name": "Default", "description": "",
+            # Organization: `group` buckets presets by function; `order` sequences them
+            # (the pipeline flow — spine → arc → cast → image → sim — since they feed each other).
+            "group": "", "order": 0,
             "connection": "", "model": "", "mode": "",
             # Prompt slots (positions in the assembled prompt):
             #   system       — top system message (standing rules)
@@ -44,53 +51,166 @@ def _default_preset() -> dict:
 # preset, but always EXPLICITLY (via their book), never by accident. `mode` doubles as an
 # organizing axis — roleplay presets speak in-character, assist presets do craft work.
 _SEED_PRESETS = [
-    # ── Roleplay (the model BECOMES someone) ──
-    {"id": "free_chat", "name": "Free Chat", "mode": "roleplay",
-     "description": "In-character roleplay — the standalone chat surface speaks AS the character."},
-    {"id": "npc_actor", "name": "NPC Actor", "mode": "roleplay",
-     "description": "Voices a single info-isolated cast member in the story simulation — knows only "
-                    "what that character knows, acts on their goals + secrets. Never breaks character."},
-    # ── Assist · story development ──
-    {"id": "story_consultant", "name": "Story Consultant", "mode": "assist",
-     "description": "A developmental craft collaborator that builds the story document with the "
-                    "writer and never roleplays. Used by the workshop / storyboard / scenes / cast flows."},
+    # ══ Chat ══
+    {"id": "free_chat", "name": "Free Chat", "mode": "roleplay", "group": "Chat", "order": 0,
+     "description": "In-character roleplay — the standalone chat surface speaks AS the character.",
+     # Roleplay: the character's own persona governs voice; keep the base light.
+     "system": ""},
+
+    # ══ Story arc — develop the shape of the story ══
     {"id": "spine_architect", "name": "Spine Architect", "mode": "assist",
+     "group": "Story arc", "order": 10,
      "description": "Character psychologist — maps the emotional spine (wound / lie / truth / heart), "
-                    "the inner journey, not events."},
-    {"id": "scene_director", "name": "Scene Director", "mode": "assist",
-     "description": "Runs emergent scene bursts in the simulation, decides who acts, and progresses "
-                    "the story's features. Directs, never roleplays."},
-    # ── Assist · extraction & building ──
-    {"id": "extractor", "name": "Structured Extractor", "mode": "assist",
-     "description": "Pulls structured data (locations, cast, beats) out of prose. Terse, literal, no roleplay."},
+                    "the inner journey, not events.",
+     "system": (
+         "You are a character psychologist and story architect. You do NOT outline events — you map "
+         "the INNER journey of a person, the skeleton every character-driven arc hangs from.\n\n"
+         "From the character (and any premise), surface their EMOTIONAL SPINE:\n"
+         "• WOUND — the specific unhealed hurt that carved them. A formative event or pattern, not a "
+         "trait. Concrete and rooted in something real.\n"
+         "• LIE — the false belief they formed to protect themselves from the wound. This is the "
+         "central dramatic engine; the whole story exists to dismantle it. Psychologically honest, "
+         "never abstract.\n"
+         "• TRUTH — what they must finally accept to grow: the earned opposite of the lie, paid for "
+         "at cost, never given.\n"
+         "• HEART — the human resonance at the center; the thing a stranger would recognize and feel.\n\n"
+         "Keep each anchor specific to THIS person. Everything downstream — arc, scenes, choices — "
+         "must hang from this spine.")},
+    {"id": "story_consultant", "name": "Story Consultant", "mode": "assist",
+     "group": "Story arc", "order": 11,
+     "description": "A developmental craft collaborator that builds the story document with the "
+                    "writer and never roleplays. Workshop / storyboard / scenes / cast flows.",
+     "system": (
+         "You are a story developmental editor working WITH a writer to find the truest story latent "
+         "in a character. You think the way working modern-craft writers think (Will Storr, Lisa "
+         "Cron, K.M. Weiland, John Truby, George Saunders, Donald Maass, Shawn Coyne) — not in "
+         "academic literary vocabulary.\n\n"
+         "HOW YOU WORK:\n"
+         "- DIAGNOSTIC FIRST. Open with what you SEE — the wound, the misbelief, the gap between what "
+         "they want and what they need, the shape of change latent in them. Don't open with questions.\n"
+         "- OPINIONATED. If an idea dodges the character's real developmental potential, say so and "
+         "propose the harder, truer arc. Think in growth cycles: meet the truth, flinch, retreat into "
+         "the lie, pay a cost, circle back — what finally breaks the pattern?\n"
+         "- CONCRETE. Ground every craft principle in THIS character. When you name an event, name "
+         "the internal inflection it exists to force; plot is just the machine that tests the person.\n"
+         "- The writer wants interiority, tension, melancholy and earned change — resist tidy or "
+         "shallow premises. Conversational and substantive (2–4 short paragraphs), never bullet lists.")},
+
+    # ══ Cast & world — build the people, places and lore ══
+    {"id": "location_builder", "name": "Location Builder", "mode": "assist",
+     "group": "Cast & world", "order": 20,
+     "description": "Builds the story's settings — neutral places described objectively, ready for backgrounds.",
+     "system": (
+         "You build the story's LOCATIONS — the neutral places where scenes happen. Describe each "
+         "place OBJECTIVELY: physical appearance, materials, atmosphere, light and layout — no people, "
+         "no events, no plot. Give each a short name and a concrete description a set designer could "
+         "build from, plus (when useful) an image background prompt. Stay consistent with the world's "
+         "tone, era and geography; invent grounded detail where the source is sparse, never contradict it.")},
     {"id": "character_builder", "name": "Character Builder", "mode": "assist",
-     "description": "Art-directs a character: fills persona, physical features and appearance from the "
-                    "card, inferring tasteful detail that fits their world/age/role."},
+     "group": "Cast & world", "order": 21,
+     "description": "Art-directs a character: persona + physical features + appearance from the card, "
+                    "inferring tasteful detail that fits their world/age/role.",
+     "system": (
+         "You are a character art director and biographer. Given a card, flesh out a vivid, "
+         "internally consistent person:\n"
+         "- PERSONA: personality, voice, wants, fears and the contradiction that makes them worth "
+         "reading about.\n"
+         "- ROLE: how they function in the story.\n"
+         "- APPEARANCE: persistent physical traits as EXPLICIT, ATOMIC visual descriptors — one "
+         "attribute per item ('silver hair', 'long hair', 'wavy hair', 'violet eyes', 'pale skin', "
+         "'mole under eye'); split every compound ('long silver hair' → 'long hair' + 'silver hair').\n\n"
+         "Draw specific detail from the notes; where sparse, INFER tasteful detail that fits their "
+         "world, age and role — but never contradict anything stated. Persistent traits ONLY: no "
+         "clothing, pose, expression or background (those come later).")},
     {"id": "wardrobe_stylist", "name": "Wardrobe Stylist", "mode": "assist",
-     "description": "Designs outfits/wardrobe for a character and renders them as image-ready tags."},
+     "group": "Cast & world", "order": 22,
+     "description": "Designs outfits/wardrobe for a character and renders them as image-ready descriptors.",
+     "system": (
+         "You are a wardrobe stylist. Design outfits that express a character's personality, role, "
+         "status and world — a small coherent set (everyday, occasion, and a signature look). For "
+         "each, give a one-line concept, then the garments as explicit, image-ready descriptors. "
+         "Keep every choice grounded in the setting and the person; avoid generic 'fantasy outfit' "
+         "filler. Describe only what they WEAR — never restate persistent body traits.")},
     {"id": "lore_author", "name": "Lore Author", "mode": "assist",
+     "group": "Cast & world", "order": 23,
      "description": "Authors lorebook entries (places, factions, items, rules) in the established tone "
-                    "— the engine behind ✨ Augment."},
-    # ── Assist · image prompting (some need a VISION model) ──
-    {"id": "tag_prompter", "name": "Tag Prompter", "mode": "assist",
-     "description": "Writes booru-tag image prompts. Tags only, never prose or roleplay."},
-    {"id": "chat_prompt", "name": "Chat Prompt Writer", "mode": "assist",
-     "description": "Turns the current chat moment into a scene image prompt for inline illustration."},
+                    "— the engine behind ✨ Augment.",
+     "system": (
+         "You author lorebook entries — self-contained facts: a place, person, faction, item, rule or "
+         "event. Each entry has a short TITLE, a few lowercase trigger KEYWORDS that should pull it "
+         "into context when mentioned, and a concise, concrete CONTENT paragraph written in the "
+         "established tone. Propose genuinely new, complementary entries; never duplicate what already "
+         "exists and never contradict canon. Vivid and specific over generic.")},
+
+    # ══ Image prompts — turn people/scenes into prompts (some need a VISION model) ══
     {"id": "vision_describer", "name": "Vision Describer", "mode": "assist",
+     "group": "Image prompts", "order": 30,
      "description": "Reads a reference IMAGE and writes the base physical-feature prompt from it. "
-                    "Pick a VISION-capable model for this preset."},
+                    "Pick a VISION-capable model for this preset.",
+     "system": (
+         "You are given a reference IMAGE of a character. Read it and produce their PERSISTENT "
+         "physical features as explicit, atomic visual descriptors ('long hair', 'silver hair', "
+         "'violet eyes', 'pale skin', 'mole under eye') — split every compound into single attributes. "
+         "Describe only what is actually VISIBLE and persistent: hair, eyes, skin, build, "
+         "distinguishing marks. No clothing, pose, expression or background. Stay faithful to the "
+         "image; never invent a trait it doesn't show. (Requires a vision-capable model.)")},
+    {"id": "tag_prompter", "name": "Tag Prompter", "mode": "assist",
+     "group": "Image prompts", "order": 31,
+     "description": "Writes booru-tag image prompts. Tags only, never prose or roleplay.",
+     "system": (
+         "You write image prompts as Danbooru/booru TAGS only — never prose. Output comma-separated "
+         "lowercase tags using real booru vocabulary, ordered roughly subject → physical features → "
+         "clothing → setting → framing (e.g. '1girl, silver hair, long hair, violet eyes, school "
+         "uniform, classroom, looking at viewer'). No sentences, no narration, no quality boilerplate "
+         "unless asked. If the prompt uses BREAK regions, preserve them.")},
+    {"id": "chat_prompt", "name": "Chat Prompt Writer", "mode": "assist",
+     "group": "Image prompts", "order": 32,
+     "description": "Turns the current chat moment into a scene image prompt for inline illustration.",
+     "system": (
+         "You turn the CURRENT chat moment into an image prompt for inline illustration. Read the "
+         "latest exchange, identify the character(s) present and their expression, pose, action and "
+         "setting right now, and render exactly THIS beat as booru tags (subject → expression/pose → "
+         "action → setting → framing). Not a generic portrait — the specific moment. Tags only, no prose.")},
+
+    # ══ Simulation — runtime, emergent play ══
+    {"id": "scene_director", "name": "Scene Director", "mode": "assist",
+     "group": "Simulation", "order": 40,
+     "description": "Runs emergent scene bursts in the simulation, decides who acts, and progresses "
+                    "the story's features. Directs, never roleplays.",
+     "system": (
+         "You are the DIRECTOR of an emergent, character-driven simulation. You do not voice "
+         "characters — you decide what happens between them. Each beat: read the current world state, "
+         "the cast's goals and secrets and the dramatic pressure; choose who acts and the event that "
+         "tests them; then advance the story's open features (relationships, plots, revelations) by "
+         "the smallest honest increment. Favor consequence and friction over comfort, keep the world "
+         "consistent, and never resolve tension for free. Output direction, not prose.")},
+    {"id": "npc_actor", "name": "NPC Actor", "mode": "roleplay",
+     "group": "Simulation", "order": 41,
+     "description": "Voices a single info-isolated cast member in the story simulation — knows only "
+                    "what that character knows, acts on their goals + secrets. Never breaks character.",
+     "system": (
+         "You voice a SINGLE character in a living scene. You know only what this character knows — "
+         "act on their goals, fears and secrets, and never reveal or rely on anything they couldn't "
+         "know. Stay fully in character: speech, body language and choices consistent with who they "
+         "are and what they want right now. React truthfully to what just happened; never narrate "
+         "other characters' inner lives and never break the fourth wall.")},
 ]
 
 
 def _clean_preset(raw: dict) -> dict:
     p = _default_preset()
     p.update({k: v for k, v in (raw or {}).items()
-              if k in ("id", "name", "description", "connection", "model", "mode", "system",
-                       "author_note", "author_depth", "post_history", "params", "stop",
-                       "reasoning_effort")})
+              if k in ("id", "name", "description", "group", "order", "connection", "model",
+                       "mode", "system", "author_note", "author_depth", "post_history", "params",
+                       "stop", "reasoning_effort")})
     p["id"] = str(p.get("id") or "").strip() or "preset"
     p["name"] = str(p.get("name") or p["id"]).strip()
     p["description"] = str(p.get("description") or "").strip()
+    p["group"] = str(p.get("group") or "").strip()
+    try:
+        p["order"] = int(p.get("order") or 0)
+    except (TypeError, ValueError):
+        p["order"] = 0
     p["connection"] = str(p.get("connection") or "").strip()
     p["model"] = str(p.get("model") or "").strip()
     p["mode"] = p["mode"] if p.get("mode") in _MODES else ""
@@ -124,17 +244,33 @@ def load_presets(root: Path) -> dict:
                 data = loaded
         except (ValueError, OSError):
             pass
-    data["presets"] = [_clean_preset(p) for p in data.get("presets") or []]
+    data["presets"] = [_clean_preset(p) for p in data.get("presets") or []
+                       if p.get("id") not in _RETIRED_PRESETS]
     # Ensure the default + every built-in seed exists (by id). New seeds appear on existing
     # installs too; user EDITS to a seed are preserved (we only add missing ids). A deleted
     # built-in seed re-appears on next load — like the reserved lorebooks.
-    have = {p["id"] for p in data["presets"]}
+    by_id = {p["id"]: p for p in data["presets"]}
+    have = set(by_id)
     added = False
     if "default" not in have:
         data["presets"].insert(0, _default_preset()); added = True; have.add("default")
     for s in _SEED_PRESETS:
-        if s["id"] not in have:
-            data["presets"].append(_clean_preset(s)); added = True; have.add(s["id"])
+        seed = _clean_preset(s)
+        cur = by_id.get(seed["id"])
+        if cur is None:
+            data["presets"].append(seed); added = True; have.add(seed["id"])
+            continue
+        # Backfill new/blank fields from the seed without clobbering user edits — so an
+        # existing install picks up the fleshed system prompts + grouping the first time.
+        for f in ("system", "group", "description"):
+            if not cur.get(f) and seed.get(f):
+                cur[f] = seed[f]; added = True
+        if not cur.get("order") and seed.get("order"):
+            cur["order"] = seed["order"]; added = True
+        # Repair a name that leaked to the generic "Default" (a partial upsert with no name
+        # defaults it there) — restore the seed's real name.
+        if seed.get("name") and seed["id"] != "default" and cur.get("name") in ("", "Default"):
+            cur["name"] = seed["name"]; added = True
     if data.get("active") not in have:
         data["active"] = "free_chat" if "free_chat" in have else data["presets"][0]["id"]
         added = True
@@ -180,8 +316,12 @@ def get_preset(root: Path, preset_id: str | None) -> dict | None:
 
 
 def upsert_preset(root: Path, body: dict) -> dict:
+    """Create or update one preset. A PARTIAL body merges onto the existing preset (so e.g.
+    posting just {id, name} never wipes its system/params)."""
     lib = load_presets(root)
-    clean = _clean_preset(body or {})
+    body = dict(body or {})
+    existing = next((p for p in lib["presets"] if p["id"] == body.get("id")), None)
+    clean = _clean_preset({**existing, **body} if existing else body)
     presets = [p for p in lib["presets"] if p["id"] != clean["id"]]
     presets.append(clean)
     save_presets(root, {"active": lib.get("active"), "presets": presets})

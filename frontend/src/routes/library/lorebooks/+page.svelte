@@ -55,8 +55,17 @@
   // chooses which model preset runs whatever function/flow uses it.
   let presets = $state([]);
 
+  // Recycle bin: archived books live in their own view.
+  let bin = $state(false);
+  let binCount = $state(0);
+  async function loadBinCount() {
+    try { binCount = ((await get('/lorebooks?archived=1')).books || []).length; } catch { binCount = 0; }
+  }
+  async function toggleBin() { bin = !bin; selId = null; detail = null; catFilter = ''; await loadBooks(); }
+
   onMount(async () => {
     await loadBooks();
+    await loadBinCount();
     try { presets = (await get('/presets')).presets || []; } catch { presets = []; }
     loading = false;
   });
@@ -69,7 +78,7 @@
   });
 
   async function loadBooks() {
-    const r = await get('/lorebooks');
+    const r = await get('/lorebooks' + (bin ? '?archived=1' : ''));
     books = r?.books || [];
     if (!selId && books.length) selectBook(books[0].id);
     else if (selId) { const b = books.find((x) => x.id === selId); if (!b) detail = null, selId = null; }
@@ -129,8 +138,8 @@
   }
   async function saveMeta() {
     if (!detail) return;
-    const { name, description, rating, category, enabled, preset } = detail.book;
-    const r = await patch('/lorebooks/' + encodeURIComponent(selId), { name, description, rating, category, enabled, preset: preset || '' });
+    const { name, description, rating, category, enabled, preset, scope } = detail.book;
+    const r = await patch('/lorebooks/' + encodeURIComponent(selId), { name, description, rating, category, enabled, preset: preset || '', scope: scope || 'global' });
     if (r.ok) { metaMsg = '✓'; await refreshCounts(); }
     else metaMsg = '✗';
   }
@@ -144,13 +153,22 @@
     if (r.ok && r.data?.book) { await loadBooks(); selectBook(r.data.book.id); }
   }
 
-  async function deleteBook(b) {
-    const verb = b.builtin ? `Clear all entries from “${b.name}”? (a built-in book; metadata is kept)`
-                           : `Delete the lorebook “${b.name}” and all its entries?`;
-    if (!confirm(verb)) return;
+  // Soft-delete into the recycle bin (reversible). Works on built-in books too.
+  async function archiveBook(b) {
+    await post('/lorebooks/' + encodeURIComponent(b.id) + '/archive', { archived: true });
+    if (selId === b.id) { selId = null; detail = null; }
+    await loadBooks(); await loadBinCount();
+  }
+  async function restoreBook(b) {
+    await post('/lorebooks/' + encodeURIComponent(b.id) + '/archive', { archived: false });
+    if (selId === b.id) { selId = null; detail = null; }
+    await loadBooks(); await loadBinCount();
+  }
+  async function deleteForever(b) {
+    if (!confirm(`Permanently delete “${b.name}” and all its entries? This can't be undone.`)) return;
     await del('/lorebooks/' + encodeURIComponent(b.id));
     if (selId === b.id) { selId = null; detail = null; }
-    await loadBooks();
+    await loadBooks(); await loadBinCount();
   }
 
   // ── Entries (auto-save per entry) ────────────────────────────────────────
@@ -266,19 +284,25 @@
   <!-- ── Library ──────────────────────────────────────────────────────────── -->
   <aside class="lib">
     <div class="libhead">
-      <input class="search" placeholder="Search lorebooks…" bind:value={search} />
-      <button class="new" onclick={createBook} title="New lorebook">＋</button>
+      <input class="search" placeholder={bin ? 'Search recycle bin…' : 'Search lorebooks…'} bind:value={search} />
+      {#if !bin}<button class="new" onclick={createBook} title="New lorebook">＋</button>{/if}
+      <button class="new binbtn" class:on={bin} onclick={toggleBin} title={bin ? 'Back to library' : 'Recycle bin'}>{bin ? '←' : `🗑${binCount ? ' ' + binCount : ''}`}</button>
     </div>
-    <div class="cats">
-      <button class="cat" class:on={!catFilter} onclick={() => (catFilter = '')}>All</button>
-      {#each CATEGORIES as c}
-        <button class="cat" class:on={catFilter === c} onclick={() => (catFilter = catFilter === c ? '' : c)}>{CAT_ICON[c]} {c}</button>
-      {/each}
-    </div>
-    {#if ratingFilter}<div class="ratingnote">showing <b>{ratingFilter.toUpperCase()}</b> only</div>{/if}
+    {#if bin}
+      <div class="binbanner">♻ Recycle bin — archived books, hidden from chats & pickers</div>
+    {:else}
+      <div class="cats">
+        <button class="cat" class:on={!catFilter} onclick={() => (catFilter = '')}>All</button>
+        {#each CATEGORIES as c}
+          <button class="cat" class:on={catFilter === c} onclick={() => (catFilter = catFilter === c ? '' : c)}>{CAT_ICON[c]} {c}</button>
+        {/each}
+      </div>
+      {#if ratingFilter}<div class="ratingnote">showing <b>{ratingFilter.toUpperCase()}</b> only</div>{/if}
+    {/if}
 
     <div class="list">
       {#if loading}<div class="empty">Loading…</div>
+      {:else if !filtered.length && bin}<div class="empty">Recycle bin is empty.</div>
       {:else if !filtered.length}<div class="empty">No lorebooks. <button class="link" onclick={createBook}>Create one</button> or <button class="link" onclick={() => (importOpen = true)}>import</button>.</div>
       {/if}
       {#each filtered as b (b.id)}
@@ -324,7 +348,12 @@
         <input class="title" bind:value={bk.name} oninput={touchMeta} />
         <span class="savemsg">{metaMsg}</span>
         <button class="testbtn" class:on={showTest} onclick={() => (showTest = !showTest)} title="Test what a passage would retrieve">🔎 Test</button>
-        <button class="del" onclick={() => deleteBook(bk)} title={bk.builtin ? 'Clear entries' : 'Delete book'}>🗑</button>
+        {#if bin}
+          <button class="testbtn" onclick={() => restoreBook(bk)} title="Restore to the library">♻ Restore</button>
+          <button class="del" onclick={() => deleteForever(bk)} title="Delete forever">🗑</button>
+        {:else}
+          <button class="del" onclick={() => archiveBook(bk)} title="Move to recycle bin">🗑</button>
+        {/if}
       </header>
       <div class="metarow">
         <select bind:value={bk.rating} onchange={touchMeta}>
@@ -333,6 +362,12 @@
         <select bind:value={bk.category} onchange={touchMeta}>
           {#each CATEGORIES as c}<option value={c}>{c}</option>{/each}
         </select>
+        <label class="psel" title="Global = attachable to any chat. Local = system-native or belongs to one place (not offered in the attach picker).">
+          <select bind:value={bk.scope} onchange={touchMeta}>
+            <option value="global">🌐 global</option>
+            <option value="local">📌 local</option>
+          </select>
+        </label>
         <label class="tog"><input type="checkbox" bind:checked={bk.enabled} onchange={touchMeta} /> enabled</label>
         <label class="psel" title="Model preset this book drives (Function → Lorebook → Preset)">🎛
           <select bind:value={bk.preset} onchange={touchMeta}>
@@ -474,6 +509,10 @@
   .libhead { display: flex; gap: 6px; }
   .search { flex: 1; }
   .new { width: 34px; font-size: 18px; line-height: 1; }
+  .binbtn { width: auto; min-width: 34px; padding: 0 8px; font-size: 14px; }
+  .binbtn.on { border-color: var(--accent); color: var(--accent); }
+  .binbanner { font-size: 11.5px; color: var(--muted); background: var(--elev); border: 1px solid var(--border-soft);
+    border-radius: 8px; padding: 6px 10px; }
   .cats { display: flex; flex-wrap: wrap; gap: 4px; }
   .cat { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--elev); border: 1px solid var(--border); color: var(--muted); text-transform: capitalize; }
   .cat.on { background: var(--elev-2); color: #fff; border-color: var(--accent); }

@@ -71,9 +71,20 @@ CREATE TABLE IF NOT EXISTS books (
   builtin     INTEGER DEFAULT 0,     -- seeded/reserved; UI guards destructive edits
   enabled     INTEGER DEFAULT 1,
   preset      TEXT DEFAULT '',       -- bound model PRESET id (Function→Lorebook→Preset); '' = none
+  scope       TEXT DEFAULT 'global', -- 'global' = attachable anywhere | 'local' = system-native or
+                                      -- belongs to one place (function/guard/craft + character books)
+  archived    INTEGER DEFAULT 0,     -- soft-deleted into the recycle bin (hidden from lists/pickers/retrieval)
   updated     REAL DEFAULT 0
 );
 """
+
+# Categories whose books are LOCAL by default — not offered in the general "attach a
+# lorebook" picker (they're system-native or belong to a single character/flow).
+_LOCAL_CATEGORIES = {"function", "guard", "craft", "character"}
+
+
+def _default_scope(category: str | None) -> str:
+    return "local" if (category or "") in _LOCAL_CATEGORIES else "global"
 
 # Books that exist by convention even before the manager writes metadata for them, so
 # the manager can present them with a friendly name/rating instead of a bare scope.
@@ -123,11 +134,21 @@ def _conn(root: Path):
                      "ALTER TABLE lore ADD COLUMN trig TEXT DEFAULT 'input'",
                      "ALTER TABLE lore ADD COLUMN script TEXT DEFAULT ''",
                      "ALTER TABLE lore ADD COLUMN embedding F32_BLOB(384)",
-                     "ALTER TABLE books ADD COLUMN preset TEXT DEFAULT ''"):
+                     "ALTER TABLE books ADD COLUMN preset TEXT DEFAULT ''",
+                     "ALTER TABLE books ADD COLUMN archived INTEGER DEFAULT 0"):
             try:
                 con.execute(_ddl)
             except Exception:  # noqa: BLE001 — already present
                 pass
+        # scope column + a ONE-TIME category backfill: the ALTER throws once the column
+        # exists, so the UPDATE only runs the first time the column is added (never clobbers
+        # a user's later global/local override).
+        try:
+            con.execute("ALTER TABLE books ADD COLUMN scope TEXT DEFAULT 'global'")
+            con.execute("UPDATE books SET scope='local' WHERE category IN "
+                        "('function','guard','craft','character')")
+        except Exception:  # noqa: BLE001 — already present
+            pass
         con.commit()
         _inited.add(key)
         _migrate_json(root, con)
@@ -172,14 +193,17 @@ def _migrate_json(root: Path, con) -> None:
 def _book_upsert(con, book_id: str, *, builtin: bool = False, **f) -> None:
     """Insert a book row, or fill in only the columns the caller supplied (COALESCE so
     a re-seed never clobbers user edits to name/description/rating/etc.)."""
+    scope = f.get("scope") or _default_scope(f.get("category", "world"))
     con.execute(
-        "INSERT INTO books(id,name,description,rating,category,builtin,enabled,preset,updated) "
-        "VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+        "INSERT INTO books(id,name,description,rating,category,builtin,enabled,preset,scope,updated) "
+        "VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
         "name=COALESCE(?,name), description=COALESCE(?,description), "
-        "rating=COALESCE(?,rating), category=COALESCE(?,category), preset=COALESCE(?,preset)",
+        "rating=COALESCE(?,rating), category=COALESCE(?,category), preset=COALESCE(?,preset), "
+        "scope=COALESCE(?,scope)",
         (book_id, f.get("name", ""), f.get("description", ""), f.get("rating", "sfw"),
-         f.get("category", "world"), 1 if builtin else 0, 1, f.get("preset", ""), time.time(),
-         f.get("name"), f.get("description"), f.get("rating"), f.get("category"), f.get("preset")),
+         f.get("category", "world"), 1 if builtin else 0, 1, f.get("preset", ""), scope, time.time(),
+         f.get("name"), f.get("description"), f.get("rating"), f.get("category"), f.get("preset"),
+         f.get("scope")),
     )
 
 
@@ -236,12 +260,13 @@ def _seed_books(root: Path, con) -> None:
                 if e["id"] not in have:
                     _insert(con, bid, LoreEntry(**e))
 
-    # Bind the built-in function books to their model PRESET (Function→Lorebook→Preset),
-    # only when unset so a user's choice in the manager is never clobbered.
-    for bid, pid in (("_graph_fns", "story_consultant"), ("_location_fns", "story_consultant"),
-                     ("_character_fns", "story_consultant")):
+    # Bind each built-in function book to its OWN model PRESET (Function→Lorebook→Preset), so
+    # every flow uses the right job preset. Set when unset; also migrate the early builds that
+    # were all bound to 'story_consultant' to their proper per-function preset.
+    for bid, pid in (("_graph_fns", "story_consultant"), ("_location_fns", "location_builder"),
+                     ("_character_fns", "character_builder")):
         row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
-        if row is not None and not (row[0] or ""):
+        if row is not None and (not (row[0] or "") or row[0] == "story_consultant"):
             con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
     con.commit()
 
@@ -263,9 +288,9 @@ def ensure_book(root: Path, scope: str) -> None:
     con.commit()
 
 
-def list_books(root: Path) -> list[dict]:
-    """All books with live entry counts. Scopes that have entries but no book row yet
-    (legacy data) surface too, with auto metadata."""
+def list_books(root: Path, archived: bool = False) -> list[dict]:
+    """Books with live entry counts. `archived=False` (default) returns the live library;
+    `archived=True` returns the recycle bin. Orphan scopes (legacy data) surface too."""
     con = _conn(root)
     # Backfill any orphan scopes so the manager shows everything.
     orphans = con.execute(
@@ -273,24 +298,33 @@ def list_books(root: Path) -> list[dict]:
     for (s,) in orphans:
         ensure_book(root, s)
     rows = con.execute(
-        "SELECT b.id,b.name,b.description,b.rating,b.category,b.builtin,b.enabled,b.preset,"
+        "SELECT b.id,b.name,b.description,b.rating,b.category,b.builtin,b.enabled,b.preset,b.scope,"
         "(SELECT COUNT(*) FROM lore l WHERE l.scope=b.id) AS n "
-        "FROM books b ORDER BY b.builtin DESC, b.name").fetchall()
+        "FROM books b WHERE COALESCE(b.archived,0)=? ORDER BY b.builtin DESC, b.name",
+        (1 if archived else 0,)).fetchall()
     return [{"id": r[0], "name": r[1] or r[0], "description": r[2] or "", "rating": r[3] or "sfw",
              "category": r[4] or "world", "builtin": bool(r[5]), "enabled": bool(r[6]),
-             "preset": r[7] or "", "entries": int(r[8] or 0)} for r in rows]
+             "preset": r[7] or "", "scope": r[8] or "global", "entries": int(r[9] or 0)} for r in rows]
+
+
+def set_archived(root: Path, book_id: str, archived: bool) -> None:
+    """Soft-delete a book into the recycle bin (archived=True) or restore it (False)."""
+    con = _conn(root)
+    con.execute("UPDATE books SET archived=?, updated=? WHERE id=?",
+                (1 if archived else 0, time.time(), book_id))
+    con.commit()
 
 
 def get_book(root: Path, book_id: str) -> dict | None:
     con = _conn(root)
     r = con.execute(
-        "SELECT id,name,description,rating,category,builtin,enabled,preset FROM books WHERE id=?",
-        (book_id,)).fetchone()
+        "SELECT id,name,description,rating,category,builtin,enabled,preset,scope,COALESCE(archived,0) "
+        "FROM books WHERE id=?", (book_id,)).fetchone()
     if not r:
         return None
     return {"id": r[0], "name": r[1] or r[0], "description": r[2] or "", "rating": r[3] or "sfw",
             "category": r[4] or "world", "builtin": bool(r[5]), "enabled": bool(r[6]),
-            "preset": r[7] or ""}
+            "preset": r[7] or "", "scope": r[8] or "global", "archived": bool(r[9])}
 
 
 def upsert_book(root: Path, book_id: str, **fields) -> dict:
@@ -299,7 +333,7 @@ def upsert_book(root: Path, book_id: str, **fields) -> dict:
     exists = con.execute("SELECT builtin FROM books WHERE id=?", (book_id,)).fetchone()
     if exists:
         sets, vals = [], []
-        for col in ("name", "description", "rating", "category", "preset"):
+        for col in ("name", "description", "rating", "category", "preset", "scope"):
             if fields.get(col) is not None:
                 sets.append(f"{col}=?"); vals.append(fields[col])
         if fields.get("enabled") is not None:
@@ -307,12 +341,13 @@ def upsert_book(root: Path, book_id: str, **fields) -> dict:
         sets.append("updated=?"); vals.append(time.time())
         con.execute(f"UPDATE books SET {', '.join(sets)} WHERE id=?", (*vals, book_id))
     else:
+        scope = fields.get("scope") or _default_scope(fields.get("category", "world"))
         con.execute(
-            "INSERT INTO books(id,name,description,rating,category,builtin,enabled,preset,updated) "
-            "VALUES(?,?,?,?,?,?,?,?,?)",
+            "INSERT INTO books(id,name,description,rating,category,builtin,enabled,preset,scope,updated) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?)",
             (book_id, fields.get("name") or book_id, fields.get("description", ""),
              fields.get("rating", "sfw"), fields.get("category", "world"), 0,
-             1 if fields.get("enabled", True) else 0, fields.get("preset", ""), time.time()))
+             1 if fields.get("enabled", True) else 0, fields.get("preset", ""), scope, time.time()))
     con.commit()
     return get_book(root, book_id) or {}
 
@@ -453,7 +488,7 @@ def _bm25_search(con, query: str, scopes: list[str], ph: str, limit: int, allow_
         f"SELECT {_COLS}, bm25(lore_fts, 5.0, 10.0, 1.0) AS rank "
         "FROM lore_fts JOIN lore l ON l.rowid = lore_fts.rowid "
         "LEFT JOIN books b ON b.id = l.scope "
-        "WHERE l.enabled=1 AND (b.enabled IS NULL OR b.enabled=1) "
+        "WHERE l.enabled=1 AND (b.enabled IS NULL OR b.enabled=1) AND COALESCE(b.archived,0)=0 "
         "AND (l.trig IS NULL OR l.trig='input') "
         f"{nsfw_clause}"
         f"AND l.scope IN ({ph}) AND lore_fts MATCH ? ORDER BY rank LIMIT ?"
@@ -476,7 +511,7 @@ def _vector_search(con, query: str, scopes: list[str], ph: str, limit: int, allo
     sql = (
         f"SELECT {_COLS}, vector_distance_cos(l.embedding, vector32(?)) AS d "
         "FROM lore l LEFT JOIN books b ON b.id = l.scope "
-        "WHERE l.enabled=1 AND (b.enabled IS NULL OR b.enabled=1) "
+        "WHERE l.enabled=1 AND (b.enabled IS NULL OR b.enabled=1) AND COALESCE(b.archived,0)=0 "
         "AND (l.trig IS NULL OR l.trig='input') AND l.embedding IS NOT NULL "
         f"{nsfw_clause}"
         f"AND l.scope IN ({ph}) ORDER BY d LIMIT ?"

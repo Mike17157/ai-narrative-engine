@@ -13,6 +13,7 @@ export const configModal = $state({
   tab: 'configs',
   lorebooks: [],
   onLorebooks: null,
+  presetGroup: '',   // scope the preset picker to one function group (e.g. 'Chat'); '' = all
 });
 
 export function openConfigModal(opts = {}) {
@@ -21,6 +22,7 @@ export function openConfigModal(opts = {}) {
   configModal.tab = (tab === 'configs' || tab === 'lorebooks') ? tab : 'configs';
   configModal.lorebooks = opts.lorebooks ? [...opts.lorebooks] : [];
   configModal.onLorebooks = opts.onLorebooks || null;
+  configModal.presetGroup = opts.presetGroup || '';
   configModal.open = true;
 }
 

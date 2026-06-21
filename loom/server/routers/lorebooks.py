@@ -52,13 +52,24 @@ def _clean_meta(body: dict) -> dict:
         out["enabled"] = bool(body["enabled"])
     if body.get("preset") is not None:
         out["preset"] = str(body["preset"]).strip()   # bound model preset id ('' = none)
+    if body.get("scope") is not None:
+        out["scope"] = body["scope"] if body["scope"] in ("global", "local") else "global"
     return out
 
 
 def register(app, ctx):
     @app.get("/api/lorebooks")
-    def list_lorebooks():
-        return {"books": LS.list_books(ctx.root)}
+    def list_lorebooks(archived: int = 0):
+        """The live library, or the recycle bin (?archived=1)."""
+        return {"books": LS.list_books(ctx.root, archived=bool(archived))}
+
+    @app.post("/api/lorebooks/{book_id}/archive")
+    def archive_lorebook(book_id: str, body: dict | None = None):
+        """Soft-delete into the recycle bin, or restore ({archived:false}). Reversible —
+        unlike DELETE, this works on reserved/builtin books too (hides them everywhere)."""
+        archived = True if not body else bool(body.get("archived", True))
+        LS.set_archived(ctx.root, book_id, archived)
+        return {"ok": True, "book": LS.get_book(ctx.root, book_id)}
 
     @app.post("/api/lorebooks")
     def create_lorebook(body: dict):
