@@ -7,9 +7,33 @@
 
   let dragOver = $state(false);
   let wf = $state(null);          // parsed graph
+  let fmt = $state(null);         // 'api' (node-id keyed, importable) | 'ui' (editor format)
   let fileName = $state('');
   let name = $state('');          // new model key
-  let nodeCount = $derived(wf ? Object.keys(wf).length : 0);
+  let nodeCount = $derived(wf ? (fmt === 'ui' ? (wf.nodes?.length || 0) : Object.keys(wf).length) : 0);
+
+  // CJK (Chinese/Korean/Japanese) text → English translation of prompt fields.
+  let cjk = $state([]);           // [{path:[...], text, label}]
+  let translating = $state(false);
+  const CJK_RE = /[㐀-䶿一-鿿豈-﫿가-힣぀-ヿ]/;
+  const getAt = (o, p) => p.reduce((a, k) => a?.[k], o);
+  function setAt(o, p, v) { let a = o; for (let i = 0; i < p.length - 1; i++) a = a[p[i]]; a[p[p.length - 1]] = v; }
+  function scanCjk(graph, format) {
+    const out = [];
+    if (format === 'api') {
+      for (const [nid, n] of Object.entries(graph)) {
+        const ins = n?.inputs; if (!ins || typeof ins !== 'object') continue;
+        for (const [f, v] of Object.entries(ins))
+          if (typeof v === 'string' && CJK_RE.test(v)) out.push({ path: [nid, 'inputs', f], text: v, label: `${n.class_type} · ${f}` });
+      }
+    } else if (format === 'ui') {
+      (graph.nodes || []).forEach((n, ni) => {
+        const wv = n?.widgets_values;
+        if (Array.isArray(wv)) wv.forEach((v, i) => { if (typeof v === 'string' && CJK_RE.test(v)) out.push({ path: ['nodes', ni, 'widgets_values', i], text: v, label: `${n.type} · widget ${i}` }); });
+      });
+    }
+    return out;
+  }
 
   let checking = $state(false);
   let refs = $state([]);          // [{kind,name,installed,catalog,node,class_type}]
@@ -31,7 +55,7 @@
   const SMART = new Set(['lora', 'checkpoint', 'diffusion']);
 
   function reset() {
-    wf = null; fileName = ''; name = ''; refs = []; io = null;
+    wf = null; fmt = null; fileName = ''; name = ''; refs = []; io = null; cjk = []; translating = false;
     posNode = ''; posField = 'text'; outNode = ''; dl = {}; up = {}; msg = null;
   }
 
@@ -41,15 +65,47 @@
     try { text = await file.text(); } catch { msg = { ok: false, text: 'could not read file' }; return; }
     let graph;
     try { graph = JSON.parse(text); } catch { msg = { ok: false, text: 'not valid JSON' }; return; }
-    // Accept only API-format graphs (node-id → {class_type, inputs}).
-    const looksApi = graph && typeof graph === 'object' &&
+    // API format = node-id → {class_type, inputs} (importable). UI/editor format = {nodes:[…]}
+    // (only translatable + downloadable here; re-export as API to register it).
+    const isApi = graph && typeof graph === 'object' && !Array.isArray(graph.nodes) &&
       Object.values(graph).some((n) => n && typeof n === 'object' && n.class_type);
-    if (!looksApi) { msg = { ok: false, text: 'not an API-format ComfyUI workflow (export with "Save (API Format)")' }; return; }
+    const isUi = graph && Array.isArray(graph.nodes);
+    if (!isApi && !isUi) { msg = { ok: false, text: 'not a ComfyUI workflow JSON' }; return; }
     wf = graph;
+    fmt = isApi ? 'api' : 'ui';
     fileName = file.name;
     name = file.name.replace(/\.json$/i, '').replace(/_api$/i, '');
     msg = null;
-    await runCheck();
+    cjk = scanCjk(wf, fmt);
+    if (fmt === 'api') await runCheck(); else { refs = []; io = null; }
+  }
+
+  async function translateAll() {
+    if (!cjk.length || translating) return;
+    translating = true; msg = null;
+    try {
+      const res = await fetch('/api/translate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ texts: cjk.map((c) => c.text) }),
+      });
+      const data = await res.json();
+      if (!data.ok) { msg = { ok: false, text: data.error || 'translation failed' }; translating = false; return; }
+      const tr = data.translations || [];
+      const next = structuredClone($state.snapshot(wf));
+      cjk.forEach((c, i) => { if (tr[i] != null) setAt(next, c.path, tr[i]); });
+      wf = next;
+      cjk = scanCjk(wf, fmt);
+      if (fmt === 'api') await runCheck();
+      msg = { ok: true, text: 'Translated prompts to English' };
+    } catch (e) { msg = { ok: false, text: 'translation failed: ' + e }; }
+    translating = false;
+  }
+
+  function downloadJson() {
+    const blob = new Blob([JSON.stringify(wf, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
+    a.download = (name || 'workflow') + (fmt === 'api' ? '_api.json' : '.json');
+    a.click(); URL.revokeObjectURL(a.href);
   }
 
   async function runCheck() {
@@ -172,9 +228,23 @@
   {:else}
     <div class="wf-head">
       <span class="wf-name" title={fileName}>{fileName}</span>
-      <span class="wf-meta">{nodeCount} nodes · {refs.length} model refs{#if missing.length} · <span class="bad">{missing.length} missing</span>{:else} · <span class="ok">all present</span>{/if}</span>
+      <span class="wf-meta">{nodeCount} nodes{#if fmt === 'api'} · {refs.length} model refs{#if missing.length} · <span class="bad">{missing.length} missing</span>{:else} · <span class="ok">all present</span>{/if}{:else} · <span class="warn">UI-format</span>{/if}</span>
     </div>
 
+    <!-- Foreign-prompt translation (Chinese / Korean → English) -->
+    {#if cjk.length}
+      <div class="xlate">
+        <span class="xl-label">🌐 {cjk.length} prompt field{cjk.length > 1 ? 's' : ''} contain Chinese/Korean text</span>
+        <button class="mini" onclick={translateAll} disabled={translating}>{translating ? 'Translating…' : 'Translate → English'}</button>
+      </div>
+    {/if}
+
+    {#if fmt === 'ui'}
+      <div class="muted ui-note">This is a <b>UI-format</b> workflow (ComfyUI editor export). To register it as an image model, re-export it with <b>Save (API Format)</b> in ComfyUI and drop that file. You can still translate its prompts above and download the result.</div>
+      <div class="foot">
+        <button class="primary" onclick={downloadJson}>⤓ Download workflow JSON</button>
+      </div>
+    {:else}
     <!-- I/O detection (override-able) -->
     <div class="io">
       <div class="io-row">
@@ -237,6 +307,7 @@
         {importing ? 'Importing…' : 'Import as image model'}
       </button>
     </div>
+    {/if}
   {/if}
 
   {#if msg}<div class="msg" class:ok={msg.ok} class:bad={!msg.ok}>{msg.text}</div>{/if}
@@ -254,6 +325,11 @@
   .drop:hover, .drop.over { border-color: var(--accent); background: rgba(109,140,255,.07); }
   .dz-icon { font-size: 26px; opacity: .4; }
   .dz-label { font-size: 13px; color: var(--muted); }
+
+  .xlate { display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 12px; border-radius: 10px;
+    background: rgba(109,140,255,.08); border: 1px solid rgba(109,140,255,.3); }
+  .xl-label { font-size: 12.5px; color: var(--text); flex: 1; }
+  .ui-note { line-height: 1.5; margin-bottom: 12px; }
 
   .wf-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   .wf-name { font-weight: 700; font-size: 13.5px; }

@@ -24,7 +24,50 @@ class WorkflowTestRequest(BaseModel):
     height: int | None = None
 
 
+_CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿가-힣぀-ヿ]")
+
+
+def _has_cjk(s: str) -> bool:
+    return bool(_CJK_RE.search(s or ""))
+
+
+_TRANSLATE_SYSTEM = (
+    "You are a translation engine for AI image/video generation prompts. Translate the user's "
+    "text into natural English. If it is a list of comma-separated tags or keywords, preserve that "
+    "structure — translate each term and keep the separators. Output ONLY the translation: no "
+    "quotes, no transliteration, no commentary, no notes."
+)
+
+
 def register(app, ctx):
+    @app.post("/api/translate")
+    def translate(body: dict):
+        """Translate Chinese/Korean (or any non-English) text → English via a cheap text model.
+        Accepts {text} or {texts:[…]}. Non-CJK strings pass through unchanged so the caller can
+        send a whole batch blindly. Used by the workflow importer to localize foreign prompts."""
+        body = body or {}
+        single = isinstance(body.get("text"), str)
+        texts = [body["text"]] if single else list(body.get("texts") or [])
+        if not texts:
+            return JSONResponse({"error": "no text"}, status_code=400)
+        # Use the active chat connection (deepseek by default) — same provider the rest of
+        # the app authors with, so no separate key/config is needed.
+        provider = ctx.author_provider((body.get("model") or "").strip() or None)
+        if provider is None or not hasattr(provider, "generate_text"):
+            return JSONResponse({"error": "no chat connection — connect a chat model first"}, status_code=503)
+
+        out: list[str] = []
+        for t in texts:
+            if not isinstance(t, str) or not t.strip() or not _has_cjk(t):
+                out.append(t if isinstance(t, str) else "")
+                continue
+            try:
+                res = provider.generate_text(system=_TRANSLATE_SYSTEM, prompt=t)
+                out.append((res.text or "").strip() or t)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": f"translation failed: {exc}"}, status_code=500)
+        return {"ok": True, "translation": out[0]} if single else {"ok": True, "translations": out}
+
     @app.get("/api/workflow")
     def get_workflow(model: str):
         path = ctx.workflow_path(model)
