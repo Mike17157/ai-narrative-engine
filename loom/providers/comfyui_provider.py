@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -87,6 +87,7 @@ class ComfyUIProvider:
         out_prefix: str | None = None,
         latent: tuple[int, int] | None = None,
         flags: dict[str, bool] | None = None,
+        cancel: Callable[[], bool] | None = None,
     ) -> ImageResult:
         # Make sure ComfyUI is reachable — connect to a running instance, or
         # (managed mode) launch it headless. Never touches the user's UI.
@@ -119,7 +120,7 @@ class ComfyUIProvider:
                 raise RuntimeError(f"ComfyUI rejected the workflow: {detail}")
             prompt_id = queued.json()["prompt_id"]
 
-            history = self._await_history(client, prompt_id)
+            history = self._await_history(client, prompt_id, cancel=cancel)
             outputs = history["outputs"]
             collect_from = out_node or self.output_node
             node_ids = [collect_from] if collect_from else list(outputs.keys())
@@ -140,9 +141,16 @@ class ComfyUIProvider:
 
         return ImageResult(images=images, meta={"prompt_id": prompt_id})
 
-    def _await_history(self, client: httpx.Client, prompt_id: str) -> dict:
+    def _await_history(self, client: httpx.Client, prompt_id: str,
+                       cancel: Callable[[], bool] | None = None) -> dict:
         deadline = time.monotonic() + self.timeout_s
         while time.monotonic() < deadline:
+            if cancel and cancel():
+                try:
+                    client.post("/interrupt")  # stop the in-flight prompt on the GPU
+                except httpx.HTTPError:
+                    pass
+                raise RuntimeError(f"ComfyUI generation {prompt_id} cancelled by caller")
             resp = client.get(f"/history/{prompt_id}")
             resp.raise_for_status()
             history = resp.json()

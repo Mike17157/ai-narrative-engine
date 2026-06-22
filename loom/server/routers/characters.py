@@ -13,7 +13,7 @@ from ...card_sources import fetch_card
 from ..services import config_files
 from ..services.emotions import EMOTION_KEYS, EMOTION_LABELS
 from ..services.images import _clean_reference_png, _randomize_seeds, _render
-from ..services.batch_images import batch_generate_image
+from ..services.batch_images import render_batch
 from ..services.jobs_util import _start_stream_job
 from ..services.prompts import (
     _DESCRIBE_SYSTEM,
@@ -710,33 +710,14 @@ def register(app, ctx):
 
             emit({"type": "phase", "label": f"Rendering {len(all_jobs)} sprites across {len(outfits)} outfits"})
 
-            # Prepare batch prompts
+            # Fan out through the shared dispatcher: concurrent on the serverless endpoint
+            # (or the local GPU), per-image progress, cancellation that stops in-flight jobs.
             batch_prompts = [{"prompt": j["prompt"], "latent": j["latent"]} for j in all_jobs]
-
-            # Use batch generation (handles RunPod scaling automatically)
-            try:
-                import asyncio
-                import copy
-
-                loop = asyncio.get_event_loop()
-                results = loop.run_until_complete(batch_generate_image(
-                    provider=provider,
-                    workflow=copy.deepcopy(provider.workflow),
-                    prompts=batch_prompts,
-                    ctx=ctx,
-                    out_prefix_template=oprefix,
-                ))
-            except Exception as e:  # noqa: BLE001
-                # Fallback: process sequentially
-                emit({"type": "phase", "label": "Batch generation failed, processing sequentially..."})
-                results = []
-                for job in all_jobs:
-                    try:
-                        _randomize_seeds(provider.workflow)
-                        res = provider.generate_image(prompt=job["prompt"], out_prefix=oprefix, latent=job["latent"])
-                        results.append(res.images[0] if res.images else None)
-                    except Exception:  # noqa: BLE001
-                        results.append(None)
+            results = render_batch(
+                provider, batch_prompts, ctx=ctx, out_prefix_template=oprefix,
+                cancel=cancelled,
+                on_progress=lambda d, t: emit({"type": "progress", "done": d, "total": t}),
+            )
 
             # Save results and update manifests
             for idx, job in enumerate(all_jobs):

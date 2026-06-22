@@ -1,5 +1,20 @@
 [
   {
+    "local": "checkpoints/novaOrangeXL_rexV10.safetensors",
+    "key": "models/checkpoints/novaOrangeXL_rexV10.safetensors",
+    "bytes": 6939108668
+  },
+  {
+    "local": "diffusion_models/anima/novaAnimeAM_v25.safetensors",
+    "key": "models/diffusion_models/anima/novaAnimeAM_v25.safetensors",
+    "bytes": 4182243264
+  },
+  {
+    "local": "diffusion_models/fluxdev/fluxKlein4BPro_v10.safetensors",
+    "key": "models/diffusion_models/fluxdev/fluxKlein4BPro_v10.safetensors",
+    "bytes": 7751111864
+  },
+  {
     "local": "loras/748cmSDXL.safetensors",
     "key": "models/loras/748cmSDXL.safetensors",
     "bytes": 255025442
@@ -8,11 +23,6 @@
     "local": "loras/ILwatercolor.safetensors",
     "key": "models/loras/ILwatercolor.safetensors",
     "bytes": 405031604
-  },
-  {
-    "local": "upscale_models/Illustrious/RealESRGAN_x4plus_anime_6B.pth",
-    "key": "models/upscale_models/Illustrious/RealESRGAN_x4plus_anime_6B.pth",
-    "bytes": 17938799
   },
   {
     "local": "loras/Illustrious/TRT_style_v1.4_IL.safetensors",
@@ -28,11 +38,6 @@
     "local": "loras/anima-rl-v0.1.safetensors",
     "key": "models/loras/anima-rl-v0.1.safetensors",
     "bytes": 148902616
-  },
-  {
-    "local": "diffusion_models/anima/novaAnimeAM_v25.safetensors",
-    "key": "models/diffusion_models/anima/novaAnimeAM_v25.safetensors",
-    "bytes": 4182243264
   },
   {
     "local": "loras/anima_4rkj4ck_v1.0-epoch26.safetensors",
@@ -85,29 +90,9 @@
     "bytes": 183606504
   },
   {
-    "local": "ultralytics/bbox/face_yolov8m.pt",
-    "key": "models/ultralytics/bbox/face_yolov8m.pt",
-    "bytes": 52026019
-  },
-  {
-    "local": "vae/flux2-vae.safetensors",
-    "key": "models/vae/flux2-vae.safetensors",
-    "bytes": 336213556
-  },
-  {
-    "local": "diffusion_models/fluxdev/fluxKlein4BPro_v10.safetensors",
-    "key": "models/diffusion_models/fluxdev/fluxKlein4BPro_v10.safetensors",
-    "bytes": 7751111864
-  },
-  {
     "local": "loras/niji_and_midj_mix217.safetensors",
     "key": "models/loras/niji_and_midj_mix217.safetensors",
     "bytes": 228487884
-  },
-  {
-    "local": "checkpoints/novaOrangeXL_rexV10.safetensors",
-    "key": "models/checkpoints/novaOrangeXL_rexV10.safetensors",
-    "bytes": 6939108668
   },
   {
     "local": "loras/ogipote-NL.safetensors",
@@ -115,14 +100,9 @@
     "bytes": 220456968
   },
   {
-    "local": "text_encoders/qwen_3_06b_base.safetensors",
-    "key": "models/text_encoders/qwen_3_06b_base.safetensors",
-    "bytes": 1192135096
-  },
-  {
-    "local": "vae/qwen_image_vae.safetensors",
-    "key": "models/vae/qwen_image_vae.safetensors",
-    "bytes": 253806246
+    "local": "loras/yzsss_anima1.0_v0.2.safetensors",
+    "key": "models/loras/yzsss_anima1.0_v0.2.safetensors",
+    "bytes": 183605592
   },
   {
     "local": "sams/sam_vit_b_01ec64.pth",
@@ -130,13 +110,33 @@
     "bytes": 375042383
   },
   {
+    "local": "text_encoders/qwen_3_06b_base.safetensors",
+    "key": "models/text_encoders/qwen_3_06b_base.safetensors",
+    "bytes": 1192135096
+  },
+  {
+    "local": "ultralytics/bbox/face_yolov8m.pt",
+    "key": "models/ultralytics/bbox/face_yolov8m.pt",
+    "bytes": 52026019
+  },
+  {
     "local": "ultralytics/segm/person_yolov8m-seg.pt",
     "key": "models/ultralytics/segm/person_yolov8m-seg.pt",
     "bytes": 54827683
   },
   {
-    "local": "loras/yzsss_anima1.0_v0.2.safetensors",
-    "key": "models/loras/yzsss_anima1.0_v0.2.safetensors",
-    "bytes": 183605592
+    "local": "upscale_models/Illustrious/RealESRGAN_x4plus_anime_6B.pth",
+    "key": "models/upscale_models/Illustrious/RealESRGAN_x4plus_anime_6B.pth",
+    "bytes": 17938799
+  },
+  {
+    "local": "vae/flux2-vae.safetensors",
+    "key": "models/vae/flux2-vae.safetensors",
+    "bytes": 336213556
+  },
+  {
+    "local": "vae/qwen_image_vae.safetensors",
+    "key": "models/vae/qwen_image_vae.safetensors",
+    "bytes": 253806246
   }
 ]

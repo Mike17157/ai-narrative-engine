@@ -116,26 +116,29 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
         m["outfits"][0]["base"] = "base.png"
         ctx.save_portrait_manifest(key, m)
 
-    # 6. the full emotion sprite set
+    # 6. the full emotion sprite set — fanned out through the shared dispatcher
+    #    (concurrent on the serverless endpoint / local GPU, with progress + cancel).
+    from .batch_images import render_batch
+
+    emit({"type": "phase", "label": f"Rendering {len(EMOTION_KEYS)} sprites"})
+    sprite_prompts = [{
+        "prompt": _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(
+            p for p in (appearance, attire, (exprs.get(emo) or emo),
+                        ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if p)))),
+        "latent": ctx.pose_latent(emo),
+    } for emo in EMOTION_KEYS]
+    results = render_batch(
+        sprov, sprite_prompts, ctx=ctx,
+        out_prefix_template=ctx.output_prefix_for(smid, "sprite", key),
+        cancel=cancelled,
+        on_progress=lambda d, t: emit({"type": "progress", "done": d, "total": t}),
+    )
     done = 0
-    for i, emo in enumerate(EMOTION_KEYS):
-        if cancelled():
-            break
-        emit({"type": "phase", "label": f"Sprite {i + 1}/{len(EMOTION_KEYS)} — {EMOTION_LABELS[emo]}"})
-        expr = exprs.get(emo) or emo
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(
-            p for p in (appearance, attire, expr, ctx.pose_tags(key, emo), ctx.pose_framing(emo)) if p))))
-        try:
-            prov2, _mid = ctx.role_image_provider("sprite")  # fresh workflow/seed per render
-            _randomize_seeds(prov2.workflow)
-            rr = prov2.generate_image(prompt=prompt, latent=ctx.pose_latent(emo),
-                                      out_prefix=ctx.output_prefix_for(smid, "sprite", key))
-            if rr.images:
-                (odir / f"{emo}.png").write_bytes(rr.images[0])
-                m["outfits"][0]["expressions"][emo] = f"{emo}.png"
-                done += 1
-        except Exception as exc:  # noqa: BLE001 — one sprite failing must not sink the run
-            emit({"type": "phase", "label": f"  {emo} skipped ({exc})"})
+    for emo, png in zip(EMOTION_KEYS, results):
+        if png:
+            (odir / f"{emo}.png").write_bytes(png)
+            m["outfits"][0]["expressions"][emo] = f"{emo}.png"
+            done += 1
     ctx.save_portrait_manifest(key, m)
     emit({"type": "phase", "label": f"Done — {ch.name}: base + 1 outfit + {done} sprites"})
     return {"ok": True, "character": key, "name": ch.name, "sprites": done}

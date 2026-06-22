@@ -35,7 +35,7 @@ import base64
 import json
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 
@@ -87,8 +87,12 @@ class RunPodServerlessProvider:
         out_prefix: str | None = None,
         latent: tuple[int, int] | None = None,
         flags: dict[str, bool] | None = None,
+        cancel: Callable[[], bool] | None = None,
     ) -> ImageResult:
-        """Generate an image via the RunPod serverless endpoint."""
+        """Generate an image via the RunPod serverless endpoint.
+
+        `cancel`, if given, is polled while waiting; when it turns true the remote
+        job is cancelled (so it stops billing) and the call raises."""
         graph = _workflow.inject(
             self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent, flags
         )
@@ -112,7 +116,7 @@ class RunPodServerlessProvider:
 
         with httpx.Client(base_url=self.base_url, headers=self.headers, timeout=60) as client:
             job_id = self._submit(client, payload)
-            output = self._await_output(client, job_id)
+            output = self._await_output(client, job_id, cancel=cancel)
 
         images = _extract_images(output)
         return ImageResult(images=images, meta={"endpoint_id": self.endpoint_id, "job_id": job_id})
@@ -132,8 +136,17 @@ class RunPodServerlessProvider:
             self._primed = (job_id, data)
         return job_id
 
-    def _await_output(self, client: httpx.Client, job_id: str) -> Any:
-        """Poll /status until the job finishes; return its `output`, or raise."""
+    def _cancel_remote(self, client: httpx.Client, job_id: str) -> None:
+        """Best-effort cancel so we never leave an orphan job billing."""
+        try:
+            client.post(f"/cancel/{job_id}")
+        except httpx.HTTPError:
+            pass
+
+    def _await_output(self, client: httpx.Client, job_id: str,
+                      cancel: Callable[[], bool] | None = None) -> Any:
+        """Poll /status until the job finishes; return its `output`, or raise.
+        If `cancel()` turns true mid-wait, cancel the remote job and raise."""
         primed = getattr(self, "_primed", None)
         if primed and primed[0] == job_id:
             self._primed = None
@@ -141,6 +154,9 @@ class RunPodServerlessProvider:
 
         deadline = time.monotonic() + self.timeout_s
         while time.monotonic() < deadline:
+            if cancel and cancel():
+                self._cancel_remote(client, job_id)
+                raise RuntimeError(f"RunPod job {job_id} cancelled by caller")
             resp = client.get(f"/status/{job_id}")
             if resp.status_code == 429:  # rate limited — back off and retry
                 time.sleep(min(self.poll_s * 2, 10))
@@ -158,11 +174,7 @@ class RunPodServerlessProvider:
             # IN_QUEUE / IN_PROGRESS — keep waiting.
             time.sleep(self.poll_s)
 
-        # Best-effort cancel so we don't leave an orphan job billing.
-        try:
-            client.post(f"/cancel/{job_id}")
-        except httpx.HTTPError:
-            pass
+        self._cancel_remote(client, job_id)  # don't leave an orphan job billing
         raise TimeoutError(f"RunPod job {job_id} did not finish within {self.timeout_s}s")
 
 
