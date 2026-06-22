@@ -65,3 +65,29 @@ models:
         positive: { node: "s1284__1325", field: "text" }
       output_node: "775"        # Image Saver (full pipeline: refine + detail + upscale)
       timeout_s: 1700           # cold-start model load from the network volume + heavy 29-step er_sde pipeline; stay under the 30-min worker/exec ceiling
+
+  # --------------------------------------------------------------------------- #
+  # Flux — a second image family (decoupling from Anima-only).
+  #
+  # FLUX.2 [klein] (4B distilled DiT, Apache-licensed) renders with markedly
+  # stronger physical/anatomical coherence than the SDXL-lineage Anima graph,
+  # at the cost of natural-language (not booru-tag) prompting. The graph is the
+  # canonical Flux2 SamplerCustomAdvanced flow: UNETLoader (the .safetensors
+  # diffusion model) + CLIPLoaderGGUF type=flux2 (the q8 text encoder) +
+  # flux2-vae, FluxGuidance(4.0), Flux2Scheduler -> KSamplerSelect(euler) ->
+  # SamplerCustomAdvanced. Distilled -> no negative (BasicGuider). Prompt ->
+  # node 4 (Positive); output -> node 13 (SaveImage). Model paths use forward
+  # slashes; the provider's localize_model_paths() converts to the host
+  # separator. Validated end-to-end against the local ComfyUI (8-step render,
+  # ~37s on the RTX 5070; 20 steps is the workflow default).
+  # --------------------------------------------------------------------------- #
+  flux:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/flux2_klein_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"         # SaveImage
+      timeout_s: 600

@@ -36,6 +36,9 @@ def _default_preset() -> dict:
             # (the pipeline flow — spine → arc → cast → image → sim — since they feed each other).
             "group": "", "order": 0,
             "connection": "", "model": "", "mode": "",
+            # `local` routes this preset to the local GGUF endpoint (configs/app.json →
+            # local_model) instead of its connection/model — the OpenRouter ⇄ local toggle.
+            "local": False,
             # Prompt slots (positions in the assembled prompt):
             #   system       — top system message (standing rules)
             #   author_note  — injected into history `author_depth` turns from the end (strong steer)
@@ -201,8 +204,8 @@ def _clean_preset(raw: dict) -> dict:
     p = _default_preset()
     p.update({k: v for k, v in (raw or {}).items()
               if k in ("id", "name", "description", "group", "order", "connection", "model",
-                       "mode", "system", "author_note", "author_depth", "post_history", "params",
-                       "stop", "reasoning_effort")})
+                       "mode", "local", "system", "author_note", "author_depth", "post_history",
+                       "params", "stop", "reasoning_effort")})
     p["id"] = str(p.get("id") or "").strip() or "preset"
     p["name"] = str(p.get("name") or p["id"]).strip()
     p["description"] = str(p.get("description") or "").strip()
@@ -214,6 +217,7 @@ def _clean_preset(raw: dict) -> dict:
     p["connection"] = str(p.get("connection") or "").strip()
     p["model"] = str(p.get("model") or "").strip()
     p["mode"] = p["mode"] if p.get("mode") in _MODES else ""
+    p["local"] = bool(p.get("local"))
     p["system"] = str(p.get("system") or "")
     p["author_note"] = str(p.get("author_note") or "")
     try:

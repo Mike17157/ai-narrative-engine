@@ -1,3 +1,10 @@
 {
-  "allow_nsfw": true
+  "allow_nsfw": true,
+  "img_detailer": true,
+  "img_upscale": false,
+  "local_model": {
+    "base_url": "http://127.0.0.1:8080/v1",
+    "model": "meromero",
+    "label": "MeroMero 26B (local)"
+  }
 }

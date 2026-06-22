@@ -27,31 +27,49 @@ import random
 from .jobhub import REGISTRY, BaseJob
 
 
-def _minimal_graph(ckpt: str, lora: str, weight: float,
+def _minimal_graph(ckpt: str, loras: list[dict],
                    prompt: str, neg: str, steps: int, seed: int) -> dict:
-    return {
+    """Fast txt2img graph: a bundled checkpoint + a STACK of LoRAs chained in order.
+
+    Each LoRA layer feeds the next loader's model/clip, so a column can be a
+    multi-LoRA stack (not just one). The prompt encoders + sampler hang off the
+    last loader (or the checkpoint itself when the stack is empty).
+    """
+    graph: dict = {
         "4":  {"class_type": "CheckpointLoaderSimple",
                "inputs": {"ckpt_name": ckpt}},
-        "10": {"class_type": "LoraLoader",
-               "inputs": {"lora_name": lora, "strength_model": weight, "strength_clip": weight,
-                          "model": ["4", 0], "clip": ["4", 1]}},
-        "6":  {"class_type": "CLIPTextEncode",
-               "inputs": {"text": prompt, "clip": ["10", 1]}},
-        "7":  {"class_type": "CLIPTextEncode",
-               "inputs": {"text": neg, "clip": ["10", 1]}},
+        "6":  {"class_type": "CLIPTextEncode", "inputs": {"text": prompt}},
+        "7":  {"class_type": "CLIPTextEncode", "inputs": {"text": neg}},
         "5":  {"class_type": "EmptyLatentImage",
                "inputs": {"width": 1024, "height": 1024, "batch_size": 1}},
         "3":  {"class_type": "KSampler",
                "inputs": {"seed": seed, "steps": steps, "cfg": 6.0,
                           "sampler_name": "euler_ancestral", "scheduler": "normal",
-                          "denoise": 1.0, "model": ["10", 0],
+                          "denoise": 1.0,
                           "positive": ["6", 0], "negative": ["7", 0],
                           "latent_image": ["5", 0]}},
-        "8":  {"class_type": "VAEDecode",
-               "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+        "8":  {"class_type": "VAEDecode", "inputs": {"vae": ["4", 2]}},
         "9":  {"class_type": "SaveImage",
                "inputs": {"filename_prefix": "triage", "images": ["8", 0]}},
     }
+
+    # Chain LoRA loaders: 10, 11, 12 … each consuming the previous model+clip.
+    model_src, clip_src = ["4", 0], ["4", 1]
+    for i, lr in enumerate(loras):
+        name = (lr.get("name") or "").strip()
+        if not name:
+            continue
+        w = float(lr.get("weight", 0.8))
+        nid = str(10 + i)
+        graph[nid] = {"class_type": "LoraLoader",
+                      "inputs": {"lora_name": name, "strength_model": w, "strength_clip": w,
+                                 "model": model_src, "clip": clip_src}}
+        model_src, clip_src = [nid, 0], [nid, 1]
+
+    graph["6"]["inputs"]["clip"] = clip_src
+    graph["7"]["inputs"]["clip"] = clip_src
+    graph["3"]["inputs"]["model"] = model_src
+    return graph
 
 
 class TriageJob(BaseJob):
@@ -96,11 +114,14 @@ class TriageJob(BaseJob):
                 seed = int(cell.get("seed") or random.randint(0, 2 ** 31))
 
                 if cell.get("checkpoint"):
-                    # Minimal txt2img graph — fastest, no custom nodes.
+                    # Minimal txt2img graph — fastest, no custom nodes. Accepts a LoRA
+                    # stack (cell.loras) or a single legacy lora/weight pair.
+                    loras = list(cell.get("loras") or [])
+                    if not loras and cell.get("lora"):
+                        loras = [{"name": cell["lora"], "weight": float(cell.get("weight", 0.8))}]
                     graph = _minimal_graph(
                         ckpt=cell["checkpoint"],
-                        lora=cell.get("lora") or "",
-                        weight=float(cell.get("weight", 0.8)),
+                        loras=loras,
                         prompt=cell.get("prompt") or "1girl, solo, standing, simple background, looking at viewer",
                         neg=cell.get("negative") or "lowres, worst quality, bad anatomy, text, watermark",
                         steps=int(cell.get("steps", 22)),

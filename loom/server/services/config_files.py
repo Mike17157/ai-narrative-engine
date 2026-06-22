@@ -12,9 +12,25 @@ from pathlib import Path
 
 
 # -- app-wide flags ----------------------------------------------------------
-# Small global switches (not per-config). `allow_nsfw` is the content gate: when False,
-# nsfw-rated lorebooks are excluded from retrieval everywhere. Stored in configs/app.json.
-APP_FLAGS_DEFAULT = {"allow_nsfw": True}
+# Small global switches (not per-config), stored in configs/app.json:
+#   allow_nsfw    — content gate: when False, nsfw-rated lorebooks are excluded from retrieval.
+#   img_detailer  — run the ADetailer (face/detail) pass on renders (the usual need).
+#   img_upscale   — run the heavy 4K upscale chain (USDU + hi-res). Off by default — most
+#                   renders don't need it.
+APP_FLAGS_DEFAULT = {"allow_nsfw": True, "img_detailer": True, "img_upscale": False}
+_BOOL_FLAGS = tuple(APP_FLAGS_DEFAULT)
+
+# Local text model — one OpenAI-compatible endpoint (llama.cpp's `llama-server`) serving a
+# GGUF off disk, so a preset can run locally instead of via an OpenRouter connection. Set up
+# by scripts/serve_meromero.sh; a preset opts in with its `local` toggle (see services/presets).
+#   base_url — the llama-server OpenAI-compatible base (…/v1)
+#   model    — the served alias (llama-server --alias)
+#   label    — display name in the preset editor
+LOCAL_MODEL_DEFAULT = {
+    "base_url": "http://127.0.0.1:8080/v1",
+    "model": "meromero",
+    "label": "MeroMero 26B (local)",
+}
 
 
 def load_app_flags(root: Path) -> dict:
@@ -25,14 +41,24 @@ def load_app_flags(root: Path) -> dict:
             cfg.update(json.loads(path.read_text(encoding="utf-8")) or {})
         except (ValueError, OSError):
             pass
-    cfg["allow_nsfw"] = bool(cfg.get("allow_nsfw", True))
+    for k in _BOOL_FLAGS:
+        cfg[k] = bool(cfg.get(k, APP_FLAGS_DEFAULT[k]))
+    lm = dict(LOCAL_MODEL_DEFAULT)
+    if isinstance(cfg.get("local_model"), dict):
+        lm.update({k: str(cfg["local_model"].get(k, lm[k]) or "") for k in LOCAL_MODEL_DEFAULT})
+    cfg["local_model"] = lm
     return cfg
 
 
 def save_app_flags(root: Path, data: dict) -> dict:
     cfg = load_app_flags(root)
-    if (data or {}).get("allow_nsfw") is not None:
-        cfg["allow_nsfw"] = bool(data["allow_nsfw"])
+    for k in _BOOL_FLAGS:
+        if (data or {}).get(k) is not None:
+            cfg[k] = bool(data[k])
+    lm_in = (data or {}).get("local_model")
+    if isinstance(lm_in, dict):
+        cfg["local_model"] = {k: str(lm_in.get(k, cfg["local_model"][k]) or "")
+                              for k in LOCAL_MODEL_DEFAULT}
     path = root / "configs" / "app.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")

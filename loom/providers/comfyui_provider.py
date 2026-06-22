@@ -45,6 +45,9 @@ class ComfyUIProvider:
         # remover after the render so the subject is segmented out. Collapses the
         # old anima / anima_cutout separate graphs into one workflow + this switch.
         self.output_variant: str | None = options.get("output_variant")
+        # Default pipeline feature toggles (detailer / upscale / highrez), from the global
+        # image flags. A per-call `flags` arg overrides these.
+        self.flags: dict[str, bool] = options.get("flags") or {}
 
     def _inject(self, prompt: str, negative_prompt: str | None = None, out_prefix: str | None = None,
                 latent: tuple[int, int] | None = None,
@@ -91,7 +94,7 @@ class ComfyUIProvider:
 
         get_server(self.base_url).ensure_up()
 
-        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent, flags)
+        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent, flags or self.flags)
         with httpx.Client(base_url=self.base_url, timeout=60) as client:
             if init_image:
                 self._set_init_image(client, graph, init_image)

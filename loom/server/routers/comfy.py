@@ -368,6 +368,17 @@ def register(app, ctx):
         """The whole LoRA subsystem config: { library, stacks }."""
         return ctx.base_settings.loras.model_dump()
 
+    @app.get("/api/loras/metadata")
+    async def lora_metadata(name: str):
+        """Civitai metadata for one LoRA (by rel path or bare name): model name, description,
+        trigger words, and the source page URL. Resolved via configs/civitai_loras.json, else by
+        file hash. Cached server-side. `name` is the scan rel or LoraManager bare name."""
+        from fastapi.concurrency import run_in_threadpool
+        from ...comfy.civitai import lora_metadata as _meta
+        bd = ctx.comfy_base_dir()
+        loras_dir = (bd / "models" / "loras") if bd else None
+        return await run_in_threadpool(_meta, ctx.root, name, loras_dir)
+
     @app.post("/api/loras")
     def save_loras(body: dict):
         """Persist configs/loras.yaml (library + stacks), then reload."""

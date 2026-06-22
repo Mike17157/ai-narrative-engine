@@ -228,15 +228,29 @@ class AppContext:
         return output_prefix(self.workflow_family(model_id), role, character)
 
     def text_provider_for(self, model_sel: str | None, params: dict | None = None,
-                          connection: str | None = None):
+                          connection: str | None = None, local: bool = False):
         """Build a text provider for a model selection: a registered model key, or an
         OpenRouter (etc.) model id run through a connection. `connection` (a preset's bound
         connection id) is used when given — so different presets can target different
         providers; otherwise the active text connection. `params` (temperature/top_p/…) are
-        merged into the provider options."""
+        merged into the provider options.
+
+        `local=True` ignores the connection/model entirely and routes to the local GGUF
+        endpoint (configs/app.json → local_model, served by llama-server) — the per-preset
+        OpenRouter ⇄ local toggle."""
         from ..providers.registry import build_provider
 
         params = params or {}
+        if local:
+            lm = config_files.load_app_flags(self.root).get("local_model") or {}
+            base = (lm.get("base_url") or "").strip()
+            if not base:
+                return None
+            return build_provider(ModelDef(
+                provider="openai", kind="text",
+                options={"model": lm.get("model") or "local", "api_key": "sk-noop",
+                         "base_url": base, **params},
+            ))
         s = self.effective_settings()
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
             md = s.models[model_sel]
@@ -279,7 +293,16 @@ class AppContext:
             opts["base_url"] = conn.base_url
         if output_variant:
             opts["output_variant"] = output_variant
+        opts["flags"] = {**opts.get("flags", {}), **self.image_flags()}
         return ComfyUIProvider(opts), model_id
+
+    def image_flags(self) -> dict:
+        """Global pipeline toggles for renders (configs/app.json) → the workflow's switch
+        gates. `img_upscale` drives BOTH the USDU and hi-res upscale branches (the "4K flow")."""
+        from .services import config_files as _cf
+        f = _cf.load_app_flags(self.root)
+        up = bool(f.get("img_upscale", False))
+        return {"detailer": bool(f.get("img_detailer", True)), "upscale": up, "highrez": up}
 
     def role_default(self, role: str) -> str | None:
         """What a role resolves to with NO override: the role-pinned workflow if it exists,

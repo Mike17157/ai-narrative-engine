@@ -1,9 +1,9 @@
 {
   "checkpoints": [
+    "anima/anisnuff_v15-000024.safetensors",
     "anima/hosekiLustrousmixAnima_animaV10.safetensors",
     "anima/miaomiaoHarem_animaBase.safetensors",
     "anima/novaAnimeAM_v25.safetensors",
-    "anima/anisnuff_v15-000024.safetensors",
     "anima/silvermoonmixAnima_v10.safetensors",
     "miaomiaoHarem_anima12.safetensors",
     "dit/anima-preview3-base.safetensors"

@@ -101,6 +101,20 @@ def _volume_key(subdir: str, name: str) -> str:
     return f"{prefix}/{name}"
 
 
+def _preset_lora_manifest_rows(root: Path, models_dir: Path) -> list[dict]:
+    """Manifest rows for every image-preset LoRA that has a Civitai mapping AND is present
+    locally under models/loras. Shared by the startup regen and gen_worker.py."""
+    from ..comfy.civitai import resolve_preset_loras
+    rows: list[dict] = []
+    for item in resolve_preset_loras(root):
+        local = models_dir / "loras" / Path(*item["rel"].split("/"))
+        if local.is_file():
+            rel = f"loras/{item['rel']}"
+            rows.append({"local": rel, "key": _volume_key("loras", item["rel"]),
+                         "bytes": local.stat().st_size})
+    return rows
+
+
 def regenerate_manifest(ctx) -> None:
     """Scan all workflow JSONs and rewrite runpod/worker/models_manifest.json
     with every model that is both referenced by a workflow AND present locally.
@@ -137,18 +151,23 @@ def regenerate_manifest(ctx) -> None:
                     if subdir:
                         model_refs[v.replace("\\", "/")] = subdir
 
-        manifest = []
+        manifest: dict[str, dict] = {}  # volume key -> row (dedupes preset/workflow overlap)
         for name, subdir in sorted(model_refs.items()):
             local = models_dir / subdir / Path(*name.split("/"))
             if local.is_file():
-                manifest.append({
-                    "local": f"{subdir}/{name}",
-                    "key": _volume_key(subdir, name),
-                    "bytes": local.stat().st_size,
-                })
+                key = _volume_key(subdir, name)
+                manifest[key] = {"local": f"{subdir}/{name}", "key": key,
+                                 "bytes": local.stat().st_size}
 
-        manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        log.info("startup: manifest regenerated — %d model(s)", len(manifest))
+        # Image-preset LoRAs are injected at RENDER time (not in any workflow JSON), so the
+        # workflow scan above never sees them. Fold them in explicitly — that's what carries
+        # the preset stacks to the runpod volume via upload_models.py.
+        for item in _preset_lora_manifest_rows(ctx.root, models_dir):
+            manifest[item["key"]] = item
+
+        rows = [manifest[k] for k in sorted(manifest)]
+        manifest_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
+        log.info("startup: manifest regenerated — %d model(s)", len(rows))
     except Exception:  # noqa: BLE001
         log.exception("startup: manifest regeneration failed")
 
@@ -188,3 +207,38 @@ def validate_lora_stacks(ctx) -> None:
             log.info("startup: all %d LoRA library entries resolved", len(library))
     except Exception:  # noqa: BLE001
         log.exception("startup: LoRA stack validation failed")
+
+
+# ---------------------------------------------------------------------------
+# 5. Image-preset LoRA auto-download (Civitai)
+# ---------------------------------------------------------------------------
+
+def download_preset_loras(ctx) -> None:
+    """Fetch any image-preset LoRA missing locally from Civitai (configs/civitai_loras.json),
+    in a background thread so large downloads never block boot. No-op without a managed
+    ComfyUI loras dir or a CIVITAI_API_TOKEN. On success, refreshes the scan cache and the
+    runpod manifest so the new files are immediately uploadable."""
+    try:
+        from ..comfy.civitai import ensure_preset_loras
+        bd = ctx.comfy_base_dir()
+        loras_dir = (bd / "models" / "loras") if bd else None
+        if not loras_dir:
+            return
+
+        def _run() -> None:
+            try:
+                summary = ensure_preset_loras(ctx.root, loras_dir)
+                if summary.get("downloaded"):
+                    from ..comfy.scan import invalidate_scan_cache
+                    invalidate_scan_cache()
+                    ctx._loras_cache = None
+                    regenerate_manifest(ctx)
+                    log.info("startup: civitai preset-LoRA download complete — %d new file(s)",
+                             len(summary["downloaded"]))
+            except Exception:  # noqa: BLE001
+                log.exception("startup: civitai preset-LoRA download failed")
+
+        import threading
+        threading.Thread(target=_run, name="civitai-preset-loras", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        log.exception("startup: civitai preset-LoRA download could not start")

@@ -186,7 +186,7 @@ def register(app, ctx):
         cfg = {"id": "preset:" + preset["id"], "name": preset.get("name", ""),
                "system": preset.get("system", ""), "params": preset.get("params") or {},
                "mode": preset.get("mode", ""), "model": preset.get("model", ""),
-               "connection": preset.get("connection", ""),
+               "connection": preset.get("connection", ""), "local": preset.get("local", False),
                "author_note": preset.get("author_note", ""), "author_depth": preset.get("author_depth", 4),
                "post_history": preset.get("post_history", ""), "stop": preset.get("stop") or [],
                "reasoning_effort": preset.get("reasoning_effort", ""),
@@ -198,9 +198,13 @@ def register(app, ctx):
             opts["stop"] = cfg["stop"]
         if cfg.get("reasoning_effort"):
             opts["reasoning_effort"] = cfg["reasoning_effort"]
-        provider = ctx.text_provider_for(model, opts, connection=cfg.get("connection") or None)
+        provider = ctx.text_provider_for(model if not cfg.get("local") else None, opts,
+                                         connection=cfg.get("connection") or None,
+                                         local=bool(cfg.get("local")))
         if provider is None or not hasattr(provider, "generate_text"):
-            return JSONResponse({"error": "no chat connection — connect a chat model first"}, status_code=400)
+            err = ("local model endpoint not set — configure it in Settings → System"
+                   if cfg.get("local") else "no chat connection — connect a chat model first")
+            return JSONResponse({"error": err}, status_code=400)
 
         history = [m for m in (body.get("history") or []) if isinstance(m, dict)]
         lorebooks = body.get("lorebooks")

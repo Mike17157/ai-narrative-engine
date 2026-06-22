@@ -164,6 +164,7 @@
         <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
           <span class="nm">{p.name || p.id}</span>
           <span class="tags">
+            {#if p.local}<span class="mtag local" title="runs on the local model">local</span>{/if}
             <span class="mtag" class:assist={(p.mode || '') === 'assist'} class:rp={(p.mode || '') === 'roleplay'}>
               {p.mode || 'auto'}
             </span>
@@ -195,21 +196,31 @@
         <label>Description <span class="lo">— what this preset is for</span></label>
         <textarea class="fld ta" rows="1" use:autosize={sel.description} bind:value={sel.description}></textarea>
       </div>
-      <div class="erow">
-        <label>Connection</label>
-        <Combobox items={connItems} value={sel.connection || ''} placeholder="Active text connection"
-          onpick={(v) => { sel.connection = v; sel.model = ''; }} />
-        <button class="mng" class:on={manageConn} onclick={() => (manageConn = !manageConn)} title="Add / edit API connections">⚙ Manage</button>
-      </div>
-      {#if manageConn}
-        <div class="connmng">
-          <ConnectionPanel kind="text" />
+      <label class="localrow" title="Run this preset on the local GGUF model instead of OpenRouter">
+        <input type="checkbox" bind:checked={sel.local} />
+        <span class="locallabel">Local model
+          <span class="lo">— use {app.localModel?.label || 'the local model'} instead of OpenRouter.
+            <a href="/settings/system">configure endpoint</a>
+          </span>
+        </span>
+      </label>
+      {#if !sel.local}
+        <div class="erow">
+          <label>Connection</label>
+          <Combobox items={connItems} value={sel.connection || ''} placeholder="Active text connection"
+            onpick={(v) => { sel.connection = v; sel.model = ''; }} />
+          <button class="mng" class:on={manageConn} onclick={() => (manageConn = !manageConn)} title="Add / edit API connections">⚙ Manage</button>
+        </div>
+        {#if manageConn}
+          <div class="connmng">
+            <ConnectionPanel kind="text" />
+          </div>
+        {/if}
+        <div class="erow">
+          <label>Model</label>
+          <Combobox items={modelItems} value={sel.model} placeholder={modelsLoading ? 'loading…' : 'Connection default'} onpick={(v) => (sel.model = v)} />
         </div>
       {/if}
-      <div class="erow">
-        <label>Model</label>
-        <Combobox items={modelItems} value={sel.model} placeholder={modelsLoading ? 'loading…' : 'Connection default'} onpick={(v) => (sel.model = v)} />
-      </div>
       <div class="erow">
         <label title="How the model is framed.">Address</label>
         <div class="seg">
@@ -301,6 +312,7 @@
     background: var(--elev); border-radius: 999px; padding: 1px 7px; }
   .mtag.assist { color: var(--accent); background: rgba(109,140,255,.14); }
   .mtag.rp { color: var(--good); background: rgba(100,210,130,.12); }
+  .mtag.local { color: var(--warn); background: rgba(230,170,90,.14); }
   .btag { font-size: 9.5px; color: var(--faint); }
   .new { margin-top: 4px; padding: 9px 11px; border-radius: 9px; background: none; border: 1px dashed var(--border);
     color: var(--muted); font-size: 12.5px; cursor: pointer; box-shadow: none; }
@@ -326,6 +338,11 @@
     border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
   .mng:hover, .mng.on { color: var(--accent); border-color: var(--accent); filter: none; }
   .connmng { border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px; background: var(--bg); }
+  .localrow { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; padding: 2px 0; }
+  .localrow input { width: 16px; height: 16px; margin-top: 1px; flex: none; }
+  .locallabel { font-size: 13px; font-weight: 600; color: var(--text); }
+  .locallabel .lo { font-weight: 400; }
+  .locallabel a { color: var(--accent); }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .segbtn { background: var(--bg); border: 0; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 600;
     padding: 7px 14px; cursor: pointer; border-right: 1px solid var(--border-soft); }

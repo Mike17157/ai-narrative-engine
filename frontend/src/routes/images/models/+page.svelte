@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
+  import WorkflowImport from '$lib/components/image/WorkflowImport.svelte';
 
   // The image-model surface, focused on the active pipeline: Anima + the support
   // models (VAE / CLIP / upscalers / ControlNet) it depends on. The full
@@ -71,6 +72,8 @@
   ));
   function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? Math.round(b / 1e6) + ' MB' : Math.round(b / 1e3) + ' KB'; }
 </script>
+
+<WorkflowImport onimported={load} />
 
 <div class="hint">The image models for the active pipeline — <b>Anima</b> plus the support models (VAE, CLIP, upscalers, ControlNet) it depends on. Browse other families and file misfiled / loose downloads from the <b>Graph</b> pane's <b>⊞ Model library</b>.</div>
 

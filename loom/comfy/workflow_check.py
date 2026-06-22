@@ -48,6 +48,90 @@ def model_refs(graph: dict) -> list[dict]:
     return refs
 
 
+def _save_score(node: dict) -> int:
+    """Rank how likely a node is the workflow's image OUTPUT. Real image sinks consume an
+    `images` input (so a 'Scheduler Selector (Image Saver)' helper, which doesn't, ranks
+    below the actual 'Image Saver'). Returns -1 for non-output nodes."""
+    ct = str(node.get("class_type", "")).lower()
+    ins = node.get("inputs") or {}
+    is_out = ("save" in ct and "image" in ct) or ct in ("previewimage", "saveimagewebsocket")
+    if not is_out:
+        return -1
+    score = 0
+    if isinstance(ins.get("images"), list):
+        score += 10
+    if ct in ("saveimage", "image saver"):
+        score += 5
+    if ct == "previewimage":
+        score -= 2
+    return score
+
+
+def _follow_to_text(graph: dict, start: str, max_visit: int = 60) -> tuple[str | None, str | None]:
+    """Walk backward from a node id through input wires until a text-prompt field is
+    found (CLIPTextEncode etc.). Returns (node_id, field) or (None, None)."""
+    seen: set[str] = set()
+    stack = [start]
+    while stack and len(seen) < max_visit:
+        nid = stack.pop()
+        if nid in seen:
+            continue
+        seen.add(nid)
+        node = graph.get(nid) or {}
+        ins = node.get("inputs") or {}
+        if not isinstance(ins, dict):
+            continue
+        for f in ("text", "text_g", "text_l", "prompt", "positive_prompt"):
+            if isinstance(ins.get(f), str):
+                return nid, f
+        for v in ins.values():  # follow node references [nid, slot]
+            if isinstance(v, list) and v and isinstance(v[0], str):
+                stack.append(v[0])
+    return None, None
+
+
+def suggest_io(graph: dict) -> dict:
+    """Best-guess the positive-prompt injection point + output (SaveImage) node for an
+    arbitrary API workflow, plus all candidates so the UI can offer an override."""
+    graph = graph or {}
+    outputs = sorted(
+        [nid for nid, n in graph.items() if isinstance(n, dict) and _save_score(n) >= 0],
+        key=lambda nid: _save_score(graph[nid]), reverse=True)
+    text_nodes = [(nid, "text") for nid, n in graph.items()
+                  if isinstance(n, dict) and isinstance((n.get("inputs") or {}).get("text"), str)]
+
+    pos_node = pos_field = None
+    # Trace from samplers: KSampler.positive, or SamplerCustomAdvanced.guider → BasicGuider.conditioning.
+    for nid, n in graph.items():
+        if not isinstance(n, dict) or "sampler" not in str(n.get("class_type", "")).lower():
+            continue
+        ins = n.get("inputs") or {}
+        ref = ins.get("positive")
+        if isinstance(ref, list) and ref:
+            pos_node, pos_field = _follow_to_text(graph, ref[0])
+            if pos_node:
+                break
+        gref = ins.get("guider")
+        if isinstance(gref, list) and gref:
+            gin = (graph.get(gref[0]) or {}).get("inputs") or {}
+            cref = gin.get("conditioning") or gin.get("positive")
+            if isinstance(cref, list) and cref:
+                pos_node, pos_field = _follow_to_text(graph, cref[0])
+                if pos_node:
+                    break
+    if not pos_node and text_nodes:          # fallback: first text node in the graph
+        pos_node, pos_field = text_nodes[0]
+
+    return {
+        "positive": ({"node": pos_node, "field": pos_field} if pos_node else None),
+        "output_node": (outputs[0] if outputs else None),
+        "text_candidates": [{"node": nid, "field": f,
+                             "class_type": (graph.get(nid) or {}).get("class_type")} for nid, f in text_nodes],
+        "output_candidates": [{"node": nid,
+                              "class_type": (graph.get(nid) or {}).get("class_type")} for nid in outputs],
+    }
+
+
 def check_workflow(graph: dict, models_dir: str | Path, catalog_entries: list[dict]) -> dict:
     """Dedupe refs, flag which are installed, and match missing ones to the catalog."""
     models_dir = Path(models_dir)
@@ -73,4 +157,5 @@ def check_workflow(graph: dict, models_dir: str | Path, catalog_entries: list[di
         out[key] = {**r, "installed": installed, "catalog": cat}
 
     refs = list(out.values())
-    return {"refs": refs, "missing": [r for r in refs if not r["installed"]]}
+    return {"refs": refs, "missing": [r for r in refs if not r["installed"]],
+            "io": suggest_io(graph)}

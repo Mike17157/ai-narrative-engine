@@ -986,7 +986,7 @@
         "s1284__1286",
         2
       ],
-      "text": ""
+      "text": "masterpiece, best quality, amazing quality, very aesthetic, absurdres, {{image}}"
     },
     "_meta": {
       "title": "Positive prompt (inject here)"
@@ -999,7 +999,7 @@
         "s1284__1286",
         2
       ],
-      "text": ""
+      "text": "bad anatomy, bad hands, worst quality, low quality, signature, watermark, text, jpeg artifacts, missing fingers, extra digit, (chibi:1.1), toddler, (mature female:0.8)"
     },
     "_meta": {
       "title": "Negative prompt"
@@ -1376,7 +1376,7 @@
         "s890__1281",
         1
       ],
-      "text": ""
+      "text": "masterpiece, best quality, amazing quality, very aesthetic, absurdres, {{image}}"
     },
     "_meta": {
       "title": "Anima positive prompt"

@@ -23,6 +23,9 @@ export const app = $state({
   models: { text: [], image: [] },
   conns: { active: { text: null, image: null }, connections: [] },
   allowNsfw: true,                    // global content gate (configs/app.json) — gates nsfw books
+  imgDetailer: true,                  // run the ADetailer pass on renders
+  imgUpscale: false,                  // run the heavy 4K upscale chain (USDU + hi-res)
+  localModel: { base_url: '', model: '', label: 'Local model' }, // local GGUF endpoint (configs/app.json)
   activity: { jobs: [], running: 0 }, // live server-resident workloads
   localJobs: [],                      // client-driven workloads (renders, generation) + history
   // pending deep-link target (consumed by +page / panels), e.g. Settings ↔ Train
@@ -210,13 +213,27 @@ export async function refreshActivity() {
   try { app.activity = await get('/activity'); } catch { /* transient */ }
 }
 
+// Global app flags (configs/app.json) mirrored into the store. Local field ⇄ server key:
+const _FLAG_KEYS = { allowNsfw: 'allow_nsfw', imgDetailer: 'img_detailer', imgUpscale: 'img_upscale' };
+
 export async function refreshFlags() {
-  try { app.allowNsfw = !!(await get('/app-flags')).allow_nsfw; } catch { /* keep default */ }
+  try {
+    const f = await get('/app-flags');
+    for (const [local, key] of Object.entries(_FLAG_KEYS)) app[local] = !!f[key];
+    if (f.local_model) app.localModel = { ...app.localModel, ...f.local_model };
+  } catch { /* keep defaults */ }
 }
 
-export async function setAllowNsfw(v) {
-  app.allowNsfw = !!v;
-  try { await put('/app-flags', { allow_nsfw: !!v }); } catch { /* best-effort */ }
+export async function setAppFlag(local, v) {
+  app[local] = !!v;
+  try { await put('/app-flags', { [_FLAG_KEYS[local]]: !!v }); } catch { /* best-effort */ }
+}
+export const setAllowNsfw = (v) => setAppFlag('allowNsfw', v);   // back-compat
+
+// Local text model (configs/app.json → local_model) — the endpoint a `local` preset uses.
+export async function setLocalModel(patch) {
+  app.localModel = { ...app.localModel, ...patch };
+  try { await put('/app-flags', { local_model: { ...app.localModel } }); } catch { /* best-effort */ }
 }
 
 export async function refreshAll() {

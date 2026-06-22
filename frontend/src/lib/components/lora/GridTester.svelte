@@ -1,9 +1,11 @@
 <script>
-  // Grid tester: render the same prompt across N checkpoints (rows) × M LoRAs (columns).
-  // Anima family only. State is persisted to localStorage so the grid survives tab switches.
+  // Image Preset Lab: render the same prompt across N checkpoints (rows) × M LoRA STACKS
+  // (columns). A column is a stack of one-or-more LoRAs; the stack's PRIMARY layer may carry
+  // a weight range, which fans the stack out across several columns (a sweep). Anima family
+  // only. State is persisted to localStorage so the grid survives tab switches.
   //
-  // Import button: drag .safetensors files into the modal — backend classifies, places in
-  // the correct family folder, new items appear in the pool automatically.
+  // Save a rendered CELL as an Image Preset → captures that row's checkpoint + the column's
+  // full LoRA stack. Import button: drag .safetensors files into the modal.
   import { onDestroy, onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import { jobStream } from '$lib/sse.js';
@@ -12,43 +14,66 @@
   import ImgCard from '$lib/components/image/ImgCard.svelte';
   import Combobox from '$lib/components/shared/Combobox.svelte';
 
-  const CACHE_KEY = 'grid-tester-v1';
+  const CACHE_KEY = 'grid-tester-v2';
+  const uid = () => 's' + Math.random().toString(36).slice(2, 9);
 
   // --- selection state ---
+  let fam      = $state('anima');  // which model family this grid builds for (anima / flux / …)
   let selCkpts = $state([]);
-  let selLoras = $state([]);   // {name, weights: number[]}[]
+  let selStacks = $state([]);  // {id, layers:[{name, weights:number[]}]}[]  (layers[0] = primary, may sweep)
   let running  = $state(false);
-  let wm       = $state(null); // weight modal
+  let wm       = $state(null); // stack-editor modal
   let cfgOpen  = $state(true); // left config panel folded out?
   let ckptPick = $state('');   // add-picker bindings (reset after each pick)
   let loraPick = $state('');
+
+  // Prompt textarea: auto-grow to fit the full text (no clipping) up to a cap, then scroll.
+  let tpEl = $state(null);
+  $effect(() => {
+    img.testPrompt;                 // re-fit on every change (typing or external set)
+    if (tpEl) {
+      tpEl.style.height = 'auto';
+      const borders = tpEl.offsetHeight - tpEl.clientHeight;  // border-box: include the border so text isn't clipped
+      tpEl.style.height = Math.min(tpEl.scrollHeight + borders, 260) + 'px';
+    }
+  });
 
   // --- import modal (type-specific: checkpoints and LoRAs import separately) ---
   let importOpen  = $state(false);
   let importKind  = $state('checkpoint'); // which importer is active: 'checkpoint' | 'lora'
   let importDrop  = $state(false);  // dragging over the modal drop zone
-  let importFiles = $state([]);     // [{name, status:'uploading'|'done'|'err', kind, family, rel, err, runpod:'syncing'|'synced'|'err'|null}]
-  let dropKind    = $state(null);   // which inline import button is being dragged over: 'checkpoint' | 'lora' | null
+  let importFiles = $state([]);     // [{name, status, kind, family, rel, err, runpod}]
+  let dropKind    = $state(null);   // which inline import button is being dragged over
 
-  // --- pools ---
-  let animaCkpts = $derived(
+  // --- pools (scoped to the chosen family) ---
+  // Families that actually have a base model on disk (a checkpoint or diffusion model) — the
+  // only ones worth gridding. Anima/Flux/etc.; falls back to ['anima'] before the scan loads.
+  let famList = $derived.by(() => {
+    const fams = new Set();
+    for (const i of (loraLib.scan?.items || []))
+      if ((i.kind === 'checkpoint' || i.kind === 'diffusion') && i.family) fams.add(i.family);
+    return fams.size ? [...fams] : ['anima'];
+  });
+  let famCkpts = $derived(
     (loraLib.scan?.items || [])
-      .filter((i) => (i.kind === 'checkpoint' || i.kind === 'diffusion') && i.family === 'anima')
+      .filter((i) => (i.kind === 'checkpoint' || i.kind === 'diffusion') && i.family === fam)
       .map((i) => i.rel)
   );
-  let animaLoras = $derived(
-    (loraLib.choices.loras || []).filter((n) => famOf(n) === 'anima')
+  let famLoras = $derived(
+    (loraLib.choices.loras || []).filter((n) => famOf(n) === fam)
   );
-  let availCkpts = $derived(animaCkpts.filter((v) => !selCkpts.includes(v)));
-  let availLoras = $derived(animaLoras.filter((n) => !selLoras.find((l) => l.name === n)));
-  let extraCkpts = $derived(selCkpts.filter((v) => !animaCkpts.includes(v)));
-  let extraLoras = $derived(selLoras.filter((l) => !animaLoras.includes(l.name)));
+  let availCkpts = $derived(famCkpts.filter((v) => !selCkpts.includes(v)));
+  let availLoras = $derived(famLoras);
+  let extraCkpts = $derived(selCkpts.filter((v) => !famCkpts.includes(v)));
+  // Every distinct LoRA referenced by any stack — for sync/reconcile + ext-badge detection.
+  let allLoraNames = $derived([...new Set(selStacks.flatMap((s) => s.layers.map((l) => l.name).filter(Boolean)))]);
+  const stackIsExt = (s) => s.layers.some((l) => l.name && !famLoras.includes(l.name));
 
   // --- toggle helpers ---
   function addCkpt(v) { if (v && !selCkpts.includes(v)) selCkpts = [...selCkpts, v]; }
   function rmCkpt(v)  { selCkpts = selCkpts.filter((c) => c !== v); }
-  function addLora(v) { if (v && !selLoras.find((l) => l.name === v)) selLoras = [...selLoras, { name: v, weights: [0.8] }]; }
-  function rmLora(n)  { selLoras = selLoras.filter((l) => l.name !== n); }
+  function addLora(v) { if (v) selStacks = [...selStacks, { id: uid(), layers: [{ name: v, weights: [0.8] }] }]; }
+  function rmStack(id) { selStacks = selStacks.filter((s) => s.id !== id); }
 
   // --- drop-zone drag handlers for the tag fields ---
   let czDrag = $state(false);
@@ -81,45 +106,61 @@
   }
 
   // --- columns ---
+  // Each stack → one column, UNLESS its primary layer has a weight range (then one column
+  // per swept value, with the rest of the stack held at their single weights).
   let columns = $derived(
-    selLoras.flatMap((l) => l.weights.map((w) => ({ lora: l.name, weight: w })))
+    selStacks.flatMap((s) => {
+      const layers = s.layers.filter((l) => l.name);
+      if (!layers.length) return [];
+      const sweepVals = layers[0].weights.length > 1 ? layers[0].weights : [layers[0].weights[0]];
+      const swept = layers[0].weights.length > 1;
+      return sweepVals.map((v) => {
+        const loras = layers.map((l, i) => ({ name: l.name, weight: i === 0 ? v : (l.weights[0] ?? 0.8) }));
+        return {
+          stackId: s.id,
+          key: `${s.id}#${swept ? v : 'x'}`,
+          loras,
+          primary: layers[0].name,
+          weight: v,
+          extra: layers.length - 1,
+        };
+      });
+    })
   );
 
-  // --- build a preset from chosen columns (each column is a LoRA @ weight) ---
-  // Select the winning columns, then save them as a stacked image preset.
-  let selCols = $state(new Set());           // keys: `${lora}||${weight}`
-  const colKey = (col) => `${col.lora}||${col.weight}`;
-  function toggleCol(col) {
-    const k = colKey(col); const s = new Set(selCols);
-    s.has(k) ? s.delete(k) : s.add(k); selCols = s;
+  // --- build a preset from a chosen CELL (checkpoint row + column stack) ---
+  let selCell = $state(null);  // {ckpt, colKey} | null
+  function toggleCell(ckpt, colKey) {
+    selCell = (selCell && selCell.ckpt === ckpt && selCell.colKey === colKey) ? null : { ckpt, colKey };
   }
   let savingPreset = $state(false);
   let presetMsg = $state(null);              // {ok, text} | null
   async function saveAsPreset() {
-    const chosen = columns.filter((c) => selCols.has(colKey(c)));
-    if (!chosen.length || savingPreset) return;
+    if (!selCell || savingPreset) return;
+    const col = columns.find((c) => c.key === selCell.colKey);
+    if (!col) return;
     savingPreset = true; presetMsg = null;
     const name = (window.prompt('Name this image preset:', 'Grid preset') || '').trim();
     if (!name) { savingPreset = false; return; }
     // Dedupe by lora name, last weight wins (matches inject_models semantics).
-    const loras = [...new Map(chosen.map((c) => [c.lora, { name: c.lora, weight: c.weight }])).values()];
+    const loras = [...new Map(col.loras.map((l) => [l.name, { name: l.name, weight: l.weight }])).values()];
     try {
       const res = await fetch('/api/image-presets', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, family: 'anima', category: 'Custom', loras }),
+        body: JSON.stringify({ name, family: fam, category: 'Custom', base_checkpoint: selCell.ckpt, loras }),
       });
       const data = await res.json();
       presetMsg = data.id
         ? { ok: true, text: `Saved “${name}” → Library ▸ Image Presets` }
         : { ok: false, text: data.error || 'save failed' };
-      if (data.id) selCols = new Set();
+      if (data.id) selCell = null;
     } catch (e) { presetMsg = { ok: false, text: String(e) }; }
     savingPreset = false;
   }
 
   // --- cell state ---
   let cells = $state({});
-  const ck = (ckpt, lora, w) => `${ckpt}||${lora}||${w}`;
+  const ck = (ckpt, colKey) => `${ckpt}||${colKey}`;
 
   // Active job tracking (for cancel + cleanup).
   let _job = null;
@@ -141,9 +182,8 @@
     }, onDone);
   }
 
-  async function renderCell(ckpt, lora, weight) {
-    const col = { lora, weight };
-    const k = ck(ckpt, lora, weight);
+  async function renderCell(ckpt, col) {
+    const k = ck(ckpt, col.key);
     cells[k] = { img: null, status: 'gen', pct: null, err: null };
     try {
       const res = await fetch('/api/loras/grid-render', {
@@ -161,6 +201,28 @@
     }
   }
 
+  // --- reset the whole lab back to a fresh, empty grid ---
+  // Wipes the in-memory selection + rendered cells, the localStorage cache, and (via the
+  // persistence $effect) the server-side grid-config. Stops any in-flight render first.
+  let hasState = $derived(
+    selCkpts.length > 0 || selStacks.length > 0 || Object.keys(cells).length > 0
+  );
+  function resetGrid() {
+    if (!hasState) return;
+    if (!confirm('Reset the lab? This clears all selected checkpoints, LoRA stacks, and rendered cells — start fresh.'))
+      return;
+    _closeJob();
+    running = false;
+    selCkpts = [];
+    selStacks = [];
+    cells = {};
+    selCell = null;
+    presetMsg = null;
+    syncMsg = null;
+    try { localStorage.removeItem(CACHE_KEY); } catch {}
+    // The $effect re-persists the now-empty selection to localStorage + /api/runpod/grid-config.
+  }
+
   async function renderAll() {
     if (running) { _closeJob(); running = false; return; }
     if (!selCkpts.length || !columns.length) return;
@@ -168,7 +230,7 @@
     const pending = [];
     for (const ckpt of selCkpts)
       for (const col of columns)
-        if (!cells[ck(ckpt, col.lora, col.weight)]?.img)
+        if (!cells[ck(ckpt, col.key)]?.img)
           pending.push(_makeCell(ckpt, col));
 
     if (!pending.length) return;
@@ -187,17 +249,33 @@
     running = false;
   }
 
-  // --- weight modal ---
-  function openModal(name) {
-    const found = selLoras.find((l) => l.name === name);
-    if (!found) return;
-    const w = found.weights; const isRange = w.length > 1;
+  // --- LoRA metadata (Civitai: description, trigger words, source page) ---
+  let metaCache = $state({});        // name -> { loading, data }
+  async function loadMeta(name) {
+    if (!name || metaCache[name]) return;
+    metaCache[name] = { loading: true, data: null };
+    try {
+      const r = await fetch(`/api/loras/metadata?name=${encodeURIComponent(name)}`);
+      metaCache[name] = { loading: false, data: await r.json() };
+    } catch (e) {
+      metaCache[name] = { loading: false, data: { found: false, reason: String(e) } };
+    }
+  }
+
+  // --- stack-editor modal ---
+  function openModal(id) {
+    const s = selStacks.find((x) => x.id === id);
+    if (!s) return;
+    const primary = s.layers[0];
+    const w = primary.weights; const isRange = w.length > 1;
     wm = {
-      name, mode: isRange ? 'range' : 'single',
+      id, primaryName: primary.name, mode: isRange ? 'range' : 'single',
       singleW: isRange ? 0.8 : (w[0] ?? 0.8),
       rangeMin: isRange ? w[0] : 0.4, rangeMax: isRange ? w[w.length - 1] : 1.0,
       rangeStep: isRange && w.length > 1 ? Math.round((w[1] - w[0]) * 1000) / 1000 : 0.2,
+      extra: s.layers.slice(1).map((l) => ({ name: l.name, weight: l.weights[0] ?? 0.8 })),
     };
+    loadMeta(primary.name);
   }
   function modalPreview(m) {
     if (!m) return [];
@@ -206,9 +284,15 @@
     for (let v = +m.rangeMin; v <= +m.rangeMax + 0.0001; v += step) { vals.push(+v.toFixed(3)); if (vals.length > 20) break; }
     return vals;
   }
+  function addExtra() { if (wm) wm.extra = [...wm.extra, { name: '', weight: 0.8 }]; }
+  function rmExtra(i) { if (wm) wm.extra = wm.extra.filter((_, j) => j !== i); }
   function applyModal() {
     if (!wm) return;
-    selLoras = selLoras.map((l) => l.name === wm.name ? { ...l, weights: modalPreview(wm) } : l);
+    const layers = [
+      { name: wm.primaryName, weights: modalPreview(wm) },
+      ...wm.extra.filter((e) => e.name).map((e) => ({ name: e.name, weights: [+e.weight || 0.8] })),
+    ];
+    selStacks = selStacks.map((s) => s.id === wm.id ? { ...s, layers } : s);
     wm = null;
   }
 
@@ -273,8 +357,9 @@
     try {
       const saved = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null');
       if (saved) {
+        if (typeof saved.fam === 'string') fam = saved.fam;
         if (Array.isArray(saved.selCkpts)) selCkpts = saved.selCkpts;
-        if (Array.isArray(saved.selLoras)) selLoras = saved.selLoras;
+        if (Array.isArray(saved.selStacks)) selStacks = saved.selStacks;
         if (saved.cells && typeof saved.cells === 'object') cells = saved.cells;
         if (typeof saved.cfgOpen === 'boolean') cfgOpen = saved.cfgOpen;
       }
@@ -285,10 +370,9 @@
       if (r.ok) {
         const cfg = await r.json();
         if (cfg.checkpoints?.length) selCkpts = cfg.checkpoints;
-        if (cfg.loras?.length) selLoras = cfg.loras.map((n) => {
-          const existing = selLoras.find((l) => l.name === n);
-          return existing || { name: n, weights: [0.8] };
-        });
+        // Server stores flat LoRA names; reconstruct single-layer stacks only if nothing local.
+        if (cfg.loras?.length && !selStacks.length)
+          selStacks = cfg.loras.map((n) => ({ id: uid(), layers: [{ name: n, weights: [0.8] }] }));
       }
     } catch {}
   });
@@ -297,15 +381,15 @@
   let _gridSaveTimer;
   $effect(() => {
     // Touch reactive state to establish tracking
-    const snap = { selCkpts: [...selCkpts], selLoras: [...selLoras], cells: { ...cells }, cfgOpen };
+    const snap = { fam, selCkpts: [...selCkpts], selStacks: $state.snapshot(selStacks), cells: { ...cells }, cfgOpen };
     clearTimeout(_saveTimer);
     _saveTimer = setTimeout(() => {
       try { localStorage.setItem(CACHE_KEY, JSON.stringify(snap)); } catch {}
     }, 600);
 
-    // Also persist checkpoint+lora selection server-side so startup reconcile knows what to sync.
+    // Also persist checkpoint + flattened lora selection server-side so startup reconcile knows what to sync.
     const ckpts = [...selCkpts];
-    const loras = selLoras.map((l) => l.name);
+    const loras = [...allLoraNames];
     clearTimeout(_gridSaveTimer);
     _gridSaveTimer = setTimeout(() => {
       fetch('/api/runpod/grid-config', {
@@ -325,10 +409,7 @@
     try {
       const res = await fetch('/api/runpod/volume/reconcile', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          checkpoints: selCkpts,
-          loras: selLoras.map((l) => l.name),
-        }),
+        body: JSON.stringify({ checkpoints: selCkpts, loras: [...allLoraNames] }),
       });
       const data = await res.json();
       if (!data.ok || !data.id) {
@@ -350,28 +431,30 @@
     syncing = false;
   }
 
-  // Build a triage cell dict. Diffusion models (split UNet) use the model-based path
-  // so inject_models wires them through the real anima workflow. Bundled checkpoints
-  // use the minimal graph path (CheckpointLoaderSimple).
+  // Build a triage cell dict. Diffusion models (split UNet) use the model-based path so
+  // inject_models wires the whole stack through the real anima workflow. Bundled checkpoints
+  // use the minimal graph path (which now chains the whole LoRA stack too).
   function _makeCell(ckpt, col) {
-    const k = ck(ckpt, col.lora, col.weight);
+    const k = ck(ckpt, col.key);
     const kind = (loraLib.scan?.items || []).find((i) => i.rel === ckpt)?.kind ?? 'checkpoint';
     if (kind === 'diffusion') {
-      return { key: k, model: 'anima', checkpoint_override: ckpt,
-               loras: [{ name: col.lora, weight: col.weight }], prompt: img.testPrompt };
+      return { key: k, model: fam, checkpoint_override: ckpt, loras: col.loras, prompt: img.testPrompt };
     }
-    return { key: k, checkpoint: ckpt, lora: col.lora, weight: col.weight, prompt: img.testPrompt };
+    return { key: k, checkpoint: ckpt, loras: col.loras, prompt: img.testPrompt };
   }
 
   // --- progress ---
   let totalCells = $derived(selCkpts.length * columns.length);
   let doneCells  = $derived(
-    selCkpts.reduce((s, ckpt) => s + columns.filter((c) => cells[ck(ckpt, c.lora, c.weight)]?.img).length, 0)
+    selCkpts.reduce((s, ckpt) => s + columns.filter((c) => cells[ck(ckpt, c.key)]?.img).length, 0)
   );
   const shortName = (p) => (p || '').split(/[/\\]/).pop();
-  const weightLabel = (l) => l.weights.length === 1
-    ? `@${l.weights[0]}`
-    : `@${l.weights[0]}–${l.weights[l.weights.length - 1]} ×${l.weights.length}`;
+  const weightLabel = (s) => {
+    const w = s.layers[0].weights;
+    const base = w.length === 1 ? `@${w[0]}` : `@${w[0]}–${w[w.length - 1]} ×${w.length}`;
+    const extra = s.layers.filter((l) => l.name).length - 1;
+    return extra > 0 ? `${base} +${extra}` : base;
+  };
 </script>
 
 <div class="gt" class:cfg-closed={!cfgOpen}>
@@ -379,14 +462,23 @@
   <aside class="cfg">
    <div class="cfg-inner">
     <div class="gt-head">
-      <span class="gt-title">Grid Test</span>
-      <span class="gt-sub">anima · checkpoints × LoRAs</span>
+      <span class="gt-title">Image Preset Lab</span>
+      <span class="gt-sub">build &amp; compare LoRA stacks</span>
     </div>
+
+  <!-- Family — which model family this grid builds for -->
+  <div class="fam-row">
+    <label for="fam-sel">Family</label>
+    <select id="fam-sel" bind:value={fam} title="The model family this grid builds for — scopes the checkpoint + LoRA pools and the saved preset">
+      {#each famList as f}<option value={f}>{f}</option>{/each}
+    </select>
+  </div>
 
   <!-- Prompt -->
   <div class="prompt-row">
     <label>Prompt</label>
-    <textarea class="tp" rows="2" bind:value={img.testPrompt} placeholder="1girl, solo, standing…"></textarea>
+    <textarea class="tp" rows="2" bind:this={tpEl} bind:value={img.testPrompt}
+      placeholder={fam === 'anima' || fam === 'flux' ? (fam === 'flux' ? 'a photograph of… (natural language)' : '1girl, solo, standing…') : '1girl, solo, standing…'}></textarea>
   </div>
 
   <div class="axes">
@@ -422,13 +514,13 @@
       <Combobox items={availCkpts.map((v) => ({ value: v, label: shortName(v) }))}
         bind:value={ckptPick} placeholder="+ Add checkpoint…"
         onpick={(v) => { addCkpt(v); ckptPick = ''; }} />
-      {#if !animaCkpts.length}<p class="ax-empty">No anima checkpoints in scan.</p>{/if}
+      {#if !famCkpts.length}<p class="ax-empty">No {fam} checkpoints in scan.</p>{/if}
     </div>
 
-    <!-- ── LoRAs ── -->
+    <!-- ── Stacks (columns) ── -->
     <div class="axis">
       <div class="axis-label">
-        LoRAs <span class="ax-hint">columns · click tag to set weight</span>
+        Stacks <span class="ax-hint">columns · click a stack to edit / add layers</span>
         <button class="import-btn" class:drop={dropKind === 'lora'}
           ondragover={(e) => impDragOver(e, 'lora')}
           ondragleave={impDragLeave}
@@ -441,23 +533,23 @@
         ondragleave={(e) => fieldDragLeave(e, (v) => lzDrag = v)}
         ondrop={loraDrop}
       >
-        {#each selLoras as l (l.name)}
-          <button class="tag lora" class:ext={extraLoras.find((x) => x.name === l.name)} onclick={() => openModal(l.name)}>
-            <span class="tname" title={l.name}>{shortName(l.name)}</span>
-            <span class="tw">{weightLabel(l)}</span>
-            <span class="tx" role="presentation" onclick={(e) => { e.stopPropagation(); rmLora(l.name); }}>×</span>
+        {#each selStacks as s (s.id)}
+          <button class="tag lora" class:ext={stackIsExt(s)} onclick={() => openModal(s.id)}>
+            <span class="tname" title={s.layers.map((l) => l.name).filter(Boolean).join(' + ')}>{shortName(s.layers[0].name)}</span>
+            <span class="tw">{weightLabel(s)}</span>
+            <span class="tx" role="presentation" onclick={(e) => { e.stopPropagation(); rmStack(s.id); }}>×</span>
           </button>
         {/each}
-        {#if !selLoras.length}
+        {#if !selStacks.length}
           <span class="field-ph">{lzDrag ? '↓ drop here' : 'click below to add…'}</span>
         {:else if lzDrag}
           <span class="field-ph drop">↓ drop to add</span>
         {/if}
       </div>
       <Combobox items={availLoras.map((n) => ({ value: n, label: shortName(n) }))}
-        bind:value={loraPick} placeholder="+ Add LoRA…"
+        bind:value={loraPick} placeholder="+ Add LoRA stack…"
         onpick={(v) => { addLora(v); loraPick = ''; }} />
-      {#if !animaLoras.length}<p class="ax-empty">No anima LoRAs found.</p>{/if}
+      {#if !famLoras.length}<p class="ax-empty">No {fam} LoRAs found.</p>{/if}
     </div>
     </div>
    </div>
@@ -490,43 +582,53 @@
     {#if syncMsg}
       <span class="m" class:bad={!syncMsg.ok}>{syncMsg.text}</span>
     {/if}
-    <button class="ghost save-preset" onclick={saveAsPreset} disabled={savingPreset || !selCols.size}
-      title="Save the selected LoRA columns as a stacked image preset">
-      {savingPreset ? 'Saving…' : `＋ Save preset${selCols.size ? ` (${selCols.size})` : ''}`}
+    <button class="ghost save-preset" onclick={saveAsPreset} disabled={savingPreset || !selCell}
+      title="Save the selected cell — its checkpoint + the column's full LoRA stack — as an image preset">
+      {savingPreset ? 'Saving…' : '＋ Save preset'}
     </button>
     {#if presetMsg}
       <span class="m" class:bad={!presetMsg.ok}>{presetMsg.text}</span>
     {/if}
+    <button class="ghost reset-btn" onclick={resetGrid} disabled={!hasState}
+      title="Clear all checkpoints, LoRA stacks, and rendered cells — start fresh">
+      Reset
+    </button>
   </div>
 
   <!-- Grid -->
   <div class="grid-wrap">
     {#if !selCkpts.length || !columns.length}
       <div class="grid-empty">
-        {#if !selCkpts.length && !columns.length}Select checkpoints and LoRAs in the panel.
+        {#if !selCkpts.length && !columns.length}Select checkpoints and LoRA stacks in the panel.
         {:else if !selCkpts.length}Select at least one checkpoint.
-        {:else}Select at least one LoRA.{/if}
+        {:else}Add at least one LoRA stack.{/if}
       </div>
     {:else}
       <div class="grid" style="grid-template-columns: 150px repeat({columns.length}, 180px);">
-        <div class="corner"></div>
-        {#each columns as col (`${col.lora}||${col.weight}`)}
-          <button class="ch" class:picked={selCols.has(`${col.lora}||${col.weight}`)}
-            onclick={() => toggleCol(col)} title="Click to add this LoRA @ {col.weight} to a saved preset">
-            <span class="cn" title={col.lora}>{shortName(col.lora)}</span>
-            <span class="cw">@{col.weight}</span>
-            {#if selCols.has(`${col.lora}||${col.weight}`)}<span class="ckmark">✓</span>{/if}
-          </button>
+        <div class="corner">{selCell ? 'click ＋ Save preset' : 'click a cell to save'}</div>
+        {#each columns as col (col.key)}
+          <div class="ch" title={col.loras.map((l) => `${shortName(l.name)}@${l.weight}`).join(' + ')}>
+            <span class="cn" title={col.primary}>{shortName(col.primary)}</span>
+            <span class="cw">@{col.weight}{#if col.extra} <span class="cx">+{col.extra}</span>{/if}</span>
+          </div>
         {/each}
         {#each selCkpts as ckpt (ckpt)}
           <div class="rh" title={ckpt}>{shortName(ckpt)}</div>
-          {#each columns as col (`${col.lora}||${col.weight}`)}
-            {@const c = cells[ck(ckpt, col.lora, col.weight)] || {}}
-            <div class="gcell">
+          {#each columns as col (col.key)}
+            {@const c = cells[ck(ckpt, col.key)] || {}}
+            {@const picked = selCell && selCell.ckpt === ckpt && selCell.colKey === col.key}
+            <div class="gcell" class:picked>
               <div class="thumb">
                 <ImgCard src={c.img || null} busy={c.status === 'gen'}
-                  onRegen={() => renderCell(ckpt, col.lora, col.weight)} />
+                  onRegen={() => renderCell(ckpt, col)} />
               </div>
+              {#if c.img}
+                <button class="cellpick" class:on={picked}
+                  onclick={() => toggleCell(ckpt, col.key)}
+                  title={picked ? 'Selected — click ＋ Save preset' : 'Use this checkpoint + stack as a preset'}>
+                  {picked ? '✓' : '＋'}
+                </button>
+              {/if}
               {#if c.status === 'gen' && c.pct !== null}<div class="gpct">{c.pct}%</div>{/if}
               {#if c.status === 'err'}<div class="gerr" title={c.err || ''}>!</div>{/if}
             </div>
@@ -591,22 +693,68 @@
   </div>
 {/if}
 
-<!-- ── Weight modal ── -->
+<!-- ── Stack editor modal ── -->
 {#if wm}
   <div class="overlay" role="dialog" aria-modal="true">
-    <div class="modal">
-      <h4>Weight — <span class="mname">{shortName(wm.name)}</span></h4>
+    <div class="modal stack-modal">
+      <h4>Stack — <span class="mname">{shortName(wm.primaryName)}</span> <span class="lo">(column)</span></h4>
+
+      <!-- Civitai metadata for the primary LoRA: what it does + how to trigger it -->
+      {#if metaCache[wm.primaryName]?.loading}
+        <div class="meta meta-loading">Looking up metadata…</div>
+      {:else if metaCache[wm.primaryName]?.data?.found}
+        {@const m = metaCache[wm.primaryName].data}
+        <div class="meta">
+          <div class="meta-head">
+            <span class="meta-name" title={m.model_name}>{m.model_name}</span>
+            {#if m.nsfw}<span class="meta-nsfw">NSFW</span>{/if}
+            <a class="meta-link" href={m.page_url} target="_blank" rel="noopener noreferrer">View on Civitai ↗</a>
+          </div>
+          {#if m.trained_words?.length}
+            <div class="meta-trig"><span class="meta-lbl">Trigger:</span>
+              {#each m.trained_words as t}<code class="trig">{t}</code>{/each}
+            </div>
+          {/if}
+          {#if m.description}<p class="meta-desc">{m.description}</p>{/if}
+          {#if m.creator || m.base_model}
+            <div class="meta-by">{#if m.creator}by {m.creator}{/if}{#if m.base_model} · {m.base_model}{/if}</div>
+          {/if}
+        </div>
+      {:else if metaCache[wm.primaryName]}
+        <div class="meta meta-none">No Civitai match for this LoRA file.</div>
+      {/if}
+
+      <div class="mlabel">Primary LoRA weight <span class="lo">— a range fans this stack into multiple columns</span></div>
       <div class="moderow">
         <label class="mopt"><input type="radio" bind:group={wm.mode} value="single" /> Single</label>
-        <label class="mopt"><input type="radio" bind:group={wm.mode} value="range" /> Range</label>
+        <label class="mopt"><input type="radio" bind:group={wm.mode} value="range" /> Range (sweep)</label>
       </div>
       {#if wm.mode === 'single'}
-        <div class="frow"><span class="fl">Weight</span><input type="number" step="0.05" min="0" max="2" bind:value={wm.singleW} class="fw" /></div>
+        <div class="frow"><span class="fl">Weight</span><input type="number" step="0.05" min="-2" max="2" bind:value={wm.singleW} class="fw" /></div>
       {:else}
-        <div class="frow"><span class="fl">Min</span><input type="number" step="0.05" min="0" max="2" bind:value={wm.rangeMin} class="fw" /></div>
-        <div class="frow"><span class="fl">Max</span><input type="number" step="0.05" min="0" max="2" bind:value={wm.rangeMax} class="fw" /></div>
+        <div class="frow"><span class="fl">Min</span><input type="number" step="0.05" min="-2" max="2" bind:value={wm.rangeMin} class="fw" /></div>
+        <div class="frow"><span class="fl">Max</span><input type="number" step="0.05" min="-2" max="2" bind:value={wm.rangeMax} class="fw" /></div>
         <div class="frow"><span class="fl">Step</span><input type="number" step="0.05" min="0.05" max="1" bind:value={wm.rangeStep} class="fw" /></div>
       {/if}
+
+      <div class="mlabel">Layers on top <span class="lo">— extra LoRAs stacked at a fixed weight</span>
+        <button class="addl" onclick={addExtra}>＋ Add layer</button>
+      </div>
+      {#if wm.extra.length}
+        <div class="extra-rows">
+          {#each wm.extra as ex, i (i)}
+            <div class="exrow">
+              <Combobox items={availLoras.map((n) => ({ value: n, label: shortName(n) }))}
+                value={ex.name} placeholder="pick a LoRA…" onpick={(v) => (ex.name = v)} />
+              <input class="fw" type="number" step="0.05" min="-2" max="2" bind:value={ex.weight} />
+              <button class="rm" onclick={() => rmExtra(i)} aria-label="remove">×</button>
+            </div>
+          {/each}
+        </div>
+      {:else}
+        <p class="lo exnote">No extra layers — just the primary LoRA.</p>
+      {/if}
+
       <div class="preview">
         <span class="plabel">Columns:</span>
         {#each modalPreview(wm) as w}<span class="ptag">{w}</span>{/each}
@@ -671,8 +819,12 @@
     background: rgba(109,140,255,.08);
   }
 
+  .fam-row { display: flex; align-items: center; gap: 8px; }
+  .fam-row label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+  .fam-row select { flex: 1; padding: 6px 8px; font-size: 12.5px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); text-transform: capitalize; }
+
   .prompt-row label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
-  .tp { width: 100%; resize: none; overflow: hidden; font: inherit; line-height: 1.4; }
+  .tp { width: 100%; resize: vertical; overflow-y: auto; font: inherit; line-height: 1.4; min-height: 44px; max-height: 260px; box-sizing: border-box; }
 
   .axes { display: flex; flex-direction: column; gap: 16px; }
   .axis { display: flex; flex-direction: column; gap: 6px; }
@@ -715,17 +867,27 @@
   .grid-wrap { flex: 1; min-height: 0; border: 1px solid var(--border-soft); border-radius: 10px; overflow: auto; background: var(--panel); }
   .grid-empty { display: flex; align-items: center; justify-content: center; height: 100px; color: var(--faint); font-size: 13px; }
   .grid { display: grid; gap: 1px; background: var(--border-soft); min-width: max-content; }
-  .corner { background: var(--panel); }
-  .ch { position: relative; background: var(--elev); padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; justify-content: flex-end; min-height: 50px; min-width: 180px; box-shadow: none; border: 1px solid transparent; border-radius: 0; cursor: pointer; text-align: left; font: inherit; }
-  .ch:hover { background: var(--elev-2); filter: none; }
-  .ch.picked { border-color: var(--accent); background: rgba(109,140,255,.14); }
-  .ckmark { position: absolute; top: 4px; right: 6px; font-size: 11px; font-weight: 700; color: var(--accent); }
+  .corner { background: var(--panel); display: flex; align-items: flex-end; padding: 6px 8px; font-size: 10px; color: var(--faint); }
+  .ch { position: relative; background: var(--elev); padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; justify-content: flex-end; min-height: 50px; min-width: 180px; text-align: left; }
   .save-preset { font-size: 12px; padding: 4px 12px; }
+  .reset-btn { font-size: 12px; padding: 4px 12px; }
+  .reset-btn:not(:disabled):hover { color: var(--bad); border-color: rgba(255,90,90,.5); background: rgba(255,90,90,.08); filter: none; }
   .cn { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cw { color: var(--accent); font-size: 10.5px; font-weight: 700; }
+  .cx { color: var(--muted); font-weight: 600; }
   .rh { background: var(--elev); padding: 6px 8px; font-size: 10.5px; color: var(--text); display: flex; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 1.35; min-width: 150px; }
   .gcell { position: relative; width: 180px; height: 180px; background: var(--panel); }
+  .gcell.picked { outline: 2px solid var(--accent); outline-offset: -2px; }
   .thumb { width: 100%; height: 100%; }
+  .cellpick {
+    position: absolute; top: 5px; left: 5px; width: 22px; height: 22px; padding: 0;
+    display: grid; place-items: center; font-size: 13px; font-weight: 700; line-height: 1;
+    border-radius: 6px; cursor: pointer; box-shadow: none;
+    background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.25); color: #fff;
+    opacity: 0; transition: opacity .12s;
+  }
+  .gcell:hover .cellpick { opacity: 1; }
+  .cellpick.on { opacity: 1; background: var(--accent); border-color: var(--accent); }
   .gpct { position: absolute; bottom: 4px; left: 50%; transform: translateX(-50%); font-size: 10px; color: #fff; background: rgba(0,0,0,.65); border-radius: 4px; padding: 1px 6px; pointer-events: none; }
   .gerr { position: absolute; top: 4px; right: 4px; font-size: 10px; font-weight: 700; color: var(--bad); background: rgba(255,60,60,.15); border-radius: 4px; padding: 1px 5px; }
 
@@ -764,14 +926,44 @@
   .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); z-index: 200; display: flex; align-items: center; justify-content: center; }
   .modal { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 20px 22px; }
   .modal h4 { margin: 0 0 14px; font-size: 14px; }
+  .lo { color: var(--faint); font-weight: 400; }
   .mname { color: var(--accent); }
-  .moderow { display: flex; gap: 18px; margin-bottom: 14px; }
+  .stack-modal { width: 440px; max-width: 92vw; }
+
+  /* Civitai metadata block */
+  .meta { background: var(--elev); border: 1px solid var(--border-soft); border-radius: 9px; padding: 10px 12px; margin: 0 0 14px; }
+  .meta-loading, .meta-none { font-size: 12px; color: var(--faint); }
+  .meta-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .meta-name { font-size: 13px; font-weight: 700; color: var(--text); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .meta-nsfw { font-size: 9.5px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: rgba(255,90,90,.15); color: var(--bad); flex: none; }
+  .meta-link { font-size: 11.5px; color: var(--accent); text-decoration: none; white-space: nowrap; flex: none; }
+  .meta-link:hover { text-decoration: underline; }
+  .meta-trig { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; margin-top: 7px; }
+  .meta-lbl { font-size: 11px; color: var(--muted); }
+  .trig { font-family: ui-monospace, monospace; font-size: 11px; padding: 1px 6px; border-radius: 5px; background: rgba(109,140,255,.14); border: 1px solid rgba(109,140,255,.3); color: var(--accent); }
+  .meta-desc { font-size: 11.5px; line-height: 1.5; color: var(--muted); margin: 8px 0 0; max-height: 110px; overflow-y: auto; }
+  .meta-by { font-size: 10.5px; color: var(--faint); margin-top: 7px; }
+  .mlabel { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin: 14px 0 8px; display: flex; align-items: center; gap: 8px; }
+  .mlabel:first-of-type { margin-top: 0; }
+  .mlabel .lo { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .addl { margin-left: auto; font-size: 11.5px; text-transform: none; letter-spacing: 0; font-weight: 600;
+    padding: 4px 10px; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
+  .addl:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .moderow { display: flex; gap: 18px; margin-bottom: 12px; }
   .mopt { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
   .mopt input { width: auto; }
   .frow { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
   .fl { font-size: 12px; color: var(--muted); width: 38px; flex: none; }
   .fw { width: 90px; }
-  .preview { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 12px 0; padding: 8px 10px; background: var(--elev); border-radius: 8px; min-height: 36px; }
+  .extra-rows { display: flex; flex-direction: column; gap: 6px; }
+  .exrow { display: flex; align-items: center; gap: 8px; }
+  .exrow :global(.combo) { flex: 1; min-width: 0; }
+  .exrow .fw { width: 70px; flex: none; }
+  .exnote { font-size: 12px; margin: 0; }
+  .rm { flex: none; width: 24px; height: 24px; padding: 0; font-size: 16px; line-height: 1; border-radius: 6px; box-shadow: none;
+    background: none; border: 1px solid transparent; color: var(--faint); cursor: pointer; }
+  .rm:hover { color: var(--bad); border-color: rgba(255,90,90,.4); background: rgba(255,90,90,.1); filter: none; }
+  .preview { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 14px 0 0; padding: 8px 10px; background: var(--elev); border-radius: 8px; min-height: 36px; }
   .plabel { font-size: 11px; color: var(--muted); }
   .ptag { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--text); }
   .pempty { font-size: 11.5px; color: var(--bad); }

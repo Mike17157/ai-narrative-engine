@@ -178,6 +178,37 @@ idempotent (deduped by volume key).
 
 ---
 
+## Image-preset LoRAs (auto-imported from Civitai)
+
+Image presets (`configs/image_presets.json`) are named LoRA stacks injected into
+the workflow at **render time** — they are NOT in any workflow JSON, so the
+`gen_worker.py` workflow scan can't see them. They're handled separately:
+
+- **Source map:** `configs/civitai_loras.json` maps each preset LoRA's bare name →
+  its Civitai model **version id** (the public Anima base-v1.0 artist-style packs).
+- **Local download:** on app start, `startup.download_preset_loras` fetches any
+  preset LoRA missing from your ComfyUI `models/loras` (background thread). It needs
+  a Civitai API token — set `CIVITAI_API_TOKEN` in `.env` (the Civitai download
+  endpoint returns 401 without one). No token → it silently skips. You can also run
+  it standalone via `loom.comfy.civitai.ensure_preset_loras(root, loras_dir)`.
+- **To the volume:** both manifest generators (`gen_worker.py` and the app's
+  startup regen) now **fold preset LoRAs into `models_manifest.json`** — so the
+  normal `upload_models.py` (Step 3) ships them to the volume alongside everything
+  else. The worker reads them from the volume at render time; **no Civitai token is
+  baked into the image**.
+
+So the end-to-end flow is:
+
+```
+CIVITAI_API_TOKEN in .env  ->  restart app (downloads LoRAs locally)
+  ->  python runpod/worker/upload_models.py   (ships them to the volume)
+```
+
+Use `upload_models.py` directly here — not `sync.py` — unless the custom-node set
+actually changed, since `sync.py` also regenerates the Dockerfile.
+
+---
+
 ## Cost / scaling notes
 
 - Serverless bills only while a worker is running a job; idle timeout returns it to zero.

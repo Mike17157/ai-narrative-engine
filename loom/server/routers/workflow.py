@@ -117,6 +117,64 @@ def register(app, ctx):
         ctx.reload_settings()
         return {"ok": True, "key": key, "workflow": new_rel}
 
+    @app.post("/api/workflow/import")
+    def import_workflow(body: dict):
+        """Register a dropped API-format workflow JSON as a new image model. Saves the
+        graph to workflows/<key>_api.json and APPENDS a models.yaml entry (textual append,
+        comments preserved). The positive-prompt inject node + output node are auto-detected
+        (suggest_io) unless the caller overrides them. No backend restart needed —
+        ctx.reload_settings() picks up the new model immediately."""
+        from ...comfy.workflow_check import suggest_io
+
+        body = body or {}
+        graph = body.get("json")
+        if not isinstance(graph, dict) or not graph:
+            return JSONResponse({"error": "no workflow json"}, status_code=400)
+
+        io = suggest_io(graph)
+        pos = body.get("positive") or io.get("positive")
+        out = body.get("output_node") or io.get("output_node")
+        if not pos or not pos.get("node"):
+            return JSONResponse({"error": "could not find a positive-prompt text node — pick one",
+                                 "io": io}, status_code=400)
+        if not out:
+            return JSONResponse({"error": "could not find an output (SaveImage) node — pick one",
+                                 "io": io}, status_code=400)
+
+        raw = (body.get("name") or "imported_workflow").strip()
+        base_key = re.sub(r"[^a-z0-9_]+", "_", raw.lower()).strip("_") or "imported_workflow"
+        key, i = base_key, 2
+        while key in ctx.base_settings.models:
+            key = f"{base_key}_{i}"; i += 1
+
+        new_rel = f"./workflows/{key}_api.json"
+        new_path = (ctx.root / new_rel).resolve()
+        if ctx.root.resolve() not in new_path.parents:
+            return JSONResponse({"error": "bad workflow path"}, status_code=400)
+        new_path.parent.mkdir(parents=True, exist_ok=True)
+        new_path.write_text(json.dumps(graph, indent=2), encoding="utf-8")
+
+        conn = ctx.store.active("image")
+        base_url = (conn.base_url if conn and conn.base_url else None) or "http://127.0.0.1:8188"
+        entry = {"provider": "comfyui", "kind": "image", "options": {
+            "base_url": base_url,
+            "workflow": new_rel,
+            "inputs": {"positive": {"node": str(pos["node"]), "field": pos.get("field") or "text"}},
+            "output_node": str(out),
+            "timeout_s": int(body.get("timeout_s") or 600),
+        }}
+        snippet = yaml.safe_dump({key: entry}, sort_keys=False, allow_unicode=True)
+        indented = "".join(("  " + ln) if ln.strip() else ln
+                           for ln in snippet.splitlines(keepends=True))
+        models_file = ctx.root / "configs" / "models.yaml"
+        text = models_file.read_text(encoding="utf-8")
+        if not text.endswith("\n"):
+            text += "\n"
+        models_file.write_text(text + "\n  # imported workflow\n" + indented, encoding="utf-8")
+        ctx.reload_settings()
+        return {"ok": True, "key": key, "workflow": new_rel,
+                "inputs": entry["options"]["inputs"], "output_node": str(out)}
+
     @app.post("/api/workflow/test")
     async def test_workflow(body: WorkflowTestRequest):
         """Run the image model's workflow through ComfyUI with a test prompt,

@@ -184,6 +184,7 @@ def create_app(root: str | Path = ".") -> FastAPI:
     # Startup hooks — each is isolated; a failure never blocks the others or the boot.
     startup.warm_scan_cache(ctx)
     startup.reap_stale_jobs()
+    startup.download_preset_loras(ctx)   # background; refreshes the manifest when done
     startup.regenerate_manifest(ctx)
     startup.validate_lora_stacks(ctx)
 

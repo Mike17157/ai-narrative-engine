@@ -1,0 +1,86 @@
+{
+  "_comment": "Civitai source map for image-preset LoRAs. Each entry: the LOCAL filename a preset references (basename, no folder) -> the Civitai model version to fetch it from. Downloads require a Civitai API token (CIVITAI_API_TOKEN). `version_id` is the modelVersionId; `model_url` is for humans. The downloader (loom/comfy/civitai.py) fetches any preset LoRA missing from the local loras dir and saves it as `filename`. Resolved 2026-06-21 against the public Anima base-v1.0 artist-style ecosystem.",
+  "subdir": "",
+  "loras": [
+    {
+      "name": "anima-rl-v0.1",
+      "filename": "anima-rl-v0.1.safetensors",
+      "version_id": 2901967,
+      "model_url": "https://civitai.com/models/2583128"
+    },
+    {
+      "name": "anima_qr4k_v1.0-epoch14",
+      "filename": "anima_qr4k_v1.0-epoch14.safetensors",
+      "version_id": 2955327,
+      "model_url": "https://civitai.com/models/2629664"
+    },
+    {
+      "name": "anima_fr9t_v1.1",
+      "filename": "anima_fr9t_v1.1.safetensors",
+      "version_id": 2952461,
+      "model_url": "https://civitai.com/models/2629664"
+    },
+    {
+      "name": "anima_fr8t_v1.3-epoch32",
+      "filename": "anima_fr8t_v1.3-epoch32.safetensors",
+      "version_id": 2955016,
+      "model_url": "https://civitai.com/models/2629664"
+    },
+    {
+      "name": "anima_m4me_v2.1-epoch20",
+      "filename": "anima_m4me_v2.1-epoch20.safetensors",
+      "version_id": 2993488,
+      "model_url": "https://civitai.com/models/2625? (Anima style: m4me)"
+    },
+    {
+      "name": "anima_p4t1s1y_v2.2-epoch36",
+      "filename": "anima_p4t1s1y_v2.2-epoch36.safetensors",
+      "version_id": 2998131,
+      "model_url": "https://civitai.com/ (Anima style: p4t1s1y)"
+    },
+    {
+      "name": "anima_ru60d_v1.0-epoch24",
+      "filename": "anima_ru60d_v1.0-epoch24.safetensors",
+      "version_id": 2957967,
+      "model_url": "https://civitai.com/ (Anima style: ru60d)"
+    },
+    {
+      "name": "anima_ci10ranko_v1.1-epoch28",
+      "filename": "anima_ci10ranko_v1.1-epoch28.safetensors",
+      "version_id": 2972611,
+      "model_url": "https://civitai.com/models/2647381",
+      "note": "Substitute for the delisted v1.0-epoch28 (only v1.1 + v2.0 remain on Civitai)."
+    },
+    {
+      "name": "anima_4rkj4ck_v1.0-epoch26",
+      "filename": "anima_4rkj4ck_v1.0-epoch26.safetensors",
+      "version_id": 2980626,
+      "model_url": "https://civitai.com/ (Anima Jacknife Style: 4rkj4ck)"
+    },
+    {
+      "name": "anima_mi1k_v1.3-epoch16",
+      "filename": "anima_mi1k_v1.3-epoch16.safetensors",
+      "version_id": 2973605,
+      "model_url": "https://civitai.com/ (Anima kedama milk style)"
+    },
+    {
+      "name": "anima_mik4p1_v1.0-epoch20",
+      "filename": "anima_mik4p1_v1.0-epoch20.safetensors",
+      "version_id": 2975681,
+      "model_url": "https://civitai.com/ (Anima style: mik4p1)"
+    },
+    {
+      "name": "yzsss_anima1.0_v0.2",
+      "filename": "yzsss_anima1.0_v0.2.safetensors",
+      "version_id": 2972473,
+      "model_url": "https://civitai.com/models/2423253"
+    },
+    {
+      "name": "ogipote-NL",
+      "filename": "ogipote-NL.safetensors",
+      "version_id": 2957262,
+      "model_url": "https://civitai.com/models/2529695",
+      "note": "The NL-trained ogipote version; Civitai's internal file is @ogipote-base1.0-lokr-000037.safetensors, saved locally as ogipote-NL.safetensors to match the preset."
+    }
+  ]
+}

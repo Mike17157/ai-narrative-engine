@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
-  import { app, refreshHealth, refreshFlags, setAllowNsfw } from '$lib/app.svelte.js';
+  import { app, refreshHealth, refreshFlags, setAllowNsfw, setAppFlag, setLocalModel } from '$lib/app.svelte.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
 
   // ── System / Backend ────────────────────────────────────────────
@@ -25,6 +25,17 @@
     }
     restarting = false;
   }
+
+  // ── Local model (configs/app.json → local_model) ────────────────
+  // A preset's "Local model" toggle routes here instead of OpenRouter. Auto-saved (debounced).
+  let lm = $state({ base_url: '', model: '', label: '' });
+  let lmSeed = false, lmTimer = null;
+  $effect(() => {
+    const cur = JSON.stringify(lm);
+    if (!lmSeed || cur === JSON.stringify(app.localModel)) return;
+    clearTimeout(lmTimer);
+    lmTimer = setTimeout(() => setLocalModel({ ...$state.snapshot(lm) }), 600);
+  });
 
   // ── ComfyUI ─────────────────────────────────────────────────────
   let comfy = $derived(app.health?.comfyui || {});
@@ -120,7 +131,9 @@
 
   onMount(async () => {
     loadSrv();
-    refreshFlags();
+    await refreshFlags();
+    lm = { ...app.localModel };   // seed the editor only after flags load (avoids locking in defaults)
+    lmSeed = true;
     gpu = await get('/trainer/detect');
     await loadTrainer();
     const j = await get('/train/job');
@@ -142,6 +155,49 @@
         <span class="nsfwsub">When off, nsfw-rated lorebooks are excluded from retrieval everywhere.</span>
       </span>
     </label>
+  </section>
+
+  <!-- Image generation -->
+  <section class="card">
+    <div class="card-head">
+      <h3>Image generation</h3>
+      <span class="card-sub">render pipeline steps</span>
+    </div>
+    <label class="nsfwrow">
+      <input type="checkbox" checked={app.imgDetailer} onchange={(e) => setAppFlag('imgDetailer', e.currentTarget.checked)} />
+      <span class="nsfwlabel">Detailer (ADetailer)
+        <span class="nsfwsub">Face/detail refinement pass. The usual need; off skips it for faster renders.</span>
+      </span>
+    </label>
+    <label class="nsfwrow">
+      <input type="checkbox" checked={app.imgUpscale} onchange={(e) => setAppFlag('imgUpscale', e.currentTarget.checked)} />
+      <span class="nsfwlabel">4K upscale
+        <span class="nsfwsub">Heavy hi-res + Ultimate-SD upscale chain. Off by default — most renders don't need it.</span>
+      </span>
+    </label>
+  </section>
+
+  <!-- Local model -->
+  <section class="card">
+    <div class="card-head">
+      <h3>Local model</h3>
+      <span class="card-sub">OpenAI-compatible <code>llama-server</code> endpoint</span>
+    </div>
+    <div class="trainer-grid">
+      <div class="tcol">
+        <label>Endpoint base URL</label>
+        <input bind:value={lm.base_url} placeholder="http://127.0.0.1:8080/v1" />
+        <label>Display name</label>
+        <input bind:value={lm.label} placeholder="MeroMero 26B (local)" />
+      </div>
+      <div class="tcol">
+        <label>Model alias <span class="dim">(llama-server <code>--alias</code>)</span></label>
+        <input bind:value={lm.model} placeholder="meromero" />
+      </div>
+    </div>
+    <p class="hint">Start the server with <code>scripts/serve_meromero.sh</code>, then enable
+      <b>Local model</b> on any preset in <a href="/library/presets">Library → Presets</a> to route
+      it here instead of OpenRouter. Auto-saves.</p>
   </section>
 
   <!-- Row 1: Environment + Backend -->

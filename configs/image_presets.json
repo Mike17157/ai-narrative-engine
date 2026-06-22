@@ -77,10 +77,6 @@
         {
           "name": "anima_fr9t_v1.1",
           "weight": 1.0
-        },
-        {
-          "name": "anima_my8t_v1.1-epoch24",
-          "weight": 0.65
         }
       ],
       "enabled": true,
@@ -153,7 +149,7 @@
           "weight": 0.7
         },
         {
-          "name": "anima_ci10ranko_v1.0-epoch28",
+          "name": "anima_ci10ranko_v1.1-epoch28",
           "weight": 0.75
         },
         {
@@ -182,10 +178,6 @@
           "weight": 0.92
         },
         {
-          "name": "anima_p0t7s_v1.1-epoch16",
-          "weight": 0.71
-        },
-        {
           "name": "yzsss_anima1.0_v0.2",
           "weight": 0.24
         },
@@ -200,14 +192,6 @@
         {
           "name": "anima_mi1k_v1.3-epoch16",
           "weight": 0.42
-        },
-        {
-          "name": "anima_k1m2b_v1.0-epoch24",
-          "weight": 0.48
-        },
-        {
-          "name": "anima_my8t_v1.1-epoch24",
-          "weight": 0.8
         }
       ],
       "enabled": true,
@@ -231,24 +215,12 @@
           "weight": 1.0
         },
         {
-          "name": "anima_p0t7s_v1.1-epoch16",
-          "weight": 0.42
-        },
-        {
           "name": "anima_4rkj4ck_v1.0-epoch26",
           "weight": 0.61
         },
         {
           "name": "anima_p4t1s1y_v2.2-epoch36",
           "weight": 0.46
-        },
-        {
-          "name": "anima_k1m2b_v1.0-epoch24",
-          "weight": 0.38
-        },
-        {
-          "name": "anima_my8t_v1.1-epoch24",
-          "weight": 0.59
         },
         {
           "name": "anima_fr8t_v1.3-epoch32",
@@ -276,16 +248,8 @@
           "weight": 0.8
         },
         {
-          "name": "anima_kn0r_v1.0-epoch26",
-          "weight": 0.8
-        },
-        {
           "name": "anima_mik4p1_v1.0-epoch20",
           "weight": 0.45
-        },
-        {
-          "name": "anima_p0t7s_v1.1-epoch16",
-          "weight": 0.85
         },
         {
           "name": "yzsss_anima1.0_v0.2",
@@ -321,10 +285,6 @@
           "weight": 0.9
         },
         {
-          "name": "anima_p0t7s_v1.1-epoch16",
-          "weight": 0.68
-        },
-        {
           "name": "yzsss_anima1.0_v0.2",
           "weight": 0.33
         },
@@ -339,10 +299,6 @@
         {
           "name": "anima_mi1k_v1.3-epoch16",
           "weight": 0.57
-        },
-        {
-          "name": "anima_k1m2b_v1.0-epoch24",
-          "weight": 0.5
         }
       ],
       "enabled": true,
