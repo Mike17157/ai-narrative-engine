@@ -98,11 +98,35 @@ _ROUTERS = (
 )
 
 
+def _is_dev() -> bool:
+    """Dev mode (set by scripts/dev_backend.py → LOOM_DEV=1). In dev the backend is API-only:
+    it must NOT serve frontend/build, or a stale prod bundle would mask live Vite work."""
+    import os
+    return os.environ.get("LOOM_DEV", "").strip().lower() not in ("", "0", "false", "no")
+
+
 def _mount_spa(app: FastAPI, root: Path) -> None:
     """Serve the built Svelte SPA at "/" if present (prod); otherwise fall back to the
-    bundled single-file page so the server works with no Node build."""
+    bundled single-file page so the server works with no Node build. In dev (LOOM_DEV)
+    serve neither — just signpost the Vite dev server so :8000 never shadows :5173."""
+    from fastapi.responses import HTMLResponse
     from fastapi.staticfiles import StaticFiles
     from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    if _is_dev():
+        @app.get("/", response_class=HTMLResponse)
+        def dev_root() -> str:
+            # API is live on this port; the UI is the Vite dev server (it proxies /api here).
+            return (
+                "<!doctype html><meta charset=utf-8><title>Loom (dev)</title>"
+                "<meta http-equiv=refresh content='0; url=http://localhost:5173/'>"
+                "<body style=\"font-family:system-ui;background:#0b0e14;color:#cdd6f4;padding:48px\">"
+                "<h2>Loom backend — dev mode</h2>"
+                "<p>The API is live on this port. The UI runs on the Vite dev server: "
+                "<a style=\"color:#89b4fa\" href=\"http://localhost:5173/\">http://localhost:5173/</a></p>"
+                "</body>"
+            )
+        return
 
     build_dir = root / "frontend" / "build"
     if build_dir.is_dir():

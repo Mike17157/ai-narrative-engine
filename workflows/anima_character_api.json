@@ -1,0 +1,311 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "inputs": {
+      "unet_name": "anima/novaAnimeAM_v25.safetensors",
+      "weight_dtype": "default"
+    },
+    "_meta": {
+      "title": "Load Diffusion Model (Anima)"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoader",
+    "inputs": {
+      "clip_name": "qwen_3_06b_base.safetensors",
+      "type": "stable_diffusion",
+      "device": "default"
+    },
+    "_meta": {
+      "title": "Load CLIP (Qwen)"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "inputs": {
+      "vae_name": "qwen_image_vae.safetensors"
+    },
+    "_meta": {
+      "title": "Load VAE (Qwen)"
+    }
+  },
+  "4": {
+    "class_type": "Lora Stacker (LoraManager)",
+    "inputs": {
+      "text": ""
+    },
+    "_meta": {
+      "title": "Lora Stacker (root / preset anchor)"
+    }
+  },
+  "5": {
+    "class_type": "easy loraStackApply",
+    "inputs": {
+      "lora_stack": [
+        "4",
+        0
+      ],
+      "model": [
+        "1",
+        0
+      ],
+      "optional_clip": [
+        "2",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "easy loraStackApply"
+    }
+  },
+  "6": {
+    "class_type": "ModelSamplingAuraFlow",
+    "inputs": {
+      "model": [
+        "5",
+        0
+      ],
+      "shift": 1.73
+    },
+    "_meta": {
+      "title": "ModelSamplingAuraFlow"
+    }
+  },
+  "7": {
+    "class_type": "PrimitiveStringMultiline",
+    "inputs": {
+      "value": "(newest:0.6), masterpiece, best quality, (score_8:0.65), (score_7:0.7), (highres, absurdres, very aesthetic:0.8), "
+    },
+    "_meta": {
+      "title": "quality_tags"
+    }
+  },
+  "8": {
+    "class_type": "AnimaModGuidance",
+    "inputs": {
+      "model": [
+        "6",
+        0
+      ],
+      "clip": [
+        "5",
+        1
+      ],
+      "positive": [
+        "10",
+        0
+      ],
+      "negative": [
+        "11",
+        0
+      ],
+      "quality_tags": [
+        "7",
+        0
+      ],
+      "mod_w_profile": "step_i8_skip27"
+    },
+    "_meta": {
+      "title": "AnimaModGuidance"
+    }
+  },
+  "10": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "5",
+        1
+      ],
+      "text": "masterpiece, best quality, amazing quality, very aesthetic, absurdres, {{image}}"
+    },
+    "_meta": {
+      "title": "Positive prompt (inject here)"
+    }
+  },
+  "11": {
+    "class_type": "CLIPTextEncode",
+    "inputs": {
+      "clip": [
+        "5",
+        1
+      ],
+      "text": "bad anatomy, bad hands, worst quality, low quality, signature, watermark, text, jpeg artifacts, missing fingers, extra digit, (chibi:1.1), toddler, (mature female:0.8)"
+    },
+    "_meta": {
+      "title": "Negative prompt"
+    }
+  },
+  "12": {
+    "class_type": "EmptyLatentImage",
+    "inputs": {
+      "width": 952,
+      "height": 1536,
+      "batch_size": 1
+    },
+    "_meta": {
+      "title": "Empty Latent"
+    }
+  },
+  "13": {
+    "class_type": "KSampler",
+    "inputs": {
+      "model": [
+        "8",
+        0
+      ],
+      "positive": [
+        "10",
+        0
+      ],
+      "negative": [
+        "11",
+        0
+      ],
+      "latent_image": [
+        "12",
+        0
+      ],
+      "seed": 42,
+      "steps": 24,
+      "cfg": 4,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 1.0
+    },
+    "_meta": {
+      "title": "KSampler (Anima)"
+    }
+  },
+  "14": {
+    "class_type": "VAEDecode",
+    "inputs": {
+      "samples": [
+        "13",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    },
+    "_meta": {
+      "title": "VAE Decode"
+    }
+  },
+  "16": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "bbox/face_yolov8m.pt"
+    },
+    "_meta": {
+      "title": "BBox Detector (face)"
+    }
+  },
+  "17": {
+    "class_type": "SAMLoader",
+    "inputs": {
+      "model_name": "sam_vit_b_01ec64.pth",
+      "device_mode": "Prefer GPU"
+    },
+    "_meta": {
+      "title": "SAMLoader"
+    }
+  },
+  "18": {
+    "class_type": "UltralyticsDetectorProvider",
+    "inputs": {
+      "model_name": "segm/person_yolov8m-seg.pt"
+    },
+    "_meta": {
+      "title": "Segm Detector (person)"
+    }
+  },
+  "19": {
+    "class_type": "FaceDetailer",
+    "inputs": {
+      "image": [
+        "14",
+        0
+      ],
+      "model": [
+        "8",
+        0
+      ],
+      "clip": [
+        "5",
+        1
+      ],
+      "vae": [
+        "3",
+        0
+      ],
+      "positive": [
+        "10",
+        0
+      ],
+      "negative": [
+        "11",
+        0
+      ],
+      "bbox_detector": [
+        "16",
+        0
+      ],
+      "sam_model_opt": [
+        "17",
+        0
+      ],
+      "segm_detector_opt": [
+        "18",
+        1
+      ],
+      "guide_size": 384,
+      "guide_size_for": true,
+      "max_size": 768,
+      "seed": 42,
+      "steps": 24,
+      "cfg": 4,
+      "sampler_name": "er_sde",
+      "scheduler": "simple",
+      "denoise": 0.3,
+      "feather": 10,
+      "noise_mask": true,
+      "force_inpaint": true,
+      "bbox_threshold": 0.5,
+      "bbox_dilation": 10,
+      "bbox_crop_factor": 2,
+      "sam_detection_hint": "center-1",
+      "sam_dilation": 0,
+      "sam_threshold": 0.93,
+      "sam_bbox_expansion": 0,
+      "sam_mask_hint_threshold": 0.7,
+      "sam_mask_hint_use_negative": "False",
+      "drop_size": 10,
+      "wildcard": "",
+      "cycle": 1,
+      "inpaint_model": false,
+      "noise_mask_feather": 20,
+      "tiled_encode": false,
+      "tiled_decode": false
+    },
+    "_meta": {
+      "title": "FaceDetailer"
+    }
+  },
+  "20": {
+    "class_type": "easy imageRemBg",
+    "inputs": {
+      "images": [
+        "19",
+        0
+      ],
+      "rem_mode": "Inspyrenet",
+      "image_output": "Save",
+      "save_prefix": "loom",
+      "add_background": "none"
+    },
+    "_meta": {
+      "title": "Remove background (Inspyrenet → transparent)"
+    }
+  }
+}

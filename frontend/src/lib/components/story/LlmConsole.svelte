@@ -7,6 +7,7 @@
   // workshop is its first tenant) — model/prompt/lorebook config lives here, in
   // the same window as the chat, rather than scattered across the settings pages.
   import { openConfigModal } from '$lib/configModal.svelte.js';
+  import { formatChat } from '$lib/chat-format.js';
 
   let {
     title = 'Console',
@@ -92,7 +93,7 @@
               {#if !msg.content && busy && i === messages.length - 1}
                 <span class="typing"><span></span><span></span><span></span></span>
               {:else}
-                {msg.content}
+                {@html formatChat(msg.content)}
               {/if}
             </div>
           </div>

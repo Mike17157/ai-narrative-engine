@@ -8,6 +8,7 @@
   import { app } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
   import { openConfigModal, configModal } from '$lib/configModal.svelte.js';
+  import { formatChat } from '$lib/chat-format.js';
 
   let active = $derived(chars.list.find((c) => c.key === app.activeChar) || null);
   let persona = $derived(app.personas.find((p) => p.id === app.activePersona) || null);
@@ -138,7 +139,7 @@
         <div class="bubble">
           {#if !m.content && busy && i === app.chat.messages.length - 1}
             <span class="typing"><span></span><span></span><span></span></span>
-          {:else}{m.content}{/if}
+          {:else}{@html formatChat(m.content)}{/if}
         </div>
       </div>
     {/each}

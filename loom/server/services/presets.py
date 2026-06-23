@@ -29,6 +29,22 @@ _MODES = ("", "roleplay", "assist")
 # 'extractor' (generic "Structured Extractor") → 'location_builder' (a real function).
 _RETIRED_PRESETS = {"extractor"}
 
+# Conversational presets → the unified "Agents" naming. id: (old default name, new name).
+# The load-time migration applies these only when the name still equals the OLD default, so a
+# user rename is never clobbered; see load_presets.
+_AGENT_RENAME = {
+    "spine_architect": ("Spine Architect", "Spine Agent"),
+    "story_consultant": ("Story Consultant", "Story Agent"),
+    "location_builder": ("Location Builder", "Location Agent"),
+    "character_builder": ("Character Builder", "Character Agent"),
+    "wardrobe_stylist": ("Wardrobe Stylist", "Wardrobe Agent"),
+    "lore_author": ("Lore Author", "Lore Agent"),
+    "scene_director": ("Scene Director", "Scene Agent"),
+    "npc_actor": ("NPC Actor", "NPC Agent"),
+}
+# The legacy per-domain group buckets these agents used to live in (all → "Agents").
+_LEGACY_AGENT_GROUPS = {"Story arc", "Cast & world", "Simulation"}
+
 
 def _default_preset() -> dict:
     return {"id": "default", "name": "Default", "description": "",
@@ -67,9 +83,9 @@ _SEED_PRESETS = [
      # Roleplay: the character's own persona governs voice; keep the base light.
      "system": ""},
 
-    # ══ Story arc — develop the shape of the story ══
-    {"id": "spine_architect", "name": "Spine Architect", "mode": "assist",
-     "group": "Story arc", "order": 10,
+    # ══ Agents — conversation partners you build the story WITH (each can call its scripts) ══
+    {"id": "spine_architect", "name": "Spine Agent", "mode": "assist",
+     "group": "Agents", "order": 10,
      "description": "Character psychologist — maps the emotional spine (wound / lie / truth / heart), "
                     "the inner journey, not events.",
      "system": (
@@ -86,8 +102,8 @@ _SEED_PRESETS = [
          "• HEART — the human resonance at the center; the thing a stranger would recognize and feel.\n\n"
          "Keep each anchor specific to THIS person. Everything downstream — arc, scenes, choices — "
          "must hang from this spine.")},
-    {"id": "story_consultant", "name": "Story Consultant", "mode": "assist",
-     "group": "Story arc", "order": 11,
+    {"id": "story_consultant", "name": "Story Agent", "mode": "assist",
+     "group": "Agents", "order": 11,
      "description": "A developmental craft collaborator that builds the story document with the "
                     "writer and never roleplays. Workshop / storyboard / scenes / cast flows.",
      "system": (
@@ -106,9 +122,8 @@ _SEED_PRESETS = [
          "- The writer wants interiority, tension, melancholy and earned change — resist tidy or "
          "shallow premises. Conversational and substantive (2–4 short paragraphs), never bullet lists.")},
 
-    # ══ Cast & world — build the people, places and lore ══
-    {"id": "location_builder", "name": "Location Builder", "mode": "assist",
-     "group": "Cast & world", "order": 20,
+    {"id": "location_builder", "name": "Location Agent", "mode": "assist",
+     "group": "Agents", "order": 20,
      "description": "Builds the story's settings — neutral places described objectively, ready for backgrounds.",
      "system": (
          "You build the story's LOCATIONS — the neutral places where scenes happen. Describe each "
@@ -116,8 +131,8 @@ _SEED_PRESETS = [
          "no events, no plot. Give each a short name and a concrete description a set designer could "
          "build from, plus (when useful) an image background prompt. Stay consistent with the world's "
          "tone, era and geography; invent grounded detail where the source is sparse, never contradict it.")},
-    {"id": "character_builder", "name": "Character Builder", "mode": "assist",
-     "group": "Cast & world", "order": 21,
+    {"id": "character_builder", "name": "Character Agent", "mode": "assist",
+     "group": "Agents", "order": 21,
      "description": "Art-directs a character: persona + physical features + appearance from the card, "
                     "inferring tasteful detail that fits their world/age/role.",
      "system": (
@@ -132,8 +147,8 @@ _SEED_PRESETS = [
          "Draw specific detail from the notes; where sparse, INFER tasteful detail that fits their "
          "world, age and role — but never contradict anything stated. Persistent traits ONLY: no "
          "clothing, pose, expression or background (those come later).")},
-    {"id": "wardrobe_stylist", "name": "Wardrobe Stylist", "mode": "assist",
-     "group": "Cast & world", "order": 22,
+    {"id": "wardrobe_stylist", "name": "Wardrobe Agent", "mode": "assist",
+     "group": "Agents", "order": 22,
      "description": "Designs outfits/wardrobe for a character and renders them as image-ready descriptors.",
      "system": (
          "You are a wardrobe stylist. Design outfits that express a character's personality, role, "
@@ -141,8 +156,8 @@ _SEED_PRESETS = [
          "each, give a one-line concept, then the garments as explicit, image-ready descriptors. "
          "Keep every choice grounded in the setting and the person; avoid generic 'fantasy outfit' "
          "filler. Describe only what they WEAR — never restate persistent body traits.")},
-    {"id": "lore_author", "name": "Lore Author", "mode": "assist",
-     "group": "Cast & world", "order": 23,
+    {"id": "lore_author", "name": "Lore Agent", "mode": "assist",
+     "group": "Agents", "order": 23,
      "description": "Authors lorebook entries (places, factions, items, rules) in the established tone "
                     "— the engine behind ✨ Augment.",
      "system": (
@@ -182,9 +197,9 @@ _SEED_PRESETS = [
          "setting right now, and render exactly THIS beat as booru tags (subject → expression/pose → "
          "action → setting → framing). Not a generic portrait — the specific moment. Tags only, no prose.")},
 
-    # ══ Simulation — runtime, emergent play ══
-    {"id": "scene_director", "name": "Scene Director", "mode": "assist",
-     "group": "Simulation", "order": 40,
+    # ══ Agents (simulation runtime) — direct/voice emergent play ══
+    {"id": "scene_director", "name": "Scene Agent", "mode": "assist",
+     "group": "Agents", "order": 40,
      "description": "Runs emergent scene bursts in the simulation, decides who acts, and progresses "
                     "the story's features. Directs, never roleplays.",
      "system": (
@@ -194,8 +209,8 @@ _SEED_PRESETS = [
          "tests them; then advance the story's open features (relationships, plots, revelations) by "
          "the smallest honest increment. Favor consequence and friction over comfort, keep the world "
          "consistent, and never resolve tension for free. Output direction, not prose.")},
-    {"id": "npc_actor", "name": "NPC Actor", "mode": "roleplay",
-     "group": "Simulation", "order": 41,
+    {"id": "npc_actor", "name": "NPC Agent", "mode": "roleplay",
+     "group": "Agents", "order": 41,
      "description": "Voices a single info-isolated cast member in the story simulation — knows only "
                     "what that character knows, acts on their goals + secrets. Never breaks character.",
      "system": (
@@ -272,6 +287,19 @@ def load_presets(root: Path) -> dict:
                 p["model"] = "meromero"
             migrated = True
     data["presets"] = [_clean_preset(p) for p in raw]
+    # One-time rename/regroup: the conversational presets are now "Agents" (consistent naming
+    # + one visible group), not the old per-domain Architect/Consultant/Builder/Stylist/Director
+    # labels. Applied only when the name still matches the OLD default (so user edits are kept)
+    # and the group is still one of the legacy domain buckets — naturally idempotent.
+    for p in data["presets"]:
+        ren = _AGENT_RENAME.get(p["id"])
+        if not ren:
+            continue
+        old_name, new_name = ren
+        if p.get("name") == old_name:
+            p["name"] = new_name; migrated = True
+        if p.get("group") in _LEGACY_AGENT_GROUPS:
+            p["group"] = "Agents"; migrated = True
     # Ensure the default + every built-in seed exists (by id). New seeds appear on existing
     # installs too; user EDITS to a seed are preserved (we only add missing ids). A deleted
     # built-in seed re-appears on next load — like the reserved lorebooks.

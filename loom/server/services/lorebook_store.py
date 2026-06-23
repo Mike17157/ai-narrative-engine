@@ -253,7 +253,8 @@ def _seed_books(root: Path, con) -> None:
     # Ensure new built-in function entries land in EXISTING DBs (insert by id only when
     # missing, so user edits/deletions of the others are never clobbered or resurrected).
     for bid, entries in (("_graph_fns", _GRAPH_FNS_ENTRIES), ("_location_fns", _LOCATION_FNS_ENTRIES),
-                         ("_character_fns", _CHARACTER_FNS_ENTRIES)):
+                         ("_character_fns", _CHARACTER_FNS_ENTRIES),
+                         ("_story_tools", _STORY_TOOLS_ENTRIES), ("_spine_tools", _SPINE_TOOLS_ENTRIES)):
         if con.execute("SELECT 1 FROM books WHERE id=?", (bid,)).fetchone():
             have = {r[0] for r in con.execute("SELECT entry_id FROM lore WHERE scope=?", (bid,)).fetchall()}
             for e in entries:
@@ -267,6 +268,11 @@ def _seed_books(root: Path, con) -> None:
                      ("_character_fns", "character_builder")):
         row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
         if row is not None and (not (row[0] or "") or row[0] == "story_consultant"):
+            con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
+    # Stage-tool books → their Agent (set only when unbound, so user edits are kept).
+    for bid, pid in (("_story_tools", "story_consultant"), ("_spine_tools", "spine_architect")):
+        row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
+        if row is not None and not (row[0] or ""):
             con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
     con.commit()
 
@@ -587,6 +593,16 @@ def _gfn(fn: str, keywords: list) -> dict:
             "content": json.dumps({"fn": fn}, ensure_ascii=False)}
 
 
+def _sfn(fn: str, keywords: list, describe: str, produces: str = "") -> dict:
+    """A STAGE-tool entry: NAMES a callable pipeline stage (loom/stories/stage_tools.py) and
+    supplies the keywords that surface it. Like _gfn but facet 'stage' — the runner is heavier
+    than a graph script (it runs a whole generation stage), so its content carries a `describe`
+    for the Scripts panel. Bound to an Agent, it's a tool that agent can run from the workshop."""
+    return {"id": fn, "title": fn, "keywords": keywords, "facet": "stage",
+            "content": json.dumps({"kind": "stage", "fn": fn, "describe": describe,
+                                   "produces": produces}, ensure_ascii=False)}
+
+
 # Each book triggers a set of registered scripts. The script CODE (and which artifact it
 # mutates — dev graph / locations / cast) lives in stories/scripts.py; here we only choose
 # the trigger words. The same engine is artifact-agnostic, so all three share one mechanism.
@@ -618,6 +634,22 @@ _CHARACTER_FNS_ENTRIES = [
                               "remove npc", "kill off"]),
 ]
 
+# STAGE tools — heavier pipeline stages an Agent can RUN from the workshop (not just edit the
+# live doc). Bound to the agent whose job they are; the runner lives in stories/stage_tools.py.
+_STORY_TOOLS_ENTRIES = [
+    _sfn("storyboard",
+         ["storyboard", "storyboard this", "board it", "outline the story", "lay out the beats",
+          "generate the beats", "draft the outline", "map the beats"],
+         "Run the storyboarder — generate the story's beats (logline, premise, tone, themes, "
+         "beats) from the character and premise.", "board"),
+]
+_SPINE_TOOLS_ENTRIES = [
+    _sfn("spine",
+         ["spine", "emotional spine", "wound", "lie", "truth", "inner journey", "arc of change"],
+         "Run the spine architect — derive the emotional spine (wound / lie / truth + the "
+         "psychological beats from lie to truth).", "spine"),
+]
+
 
 _STARTER_BOOKS = [
     ("_graph_fns", {"name": "Graph Functions", "category": "function", "rating": "sfw",
@@ -633,6 +665,13 @@ _STARTER_BOOKS = [
                         "description": "Functions for editing the story's cast as a chat flow "
                                        "(operate on a {cast:[…]} document)."},
      _CHARACTER_FNS_ENTRIES),
+    ("_story_tools", {"name": "Story Agent Tools", "category": "function", "rating": "sfw",
+                      "description": "Pipeline STAGES the Story Agent can run from the workshop "
+                                     "(e.g. the storyboarder) — not just live-doc edits."},
+     _STORY_TOOLS_ENTRIES),
+    ("_spine_tools", {"name": "Spine Agent Tools", "category": "function", "rating": "sfw",
+                      "description": "Pipeline STAGES the Spine Agent can run (the spine architect)."},
+     _SPINE_TOOLS_ENTRIES),
     ("rpg-sim", {"name": "RPG Simulation", "category": "rpg", "rating": "sfw",
                  "description": "Turn the chat into a lightweight tabletop RPG: skill checks, "
                                 "combat turns, inventory, and consequences."}, [

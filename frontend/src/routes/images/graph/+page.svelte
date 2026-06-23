@@ -3,7 +3,7 @@
   import { SvelteFlow, SvelteFlowProvider, Background, Controls } from '@xyflow/svelte';
   import '@xyflow/svelte/dist/style.css';
   import { app, refreshModels } from '$lib/app.svelte.js';
-  import { img, saveWorkflow, loadObjectInfo, connectLink, deleteNode, deleteLink, addNode, selectWorkflow, openTest, chainLora, loadGraphFamilies, applyRecipeFlags } from '$lib/images.svelte.js';
+  import { img, saveWorkflow, loadObjectInfo, connectLink, deleteNode, deleteLink, addNode, selectWorkflow, chainLora, loadGraphFamilies, applyRecipeFlags } from '$lib/images.svelte.js';
   import { sectionOf, buildSectionMap, VIRTUAL_SECTIONS, inferType, typeColor, toGraph, layoutGraph, toSectionGraph, layoutSectionGraph } from '$lib/workflow_graph.js';
   import { nodeDoc } from '$lib/node_docs.js';
   import { post } from '$lib/api.js';
@@ -13,6 +13,7 @@
   import LoraStackEditor from '$lib/workflow/LoraStackEditor.svelte';
   import JsonEditor from '$lib/components/shared/JsonEditor.svelte';
   import ModelLibraryModal from '$lib/components/image/ModelLibraryModal.svelte';
+  import WorkflowTester from '$lib/components/image/WorkflowTester.svelte';
 
   const nodeTypes = { comfy: ComfyNode, section: SectionNode };
   const edgeTypes = {};
@@ -21,6 +22,21 @@
   let view = $state('sections'); // 'sections' | 'graph' | 'json'
   let drillSection = $state(null); // null = section overview, 'sXXX' = drilled into a section
   let showInfo = $state(false);    // info panel (ⓘ) — scoped to the current section / recipe
+
+  // The Sections view only makes sense when the workflow declares sections in its
+  // meta.json (keyed off the master's `sXXX__` node-id prefixes). Flat workflows
+  // (the fractured anima_* graphs, imported ones) have none — for those the section
+  // view collapses into one meaningless box, so fall back to the Nodes view and hide
+  // the Sections tab. Re-evaluated whenever the loaded workflow's sections change.
+  let hasSections = $derived(Object.keys(img.sections || {}).length > 0);
+  // Pick the default view per loaded workflow, keyed on its section set (which lands
+  // async after the workflow loads, so we can't key on activeImage): sectioned →
+  // Sections, flat → Nodes. Manual toggles within one workflow are respected.
+  let _secSig = $state(null);
+  $effect(() => {
+    const sig = Object.keys(img.sections || {}).sort().join(',');
+    if (sig !== _secSig) { _secSig = sig; view = sig ? 'sections' : 'graph'; }
+  });
 
   // ── Compose: generation-type recipes (meta.json) ───────────────────────────
   // Each recipe says which sections run and how the detailer/upscale/highrez gates
@@ -448,6 +464,7 @@
 
   // Full cross-family model library + organizer (relocated here from the Models pane).
   let libOpen = $state(false);
+  let quickTest = $state(false);
   async function onLibApplied() { await refreshModels(); loadGraphFamilies(); }
 
   function openPalette() { paletteOpen = true; q = ''; queueMicrotask(() => paletteEl?.querySelector('input')?.focus()); }
@@ -503,7 +520,7 @@
   <button class="tbtn" onclick={() => (libOpen = true)} title="Browse & organize the full model library (all families)">⊞ <span>Model library</span></button>
   {#if img.workflow}
     <div class="seg" role="tablist">
-      <button class:on={view === 'sections'} onclick={() => (view = 'sections')}>Sections</button>
+      {#if hasSections}<button class:on={view === 'sections'} onclick={() => (view = 'sections')}>Sections</button>{/if}
       <button class:on={view === 'graph'} onclick={() => (view = 'graph')}>Nodes</button>
       <button class:on={view === 'json'} onclick={() => (view = 'json')}>JSON</button>
     </div>
@@ -555,10 +572,8 @@
         <button class="tbtn" onclick={startDuplicate} title="Duplicate this workflow into a new editable copy">⧉ <span>Duplicate</span></button>
       {/if}
       <button class="tbtn" onclick={() => saveWorkflow()} title="Save the workflow file">💾 <span>Save</span></button>
-      <button class="tbtn primary" onclick={openTest} disabled={img.test?.phase === 'running'}
-        title={`Render a test grid with random booru tags:\n${img.testPrompt}`}>
-        {img.test?.phase === 'running' ? '⏳ Testing…' : '▶ Test'}
-      </button>
+      <button class="tbtn primary" onclick={() => (quickTest = true)}
+        title="Quick single render of this workflow (incl. unsaved edits)">▶ Test</button>
     </div>
   {/if}
 </div>
@@ -723,6 +738,18 @@
 {/if}
 
 <ModelLibraryModal open={libOpen} onclose={() => (libOpen = false)} onapplied={onLibApplied} />
+
+{#if quickTest}
+  <div class="qt-overlay" onclick={() => (quickTest = false)}>
+    <div class="qt-modal" onclick={(e) => e.stopPropagation()}>
+      <div class="qt-head">
+        <strong>Test render — {app.activeImage}</strong>
+        <button class="lm-close" onclick={() => (quickTest = false)}>✕</button>
+      </div>
+      <WorkflowTester json={img.workflow} />
+    </div>
+  </div>
+{/if}
 
 <svelte:window onkeydown={(e) => {
   if (e.key === 'Escape') { drop = null; loraConfig = null; }
@@ -931,6 +958,11 @@
   }
   .lm-close:hover { color: var(--text); background: var(--elev-2); filter: none; }
   .lm-body { overflow-y: auto; flex: 1; }
+
+  /* quick-test modal */
+  .qt-overlay { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 60; padding: 24px; }
+  .qt-modal { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg, 14px); box-shadow: var(--shadow); width: min(94vw, 880px); max-height: 90vh; overflow: auto; padding: 16px; }
+  .qt-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
 
   /* section dimming: non-active section nodes fade out and lose pointer events */
   .flowwrap :global(.svelte-flow__node.sect-dim) {

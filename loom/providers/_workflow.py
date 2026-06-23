@@ -241,9 +241,18 @@ def localize_model_paths(graph: dict) -> None:
     host OS separator (backslash on Windows), so a nested model name carrying '/' — e.g.
     ``anima/anisnuff_v15.safetensors`` from inject_models — fails validation against a
     Windows ComfyUI ("Value not in list"). Used by the same-OS local provider; the
-    serverless provider normalizes to '/' for its Linux worker instead."""
+    serverless provider normalizes to '/' for its Linux worker instead.
+
+    Exception: ``UltralyticsDetectorProvider`` model names carry a ComfyUI *category*
+    prefix (``bbox/face_yolov8m.pt``, ``segm/person_yolov8m-seg.pt``) that the
+    Impact-Pack combo keeps with a forward slash on every OS — rewriting it to a
+    backslash yields "Value not in list". Those nodes are skipped."""
     for node in graph.values():
-        ins = node.get("inputs") if isinstance(node, dict) else None
+        if not isinstance(node, dict):
+            continue
+        if node.get("class_type") == "UltralyticsDetectorProvider":
+            continue
+        ins = node.get("inputs")
         if not isinstance(ins, dict):
             continue
         for k, v in ins.items():

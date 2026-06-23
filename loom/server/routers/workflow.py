@@ -22,6 +22,8 @@ class WorkflowTestRequest(BaseModel):
     init_image: str | None = None  # base64/data-URL source image for img2img (LoadImage)
     width: int | None = None       # latent canvas override (per-pose aspect, for sprite tests)
     height: int | None = None
+    provider: str | None = None    # 'cloud' | 'local' | None — where to run; None honours the
+    #                                per-workflow default (configs/runpod_models.json)
 
 
 _CJK_RE = re.compile(r"[㐀-䶿一-鿿豈-﫿가-힣぀-ヿ]")
@@ -149,15 +151,36 @@ def register(app, ctx):
             out_node = "8"
 
         wfmod.localize_model_paths(graph)
-        conn = ctx.store.active("image")
-        base = (conn.base_url if conn and conn.base_url else None) or md.options.get("base_url") or "http://127.0.0.1:8188"
-        try:
-            await run_in_threadpool(get_server(base).ensure_up)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": f"ComfyUI not reachable: {exc}"}, status_code=502)
+
+        # Honour the per-workflow RunPod flag — same chokepoint as the rest of the app.
+        from ...providers.runpod_serverless_provider import RunPodServerlessProvider
+        from ..services.render_stream import serverless_render_events
+        provider, _ = ctx.image_provider("wan")
+
+        # --- RunPod serverless: hand the worker the graph we just tuned (prompt/frames
+        # already injected); the provider polls /status and returns the mp4/png. --------
+        if isinstance(provider, RunPodServerlessProvider):
+            provider.workflow = graph
+            provider.output_node = out_node
+
+            async def events_cloud():
+                try:
+                    async for ev in serverless_render_events(provider, prompt=prompt):
+                        yield f"data: {json.dumps(ev)}\n\n"
+                except Exception as exc:  # noqa: BLE001
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+                yield 'data: {"type": "done"}\n\n'
+
+            return StreamingResponse(events_cloud(), media_type="text/event-stream")
+
+        # --- local ComfyUI: ensure_up runs inside the stream so the wait is cancellable.
+        base = provider.base_url if provider else (
+            (conn.base_url if (conn := ctx.store.active("image")) and conn.base_url else None)
+            or md.options.get("base_url") or "http://127.0.0.1:8188")
 
         async def events():
             try:
+                await run_in_threadpool(get_server(base).ensure_up)
                 async for ev in stream_generate(base, graph, out_node, float(md.options.get("timeout_s", 600))):
                     yield f"data: {json.dumps(ev)}\n\n"
             except Exception as exc:  # noqa: BLE001
@@ -343,52 +366,68 @@ def register(app, ctx):
 
     @app.post("/api/workflow/test")
     async def test_workflow(body: WorkflowTestRequest):
-        """Run the image model's workflow through ComfyUI with a test prompt,
-        streaming live progress (SSE) and ending with the rendered image(s).
-        Uses the in-editor JSON if provided."""
-        from fastapi.concurrency import run_in_threadpool
+        """Run the image model's workflow with a test prompt, streaming live progress
+        (SSE) and ending with the rendered image(s)/video. Uses the in-editor JSON if
+        given. Routes RunPod-flagged workflows to the serverless endpoint — exactly
+        like the production pipeline — so a cloud-only model (e.g. wan_i2v, too big for
+        the local card) never silently lands on local ComfyUI and hangs."""
         from fastapi.responses import StreamingResponse
+
+        from ...providers.runpod_serverless_provider import RunPodServerlessProvider
+        from ..services.render_stream import serverless_render_events
+
+        # The ONE provider-selection chokepoint: honours the per-workflow RunPod flag
+        # (configs/runpod_models.json) unless the caller forces 'cloud'/'local'.
+        provider, model_id = ctx.image_provider(body.model, provider_override=body.provider or None)
+        if provider is None:
+            return JSONResponse({"ok": False, "error": model_id}, status_code=404)
+        if body.json:
+            provider.workflow = body.json
+
+        prompt = body.prompt or "masterpiece, best quality, highly detailed, 1girl, scenery, soft light"
+        latent = (body.width, body.height) if (body.width and body.height) else None
+        init_raw = None
+        if body.init_image:
+            import base64 as _b64
+            init_raw = _b64.b64decode(body.init_image.split(",", 1)[-1])
+
+        # --- RunPod serverless: the provider injects its own graph + polls /status --
+        if isinstance(provider, RunPodServerlessProvider):
+            from ...comfy.lora import randomize_seeds
+            provider.workflow = randomize_seeds(provider.workflow)  # vary repeat tests
+
+            async def events_cloud():
+                try:
+                    async for ev in serverless_render_events(
+                        provider, prompt=prompt, negative=None,
+                        init_image=init_raw, latent=latent):
+                        yield f"data: {json.dumps(ev)}\n\n"
+                except Exception as exc:  # noqa: BLE001
+                    yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+                yield 'data: {"type": "done"}\n\n'
+
+            return StreamingResponse(events_cloud(), media_type="text/event-stream")
+
+        # --- local ComfyUI: live websocket progress; ensure_up runs INSIDE the stream
+        # so the "queued…" phase is part of the cancellable SSE, not a dead pre-block --
+        from fastapi.concurrency import run_in_threadpool
 
         import httpx
 
         from ...comfy.generate import stream_generate
         from ...comfy.lora import randomize_seeds
-        from ...providers.comfyui_provider import ComfyUIProvider
 
-        md = ctx.base_settings.models.get(body.model)
-        if md is None or md.kind != "image":
-            return JSONResponse({"ok": False, "error": f"no image model '{body.model}'"}, status_code=404)
-        opts = dict(md.options)
-        conn = ctx.store.active("image")
-        if conn and conn.base_url:
-            opts["base_url"] = conn.base_url
-
-        try:
-            provider = ComfyUIProvider(opts)
-            if body.json:
-                provider.workflow = body.json
-            await run_in_threadpool(get_server(provider.base_url).ensure_up)
-            prompt = body.prompt or "masterpiece, best quality, highly detailed, 1girl, scenery, soft light"
-            # Fresh seed per render, exactly like the LoRA batch pipeline — otherwise
-            # every test is the same fixed seed:0 roll (usually a mediocre one).
-            latent = (body.width, body.height) if (body.width and body.height) else None
-            graph, out_node = provider._inject(prompt, None, latent=latent)
-            graph = randomize_seeds(graph)
-            # img2img: upload the source image and point the LoadImage node at it
-            # (no-op if the workflow has no LoadImage node).
-            if body.init_image:
-                import base64 as _b64
-                raw = _b64.b64decode(body.init_image.split(",", 1)[-1])
-
-                def _wire():
-                    with httpx.Client(base_url=provider.base_url, timeout=60) as client:
-                        provider._set_init_image(client, graph, raw)
-                await run_in_threadpool(_wire)
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
-
-        async def events():
+        async def events_local():
             try:
+                # Fresh seed per render (else every test is the same fixed seed:0 roll).
+                graph, out_node = provider._inject(prompt, None, latent=latent)
+                graph = randomize_seeds(graph)
+                await run_in_threadpool(get_server(provider.base_url).ensure_up)
+                if init_raw is not None:   # img2img: upload + point LoadImage at it
+                    def _wire():
+                        with httpx.Client(base_url=provider.base_url, timeout=60) as client:
+                            provider._set_init_image(client, graph, init_raw)
+                    await run_in_threadpool(_wire)
                 collect_from = out_node or provider.output_node
                 async for ev in stream_generate(provider.base_url, graph, collect_from, provider.timeout_s):
                     yield f"data: {json.dumps(ev)}\n\n"
@@ -396,7 +435,7 @@ def register(app, ctx):
                 yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
             yield 'data: {"type": "done"}\n\n'
 
-        return StreamingResponse(events(), media_type="text/event-stream")
+        return StreamingResponse(events_local(), media_type="text/event-stream")
 
     # Representative emotion spread for the Sprite test grid (neutral doubles as the base-image read).
     _REP_EMOTIONS = ["neutral", "joy", "sadness", "anger", "fear", "surprise", "desire", "disgust"]

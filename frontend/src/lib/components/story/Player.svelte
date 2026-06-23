@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { app } from '$lib/app.svelte.js';
   import { openConfigModal } from '$lib/configModal.svelte.js';
+  import { formatChat } from '$lib/chat-format.js';
 
   let { storyKey } = $props();
   const exitPlay = () => goto(`/stories/${storyKey}/overview`);
@@ -187,7 +188,7 @@
 
     <div class="dialogue">
       {#if err}<div class="err">⚠ {err}</div>{/if}
-      <p class="narr">{busy && !lastReply ? '…' : lastReply}</p>
+      <p class="narr">{#if busy && !lastReply}…{:else}{@html formatChat(lastReply)}{/if}</p>
 
       {#if scene.movement && moveOptions.length}
         <div class="choices">

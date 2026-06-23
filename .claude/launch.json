@@ -11,7 +11,7 @@
     {
       "name": "backend",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-c", "import uvicorn; from loom.server.app import create_app; uvicorn.run(create_app('.'), host='127.0.0.1', port=8000, log_level='warning')"],
+      "runtimeArgs": ["scripts/dev_backend.py"],
       "port": 8000
     }
   ]

@@ -688,6 +688,15 @@ def register(app, ctx):
         # The model sees the full history and must reply to the last user turn.
         prompt = "\n\n".join(transcript_parts) if transcript_parts else "User: Help me develop a story for this character."
 
+        # Auto-inject the STAGE-TOOL protocol into the post-history slot (the tail, the last thing
+        # before the reply → strongest steer): tell the agent which pipeline stages it can run and
+        # the sentinel to request one. The model only emits it when the writer actually asks; the
+        # console detects the sentinel, calls /api/stories/run-stage, and strips it from the prose.
+        from . import stage_tools as _ST
+        _protocol = _ST.protocol_text(_ST.catalog())
+        if _protocol:
+            prompt = prompt + "\n\n[" + _protocol + "]"
+
         # Context-budget breakdown for the console's usage dial (estimate ~4 chars/token).
         from ..server.services.lorebook import estimate_tokens
         craft_text = format_lore_block(craft_hits, header="x") if craft_hits else ""
@@ -804,6 +813,33 @@ def register(app, ctx):
             return JSONResponse({"error": f"graph-ops failed: {exc}"}, status_code=500)
         new_graph, log = GO.apply_ops(graph, data.get("graph_ops") or [], fns)
         return {"ok": True, "graph": new_graph, "applied": log, "offered": [f.name for f in off]}
+
+    @app.get("/api/stages")
+    def list_stage_tools():
+        """The catalog of callable STAGE TOOLS — what an agent can trigger in a story surface
+        (used by the Scripts panel + the post-history tool protocol)."""
+        from . import stage_tools as ST
+        return {"stages": ST.catalog()}
+
+    @app.post("/api/stories/run-stage")
+    def story_run_stage(body: dict):
+        """Execute a STAGE TOOL by name and return its structured artifact. This is the
+        execution path an agent's tool-call triggers in the workshop/play surfaces — the
+        runner reuses the same pipeline units the dedicated stage endpoints use.
+        Body: { stage: str, character: str, premise?: str, spine?: dict }."""
+        from . import stage_tools as ST
+        body = body or {}
+        stage = (body.get("stage") or "").strip()
+        if ST.get(stage) is None:
+            return JSONResponse({"error": f"unknown stage tool: {stage!r}",
+                                 "available": [t["fn"] for t in ST.catalog()]}, status_code=400)
+        try:
+            result = ST.run_stage(ctx, stage, body)
+        except ValueError as exc:           # bad/missing character
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except Exception as exc:            # noqa: BLE001 — surface stage failures cleanly
+            return JSONResponse({"error": f"stage '{stage}' failed: {exc}"}, status_code=500)
+        return {"ok": True, "stage": stage, **result}
 
     # ── Story session checkpoints (server-side) ───────────────────────────────
 
@@ -2828,8 +2864,9 @@ def register(app, ctx):
         prompt = (location.background_prompt or location.description or "").strip()
         if not prompt:
             return JSONResponse({"error": "location has no background prompt"}, status_code=400)
-        model = ctx.role_model("scene", (body or {}).get("image_model"))
-        provider, model_id = ctx.image_provider(model)
+        # Go through the single role chokepoint so the active image preset's LoRA
+        # look is injected, same as base/sprite renders.
+        provider, model_id = ctx.role_image_provider("scene", (body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
         _randomize_seeds(provider.workflow)

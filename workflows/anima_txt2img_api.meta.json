@@ -1,0 +1,6 @@
+{
+  "source": "anima_master_api.json (fractured)",
+  "positive_node": "10",
+  "negative_node": "11",
+  "output_node": "15"
+}

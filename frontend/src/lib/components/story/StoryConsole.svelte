@@ -21,6 +21,7 @@
     openingMessage = '',    // first user turn (defaults to the endpoint's character read)
     sessionId = '',         // server-side checkpoint id; '' = no persistence
     onGraphChange = null,   // (graph) => void — fires on model AND user edits
+    onBoard = null,         // (board) => void — fires when an agent runs the storyboarder stage tool
     // The host's action buttons. Aliased to `hostActions` so it doesn't collide with the
     // `{#snippet actions()}` we pass down to LlmConsole — that shadowing made
     // `{@render actions(...)}` recurse into the local snippet (invalid_snippet_arguments
@@ -84,8 +85,31 @@
     _saveTimer = setTimeout(saveSession, 1000);
   });
 
+  // The agent may end a reply with a stage-tool sentinel like `[[run: storyboard]]` (injected
+  // tool protocol). Strip it from what the writer sees — runStageTools() acts on it after the turn.
+  const RUN_SENTINEL = () => /\[\[run:\s*([a-z_]+)\s*\]\]/gi;
   function visibleProse(raw) {
-    return raw.split(SPINE_MARKER)[0].replace(/\s*<{1,3}S?P?I?N?E?>{0,3}\s*$/i, '');
+    return raw.split(SPINE_MARKER)[0]
+      .replace(RUN_SENTINEL(), '')
+      .replace(/\s*<{1,3}S?P?I?N?E?>{0,3}\s*$/i, '')
+      .trimEnd();
+  }
+
+  // Execute any stage tools the agent requested this turn (Story/Spine Agent → storyboarder /
+  // spine architect). A spine result IS graph-shaped → swap the canvas to it; a storyboard board
+  // is a different shape, so we report it rather than force it onto the graph.
+  async function runStageTools(raw) {
+    const stages = [...new Set([...raw.matchAll(RUN_SENTINEL())].map((m) => m[1].toLowerCase()))];
+    for (const stage of stages) {
+      fnMsg = `running ${stage}…`;
+      try {
+        const r = await post('/stories/run-stage', { stage, character, spine: workingGraph || undefined });
+        if (!r.data?.ok) { fnMsg = r.data?.error || `${stage} failed`; continue; }
+        if (r.data.spine && typeof r.data.spine === 'object') { setGraph(r.data.spine, true); fnMsg = `✓ ran ${stage}`; }
+        else if (r.data.board) { fnMsg = `✓ ran ${stage} → ${(r.data.board.beats || []).length} beats`; onBoard?.(r.data.board); }
+        else fnMsg = `✓ ran ${stage}`;
+      } catch { fnMsg = `${stage} failed`; }
+    }
   }
 
   async function callWorkshop(msgs) {
@@ -139,6 +163,7 @@
       messages = messages.slice(0, idx);
     } finally {
       busy = false;
+      if (RUN_SENTINEL().test(raw)) void runStageTools(raw);   // agent requested a pipeline stage
       saveSession();   // checkpoint the turn (conversation + graph) server-side
       if (autoFns) void runGraphOps();   // apply graph functions as part of the turn
     }

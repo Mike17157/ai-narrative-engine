@@ -42,18 +42,25 @@ models:
       thinking: disabled
 
   # --------------------------------------------------------------------------- #
-  # Anima — the ONE global image workflow for all roles.
+  # Anima — fractured into single-function workflows.
   #
-  # A single entry covers every generation role (base/sprite/scene/chat).
-  # Per-role output_variant (full vs cutout) lives in configs/image_roles.json,
-  # not here — so there is no reason to duplicate this entry.
+  # The old "All-In-One" master (anima_master_api.json) ran every role through one
+  # switch-gated rgthree Context bus and had accreted dead branches (the detailer
+  # routed to EmptySegs; TorchCompile/LLLite/DCW/Spectrum were vestigial). Per the
+  # project principle — workflows are cheap and should each be ONE clear, contained
+  # function — it's split into the clean linear graphs below (scripts/build_anima_
+  # workflows.py is the reproducible authoring aid). Each shares the master's live
+  # render config (UNet novaAnimeAM_v25, CLIP qwen_3_06b, er_sde/24/cfg4, AuraFlow
+  # shift 1.73, AnimaModGuidance) and carries an `easy loraStackApply` anchor so
+  # the image-preset LoRA look injects exactly as before (inject_models / neutralize
+  # _baked_stack). Cutout (Inspyrenet bg-remove) and the face detailer are now BAKED
+  # into the graphs that need them — no runtime output_variant / flag toggling.
   #
-  # The graph: a flattened Anima All-In-One master (workflows/anima_master_api.json
-  # — switchable txt2img/img2img, LLLite refine, face/region detailers, upscale,
-  # 8-preset LoRA switcher). LoRA routing chains through inject_models on top of
-  # the preset stack. Positive prompt → node s1284__1325; output → Image Saver
-  # node 775 (Inspyrenet bg-remover spliced in by the provider when the role
-  # requests output_variant: cutout).
+  # Role wiring lives in configs/image_roles.json:
+  #   base → anima_character · sprite → anima_sprite · scene → anima_scene · chat → anima_txt2img
+  #
+  # The legacy `anima` master entry is KEPT so presets/chat that still reference
+  # "anima" keep working; it can be retired once nothing points at it.
   # --------------------------------------------------------------------------- #
   anima:
     provider: comfyui
@@ -65,6 +72,94 @@ models:
         positive: { node: "s1284__1325", field: "text" }
       output_node: "775"        # Image Saver (full pipeline: refine + detail + upscale)
       timeout_s: 1700           # cold-start model load from the network volume + heavy 29-step er_sde pipeline; stay under the 30-min worker/exec ceiling
+
+  # ── Generators (prompt → image) ───────────────────────────────────────────── #
+  anima_scene:                  # txt2img, full background (no character/cutout), landscape default
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_scene_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "15"         # SaveImage
+      timeout_s: 1700
+
+  anima_character:              # txt2img + FaceDetailer + Inspyrenet cutout, tall default
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_character_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "20"         # easy imageRemBg (transparent cutout)
+      timeout_s: 1700
+
+  anima_sprite:                 # as character, portrait default (emotion/outfit sprites)
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_sprite_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "20"         # easy imageRemBg (transparent cutout)
+      timeout_s: 1700
+
+  anima_txt2img:                # plain txt2img, full output (general / chat surface)
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_txt2img_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "15"         # SaveImage
+      timeout_s: 1700
+
+  anima_img2img:                # image + text → image (init image via LoadImage, denoise 0.5)
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_img2img_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "15"         # SaveImage
+      timeout_s: 1700
+
+  # ── Utilities (image → image) ─────────────────────────────────────────────── #
+  anima_upscale:                # UltimateSDUpscale 1.5× (RealESRGAN + tiled refine) — "make it larger"
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_upscale_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "15"         # SaveImage
+      timeout_s: 1700
+
+  anima_detailer:               # standalone FaceDetailer pass (refine faces on an existing image)
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_detailer_api.json
+      inputs:
+        positive: { node: "10", field: "text" }
+      output_node: "15"         # SaveImage
+      timeout_s: 1700
+
+  anima_rembg:                  # pure background removal (Inspyrenet) — no prompt
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/anima_rembg_api.json
+      output_node: "20"         # easy imageRemBg
+      timeout_s: 1700
 
   # --------------------------------------------------------------------------- #
   # Flux — a second image family (decoupling from Anima-only).

@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vite dev --port 5173",
+    "predev": "python ../scripts/free_port.py 5173",
+    "dev": "vite dev --port 5173 --strictPort",
     "build": "vite build",
     "preview": "vite preview"
   },

@@ -1,12 +1,6 @@
 {
-  "base": {
-    "model": "anima",
-    "output_variant": "cutout"
-  },
-  "sprite": {
-    "model": "anima",
-    "output_variant": "cutout"
-  },
-  "scene": "anima",
-  "chat": "anima"
+  "base": "anima_character",
+  "sprite": "anima_sprite",
+  "scene": "anima_scene",
+  "chat": "anima_txt2img"
 }

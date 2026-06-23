@@ -77,13 +77,16 @@
       .map(([group, items]) => ({ group, items, ord: Math.min(...items.map((p) => p.order || 0)) }))
       .sort((a, b) => a.ord - b.ord);
   });
-  // CHAT presets are what you pick for a conversation (group 'Chat'/empty). Everything else is
-  // a pipeline-stage / function preset — engine internals, tucked under an advanced section so
-  // the chat-preset list stays clean.
-  const _isChat = (g) => g === 'Chat' || g === 'Other';
-  let chatGroups = $derived(groupedPresets.filter((g) => _isChat(g.group)));
-  let pipelineGroups = $derived(groupedPresets.filter((g) => !_isChat(g.group)));
+  // PRIMARY presets are the ones you actually pick to talk to: Free Chat, the Agents (story
+  // partners that can call their scripts) and Default. Everything else — image-prompt utilities
+  // and the headless pipeline stages — is engine internals, tucked under an advanced section.
+  const _isPrimary = (g) => g === 'Chat' || g === 'Agents' || g === 'Other';
+  let chatGroups = $derived(groupedPresets.filter((g) => _isPrimary(g.group)));
+  let pipelineGroups = $derived(groupedPresets.filter((g) => !_isPrimary(g.group)));
   let showPipeline = $state(false);
+  // Advanced editor section (author's note + post-history + inference params) — collapsed by
+  // default so the common fields (model / system / lorebooks) aren't buried under tuning knobs.
+  let showAdvanced = $state(false);
 
   const MODES = [
     { v: '', label: 'Auto', hint: 'Roleplay for free chat, Assist for function flows' },
@@ -164,6 +167,49 @@
   }
   const bookName = (id) => books.find((b) => b.id === id)?.name || id;
 
+  // SCRIPTS the preset can trigger — the callable tools (graph/cast/location edits, pipeline
+  // stages) surfaced by the function lorebooks this preset binds (book.preset==id) or attaches
+  // (preset.lorebooks). Each function entry NAMES a registered script and carries its trigger
+  // keywords; `describe` says what it does. Resolved lazily per book and cached.
+  let scriptCache = new Map();        // bookId -> entries[]
+  let presetScripts = $state([]);     // [{ fn, kind, describe, keywords, book, bookName, bound, attached }]
+  let scriptsKey = null;
+  $effect(() => {
+    const p = sel;
+    if (!p) { presetScripts = []; return; }
+    const boundIds = books.filter((b) => b.preset === p.id).map((b) => b.id);
+    const attachedIds = [...(p.lorebooks || [])];
+    const key = p.id + '|' + boundIds.join(',') + '|' + attachedIds.join(',');
+    if (key === scriptsKey) return;
+    scriptsKey = key;
+    loadPresetScripts(p, boundIds, attachedIds);
+  });
+  async function loadPresetScripts(p, boundIds, attachedIds) {
+    const attached = new Set(attachedIds);
+    const ids = [...new Set([...boundIds, ...attachedIds])];
+    const rows = [];
+    for (const bid of ids) {
+      let entries = scriptCache.get(bid);
+      if (!entries) {
+        try { entries = (await get(`/lorebooks/${encodeURIComponent(bid)}`)).entries || []; }
+        catch { entries = []; }
+        scriptCache.set(bid, entries);
+      }
+      for (const e of entries) {
+        if (e.facet !== 'fn' && e.facet !== 'stage') continue;
+        let c = {}; try { c = JSON.parse(e.content || '{}'); } catch { /* keep {} */ }
+        rows.push({
+          fn: c.fn || e.id, kind: e.facet,
+          describe: c.describe || e.title || c.fn || e.id,
+          keywords: e.keywords || [],
+          book: bid, bookName: bookName(bid),
+          bound: boundIds.includes(bid), attached: attached.has(bid),
+        });
+      }
+    }
+    if (sel?.id === p.id) presetScripts = rows;   // ignore a stale in-flight load
+  }
+
   // Edit which lorebooks bind to THIS preset via the reusable browse modal. The binding
   // lives on each book (book.preset); confirming diffs the selection and PATCHes the books
   // that changed — added → this preset, removed → '' (cleared).
@@ -201,8 +247,9 @@
   {/snippet}
 
   <div class="list">
-    <div class="lhead">Chat presets <span class="lo">— a chat model + image workflow + lorebooks</span></div>
+    <div class="lhead">Presets <span class="lo">— a chat model + image workflow + lorebooks + scripts</span></div>
     {#each chatGroups as grp (grp.group)}
+      {#if chatGroups.length > 1}<div class="pgroup">{grp.group}</div>{/if}
       {#each grp.items as p (p.id)}{@render presetRow(p)}{/each}
     {/each}
     <button class="new" onclick={newPreset}>＋ New preset</button>
@@ -296,42 +343,78 @@
         <label>System prompt <span class="lo">— top of the prompt; standing rules (lorebooks add more on top)</span></label>
         <textarea class="fld ta" rows="1" use:autosize={sel.system} bind:value={sel.system} placeholder="Optional standing instructions for this preset…"></textarea>
       </div>
-      <div class="erow col">
-        <label>Author's note <span class="lo">— injected near the end of history; strong steer on tone/direction</span></label>
-        <textarea class="fld ta" rows="1" use:autosize={sel.author_note} bind:value={sel.author_note} placeholder="e.g. Keep the pace tense and the prose sensory."></textarea>
-        <label class="depth">depth
-          <input class="fld dnum" type="number" min="0" step="1" bind:value={sel.author_depth} title="How many messages from the end to inject the note" />
-          <span class="lo">messages from the end</span>
-        </label>
-      </div>
-      <div class="erow col">
-        <label>Post-history instructions <span class="lo">— placed LAST, just before the reply; strongest steer</span></label>
-        <textarea class="fld ta" rows="1" use:autosize={sel.post_history} bind:value={sel.post_history} placeholder="e.g. Stay in character. Reply in 2–3 paragraphs, present tense."></textarea>
-      </div>
+      <button class="advtoggle adv-sec" onclick={() => (showAdvanced = !showAdvanced)}>
+        {showAdvanced ? '▾' : '▸'} Advanced
+        <span class="lo">— author's note, post-history &amp; inference params{#if paramCount(sel) || sel.author_note || sel.post_history}<span class="cnt">in use</span>{/if}</span>
+      </button>
+      {#if showAdvanced}
+        <div class="erow col">
+          <label>Author's note <span class="lo">— injected near the end of history; strong steer on tone/direction</span></label>
+          <textarea class="fld ta" rows="1" use:autosize={sel.author_note} bind:value={sel.author_note} placeholder="e.g. Keep the pace tense and the prose sensory."></textarea>
+          <label class="depth">depth
+            <input class="fld dnum" type="number" min="0" step="1" bind:value={sel.author_depth} title="How many messages from the end to inject the note" />
+            <span class="lo">messages from the end</span>
+          </label>
+        </div>
+        <div class="erow col">
+          <label>Post-history instructions <span class="lo">— placed LAST, just before the reply; strongest steer</span></label>
+          <textarea class="fld ta" rows="1" use:autosize={sel.post_history} bind:value={sel.post_history} placeholder="e.g. Stay in character. Reply in 2–3 paragraphs, present tense."></textarea>
+        </div>
 
-      <div class="adv">
-        <div class="advhdr">Inference {#if paramCount(sel)}<span class="cnt">{paramCount(sel)} set</span>{/if}<span class="lo">— every OpenRouter knob; blank = model default</span></div>
-        <div class="grid">
-          {#each PARAM_FIELDS as f (f.k)}
+        <div class="adv">
+          <div class="advhdr">Inference {#if paramCount(sel)}<span class="cnt">{paramCount(sel)} set</span>{/if}<span class="lo">— every OpenRouter knob; blank = model default</span></div>
+          <div class="grid">
+            {#each PARAM_FIELDS as f (f.k)}
+              <div class="pf">
+                <label title={f.hint}>{f.label}</label>
+                <input class="fld" type="number" step={f.step} min={f.min} max={f.max} placeholder={f.ph} bind:value={sel.params[f.k]} />
+              </div>
+            {/each}
             <div class="pf">
-              <label title={f.hint}>{f.label}</label>
-              <input class="fld" type="number" step={f.step} min={f.min} max={f.max} placeholder={f.ph} bind:value={sel.params[f.k]} />
+              <label title="Map to OpenRouter reasoning:{'{'}effort{'}'} — only affects reasoning models">Reasoning</label>
+              <select class="fld" bind:value={sel.reasoning_effort}>
+                <option value="">default</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
             </div>
-          {/each}
-          <div class="pf">
-            <label title="Map to OpenRouter reasoning:{'{'}effort{'}'} — only affects reasoning models">Reasoning</label>
-            <select class="fld" bind:value={sel.reasoning_effort}>
-              <option value="">default</option>
-              <option value="low">low</option>
-              <option value="medium">medium</option>
-              <option value="high">high</option>
-            </select>
+          </div>
+          <div class="erow col" style="margin-top:9px">
+            <label title="Up to 4 strings that immediately stop generation the moment the model produces them">Stop sequences <span class="lo">— comma-separated; cut the reply off when any is produced</span></label>
+            <input class="fld" bind:value={stopStr} onblur={commitStop} placeholder='e.g. \n\n, ###, "User:"' />
+            <p class="lo" style="margin:2px 0 0">Generation halts as soon as the model emits one of these — e.g. to stop it writing your side of the conversation (<code>User:</code>) or running past a separator. Up to 4.</p>
           </div>
         </div>
-        <div class="erow col" style="margin-top:9px">
-          <label title="Up to 4 sequences that halt generation">Stop sequences <span class="lo">— comma-separated</span></label>
-          <input class="fld" bind:value={stopStr} onblur={commitStop} placeholder='e.g. \n\n, ###, "User:"' />
+      {/if}
+
+      <div class="scripts">
+        <div class="bhd">Scripts <span class="lo">— tools this preset can call; triggered by the keywords below</span>
+          {#if presetScripts.length}<span class="cnt">{presetScripts.length}</span>{/if}
         </div>
+        {#if presetScripts.length}
+          <div class="scriptlist">
+            {#each presetScripts as s (s.book + ':' + s.fn)}
+              <div class="script">
+                <div class="srow">
+                  <code class="sfn">{s.fn}</code>
+                  {#if s.kind === 'stage'}<span class="skind stage" title="runs a pipeline stage">stage</span>{/if}
+                  <a class="sbook" href="/library/lorebooks?book={s.book}" title={s.bound ? 'bound to this preset' : 'attached to this preset'}>{s.bookName}</a>
+                </div>
+                <div class="sdesc">{s.describe}</div>
+                {#if s.keywords.length}
+                  <div class="strig">
+                    <span class="lo">triggers:</span>
+                    {#each s.keywords.slice(0, 8) as kw}<span class="kw">{kw}</span>{/each}
+                    {#if s.keywords.length > 8}<span class="lo">+{s.keywords.length - 8}</span>{/if}
+                  </div>
+                {/if}
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p class="lo">No scripts. Bind or attach a <b>function</b> lorebook below to give this preset callable tools.</p>
+        {/if}
       </div>
 
       <div class="bound">
@@ -420,6 +503,18 @@
   .pf { display: flex; flex-direction: column; gap: 3px; }
   .pf label { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
   .pf .fld { padding: 6px 8px; font-size: 12.5px; }
+
+  .scripts { border-top: 1px solid var(--border-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .scriptlist { display: flex; flex-direction: column; gap: 6px; }
+  .script { border: 1px solid var(--border-soft); border-radius: 9px; padding: 8px 10px; background: var(--bg); display: flex; flex-direction: column; gap: 4px; }
+  .srow { display: flex; align-items: center; gap: 8px; }
+  .sfn { font-size: 12px; font-weight: 700; color: var(--accent); background: rgba(109,140,255,.12); border-radius: 6px; padding: 1px 7px; }
+  .skind.stage { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--warn); background: rgba(230,170,90,.14); border-radius: 999px; padding: 1px 7px; }
+  .sbook { margin-left: auto; font-size: 11px; color: var(--muted); text-decoration: none; }
+  .sbook:hover { color: var(--accent); }
+  .sdesc { font-size: 12.5px; color: var(--text); line-height: 1.4; }
+  .strig { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
+  .kw { font-size: 11px; color: var(--muted); background: var(--elev); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; }
 
   .bound { border-top: 1px solid var(--border-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 7px; }
   .bhd { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
