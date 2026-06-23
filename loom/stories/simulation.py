@@ -241,6 +241,35 @@ def close_scene(director_prov, scene: dict) -> dict:
                                              emits=CLOSE_SCHEMA))
 
 
+# ── Sim-state ops (the per-character mutations applied at scene close) ────────────
+# The director's CLOSE returns structured `updates`; applying them is the only mutation
+# of sim state. Registered as named ops (same pattern as world ops / graph scripts) so
+# every model-driven state change in the project lives in a registry, not inline. The
+# orchestration in run_scene_burst stays as code — it's fixed control flow, not a
+# model-callable function vocabulary.
+
+SIM_OPS: dict[str, Callable] = {}
+
+
+def sim_op(name: str) -> Callable:
+    def deco(fn: Callable) -> Callable:
+        SIM_OPS[name] = fn
+        return fn
+    return deco
+
+
+@sim_op("learn")
+def _sim_learn(character: dict, value: str) -> None:
+    if value:
+        character.setdefault("knowledge", []).append(value)
+
+
+@sim_op("set_emotion")
+def _sim_set_emotion(character: dict, value: str) -> None:
+    if value:
+        character["state"] = value
+
+
 # ── 5) Orchestration — one autonomous scene burst ───────────────────────────────
 
 def run_scene_burst(*, director_prov, actor_prov, sim_state: dict, max_turns: int = 8,
@@ -276,10 +305,8 @@ def run_scene_burst(*, director_prov, actor_prov, sim_state: dict, max_turns: in
         c = by_name.get(u.get("name"))
         if not c:
             continue
-        if u.get("learned"):
-            c.setdefault("knowledge", []).append(u["learned"])
-        if u.get("emotion"):
-            c["state"] = u["emotion"]
+        SIM_OPS["learn"](c, u.get("learned"))
+        SIM_OPS["set_emotion"](c, u.get("emotion"))
     sim_state.setdefault("scenes", []).append(scene)
     emit({"type": "scene_close", "summary": scene["summary"], "updates": close.get("updates", [])})
     return sim_state

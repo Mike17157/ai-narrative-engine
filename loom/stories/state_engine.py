@@ -52,6 +52,34 @@ _LOG_CAP = 20          # keep the doc bounded; compaction trims the oldest beats
 _REL_MIN, _REL_MAX = -10, 10
 
 
+# ── World-op registry ────────────────────────────────────────────────────────────
+# The SAME registered-code pattern as stories/scripts.py, applied to the world level:
+# each delta op is a named function `op(ws, d, ctx)` that mutates the world-state dict.
+# `apply_deltas` becomes a dispatcher over this registry instead of a hardcoded switch —
+# so world ops are individually named/testable and live in one place, consistent with the
+# graph scripts. (The wire format stays the uniform STATE_DELTA envelope above — robust
+# under strict grammar decoding — so this is a dispatch change, not a schema change.)
+
+from dataclasses import dataclass as _dataclass
+from typing import Any as _Any, Callable as _Callable
+
+WORLD_OPS: dict[str, _Callable] = {}
+
+
+@_dataclass
+class _WorldCtx:
+    root: _Any = None        # for side-effecting ops (fact write-back)
+    scope: str | None = None
+
+
+def world_op(name: str) -> _Callable:
+    """Register `fn(ws, d, ctx)` as the handler for delta op `name`."""
+    def deco(fn: _Callable) -> _Callable:
+        WORLD_OPS[name] = fn
+        return fn
+    return deco
+
+
 # ── State doc helpers ────────────────────────────────────────────────────────────
 
 def empty_state() -> dict:
@@ -140,52 +168,97 @@ def _coerce_scalar(v: str):
 
 def apply_deltas(ws: dict, deltas: list[dict], *, root: Path | None = None,
                  scope: str | None = None) -> dict:
-    """Apply a list of delta ops to *ws* (mutates + returns). `fact` ops are written
-    back into the lorebook *scope* (provenance source='auto') so they become retrievable
-    canon. `log` ops append to episodic memory. Unknown ops are ignored."""
+    """Apply a list of delta ops to *ws* (mutates + returns) by DISPATCHING each to its
+    registered handler in `WORLD_OPS`. `fact` ops are written back into the lorebook
+    *scope* (provenance source='auto') so they become retrievable canon. `log` ops append
+    to episodic memory. Unknown ops are ignored."""
     ws = normalize(ws)
+    ctx = _WorldCtx(root=root, scope=scope)
     for d in (deltas or []):
         if not isinstance(d, dict):
             continue
         op = (d.get("op") or "").strip()
         name = (d.get("name") or "").strip()
         key = (d.get("key") or "").strip()
-        value = (d.get("value") or "").strip()
         # Guard against a common misfill: the model echoing the op verb (or a field name)
         # into `name`/`key` instead of leaving them blank.
         if name in _OPS:
             name = ""
         if key in _OPS or key in ("flags", "key", "value", "name"):
             key = ""
-
-        if op == "set_flag" and key and value:   # ignore empty/echoed flags
-            ws["flags"][key] = _coerce_scalar(value)
-        elif op == "move" and name:
-            _entity(ws, name)["location"] = value
-        elif op == "mood" and name:
-            _entity(ws, name)["mood"] = value
-        elif op == "rel" and name:
-            target = key or "you"
-            rels = _entity(ws, name)["relationships"]
-            rels[target] = max(_REL_MIN, min(_REL_MAX, int(rels.get(target, 0)) + _to_int(value)))
-        elif op == "item_add" and value:
-            if value not in ws["inventory"]:
-                ws["inventory"].append(value)
-        elif op == "item_remove" and value:
-            ws["inventory"] = [i for i in ws["inventory"] if i.lower() != value.lower()]
-        elif op == "entity" and name:
-            _entity(ws, name)["status"] = value
-        elif op == "log" and value:
-            ws["log"].append(value)
-        elif op == "fact" and value and root and scope:
-            _write_fact(root, scope, title=(d.get("title") or value[:60]),
-                        keywords=[k for k in (d.get("keywords") or []) if k], content=value)
-            ws["log"].append(f"(established: {(d.get('title') or value)[:80]})")
+        handler = WORLD_OPS.get(op)
+        if handler is None:
+            continue
+        nd = {"op": op, "name": name, "key": key, "value": (d.get("value") or "").strip(),
+              "title": d.get("title") or "", "keywords": d.get("keywords") or []}
+        handler(ws, nd, ctx)
 
     if len(ws["log"]) > _LOG_CAP:
         ws["log"] = ws["log"][-_LOG_CAP:]
     ws["revision"] = int(ws.get("revision", 0)) + 1
     return ws
+
+
+# ── The registered world ops (one named function per delta verb) ─────────────────
+
+@world_op("set_flag")
+def _op_set_flag(ws, d, ctx):
+    if d["key"] and d["value"]:        # ignore empty/echoed flags
+        ws["flags"][d["key"]] = _coerce_scalar(d["value"])
+
+
+@world_op("move")
+def _op_move(ws, d, ctx):
+    if d["name"]:
+        _entity(ws, d["name"])["location"] = d["value"]
+
+
+@world_op("mood")
+def _op_mood(ws, d, ctx):
+    if d["name"]:
+        _entity(ws, d["name"])["mood"] = d["value"]
+
+
+@world_op("rel")
+def _op_rel(ws, d, ctx):
+    if not d["name"]:
+        return
+    target = d["key"] or "you"
+    rels = _entity(ws, d["name"])["relationships"]
+    rels[target] = max(_REL_MIN, min(_REL_MAX, int(rels.get(target, 0)) + _to_int(d["value"])))
+
+
+@world_op("item_add")
+def _op_item_add(ws, d, ctx):
+    if d["value"] and d["value"] not in ws["inventory"]:
+        ws["inventory"].append(d["value"])
+
+
+@world_op("item_remove")
+def _op_item_remove(ws, d, ctx):
+    if d["value"]:
+        ws["inventory"] = [i for i in ws["inventory"] if i.lower() != d["value"].lower()]
+
+
+@world_op("entity")
+def _op_entity(ws, d, ctx):
+    if d["name"]:
+        _entity(ws, d["name"])["status"] = d["value"]
+
+
+@world_op("log")
+def _op_log(ws, d, ctx):
+    if d["value"]:
+        ws["log"].append(d["value"])
+
+
+@world_op("fact")
+def _op_fact(ws, d, ctx):
+    value = d["value"]
+    if value and ctx and ctx.root is not None and ctx.scope:
+        _write_fact(ctx.root, ctx.scope, title=(d["title"] or value[:60]),
+                    keywords=[k for k in (d["keywords"] or []) if k], content=value)
+        ws["log"].append(f"(established: {(d['title'] or value)[:80]})")
 
 
 def _write_fact(root: Path, scope: str, *, title: str, keywords: list[str], content: str) -> None:
