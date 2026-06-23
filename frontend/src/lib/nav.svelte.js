@@ -25,6 +25,7 @@ export function imagesTree() {
   return [
     { id: 'graph',       label: 'Graph',      href: '/images/graph' },
     { id: 'lora',        label: 'Image Presets', href: '/images/lora/library' },
+    { id: 'video',       label: 'Wan (img/video)', href: '/images/video' },
     { id: 'models',      label: 'Models',     href: '/images/models' },
     { id: 'poses',       label: 'Poses',      href: '/images/poses' },
   ];

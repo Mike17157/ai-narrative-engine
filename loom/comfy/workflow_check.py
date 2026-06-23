@@ -21,6 +21,14 @@ _FIELD_KIND = {
 _MODELNAME_CLASS = {
     "UltralyticsDetectorProvider": "ultralytics", "SAMLoader": "sam", "UpscaleModelLoader": "upscale",
 }
+# Custom-node loaders whose filename field isn't one of the standard names above.
+# (class_type, field) → kind. WanVideoWrapper uses `model`/`model_name`/`lora`.
+_CLASS_FIELD_KIND = {
+    ("WanVideoModelLoader", "model"): "diffusion",
+    ("LoadWanVideoT5TextEncoder", "model_name"): "clip",
+    ("WanVideoVAELoader", "model_name"): "vae",
+    ("WanVideoLoraSelect", "lora"): "lora",
+}
 # kind -> ComfyUI folders it may live in (relative to models/)
 _KIND_FOLDERS = {
     "checkpoint": ["checkpoints"], "diffusion": ["diffusion_models", "unet"], "vae": ["vae"],
@@ -42,10 +50,83 @@ def model_refs(graph: dict) -> list[dict]:
         for field, val in ins.items():
             if not isinstance(val, str) or not val:
                 continue
-            kind = _MODELNAME_CLASS.get(ct) if field == "model_name" else _FIELD_KIND.get(field)
+            kind = (_CLASS_FIELD_KIND.get((ct, field))
+                    or (_MODELNAME_CLASS.get(ct) if field == "model_name" else _FIELD_KIND.get(field)))
             if kind:
                 refs.append({"node": nid, "class_type": ct, "field": field, "kind": kind, "name": val})
     return refs
+
+
+_WIDGET_TYPES = {"INT", "FLOAT", "STRING", "BOOLEAN", "COMBO"}
+_CONTROL_SENTINELS = {"fixed", "increment", "decrement", "randomize"}
+
+
+def ui_to_api(ui: dict, object_info: dict) -> tuple[dict, list[str]]:
+    """Convert a ComfyUI *UI/editor* workflow ({nodes,links,…}) into *API* format
+    (node-id → {class_type, inputs}). Mirrors ComfyUI's own graph→prompt: linked inputs
+    become [src_node, slot] refs; widget values map onto the node's widget inputs in
+    definition order (skipping any input that's wired as a link, and the control-after-
+    generate sentinel that follows a seed). Muted/bypassed nodes (mode 2/4) and pure
+    annotations are dropped. Returns (api_graph, unknown_class_types) — unknowns are nodes
+    whose definition isn't installed, so their widget mapping is best-effort."""
+    nodes = ui.get("nodes", []) or []
+    # link id → [from_node_id(str), from_slot]. Links are [id, from, from_slot, to, to_slot, type].
+    src: dict = {}
+    for l in ui.get("links", []) or []:
+        if isinstance(l, list) and len(l) >= 5:
+            src[l[0]] = [str(l[1]), l[2]]
+        elif isinstance(l, dict):
+            src[l.get("id")] = [str(l.get("origin_id")), l.get("origin_slot", 0)]
+
+    out: dict = {}
+    unknown: list[str] = []
+    for n in nodes:
+        if not isinstance(n, dict) or n.get("mode") in (2, 4):
+            continue
+        ct = n.get("type")
+        if ct in ("Note", "MarkdownNote", "Reroute", "PrimitiveNode"):
+            continue
+        nid = str(n.get("id"))
+        defn = object_info.get(ct)
+        inputs: dict = {}
+        linked: set = set()
+        for inp in (n.get("inputs") or []):
+            lk = inp.get("link")
+            if lk is not None and lk in src:
+                inputs[inp["name"]] = src[lk]
+                linked.add(inp.get("name"))
+        wv = n.get("widgets_values")
+        if defn:
+            req = (defn.get("input", {}) or {}).get("required", {}) or {}
+            opt = (defn.get("input", {}) or {}).get("optional", {}) or {}
+            order = []
+            for grp in (req, opt):
+                for name, spec in grp.items():
+                    t = spec[0] if isinstance(spec, (list, tuple)) else spec
+                    if (isinstance(t, list) or t in _WIDGET_TYPES) and name not in linked:
+                        order.append(name)
+            if isinstance(wv, list):
+                vi = 0
+                for name in order:
+                    if vi >= len(wv):
+                        break
+                    inputs[name] = wv[vi]; vi += 1
+                    if vi < len(wv) and isinstance(wv[vi], str) and wv[vi] in _CONTROL_SENTINELS:
+                        vi += 1   # skip control_after_generate
+            elif isinstance(wv, dict):
+                for name in order:
+                    if name in wv:
+                        inputs[name] = wv[name]
+        else:
+            unknown.append(ct)
+        out[nid] = {"class_type": ct, "inputs": inputs, "_meta": {"title": n.get("title") or ct}}
+
+    # Drop links that point at nodes we excluded (muted/annotation) so the graph validates.
+    valid = set(out)
+    for node in out.values():
+        node["inputs"] = {k: v for k, v in node["inputs"].items()
+                          if not (isinstance(v, list) and len(v) == 2 and isinstance(v[0], str) and v[0] not in valid)}
+    return out, sorted(set(unknown))
 
 
 def _save_score(node: dict) -> int:

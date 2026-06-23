@@ -68,6 +68,76 @@ def register(app, ctx):
                 return JSONResponse({"error": f"translation failed: {exc}"}, status_code=500)
         return {"ok": True, "translation": out[0]} if single else {"ok": True, "translations": out}
 
+    @app.post("/api/wan/render")
+    async def wan_render(body: dict):
+        """Render the `wan` workflow as a still OR a video via one flag. mode='image' →
+        num_frames=1 + SaveImage; mode='video' → num_frames (forced to 4n+1) + a
+        dynamically-added VHS_VideoCombine → mp4. Streams progress (SSE); the final event
+        carries images:[] (data-url png) or videos:[] (data-url mp4)."""
+        import copy
+        import random
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
+        from ...comfy.generate import stream_generate
+        from ...providers import _workflow as wfmod
+
+        body = body or {}
+        md = ctx.base_settings.models.get("wan")
+        path = ctx.workflow_path("wan")
+        if md is None or path is None or not path.is_file():
+            return JSONResponse({"error": "no 'wan' image model configured"}, status_code=404)
+        graph = json.loads(path.read_text(encoding="utf-8"))
+
+        prompt = (body.get("prompt") or "").strip() or "a photograph, natural light"
+        mode = body.get("mode") or "image"
+        width = max(64, int(body.get("width") or 512))
+        height = max(64, int(body.get("height") or 512))
+        steps = max(1, int(body.get("steps") or 20))
+        seed = int(body.get("seed") or 0) or random.randint(1, 2 ** 31)
+
+        graph["4"]["inputs"]["positive_prompt"] = prompt
+        if body.get("negative"):
+            graph["4"]["inputs"]["negative_prompt"] = str(body["negative"])
+        graph["5"]["inputs"]["width"] = width
+        graph["5"]["inputs"]["height"] = height
+        graph["6"]["inputs"]["steps"] = steps
+        graph["6"]["inputs"]["seed"] = seed
+
+        if mode == "video":
+            nf = max(5, int(body.get("num_frames") or 25))
+            nf = nf - ((nf - 1) % 4)                 # Wan needs 4n+1 frames
+            fps = max(1, int(body.get("fps") or 16))
+            graph["5"]["inputs"]["num_frames"] = nf
+            graph.pop("8", None)                     # drop the still SaveImage
+            graph["9"] = {"class_type": "VHS_VideoCombine", "inputs": {
+                "images": ["7", 0], "frame_rate": fps, "loop_count": 0, "filename_prefix": "wan",
+                "format": "video/h264-mp4", "pix_fmt": "yuv420p", "crf": 19,
+                "save_metadata": False, "trim_to_audio": False, "pingpong": False, "save_output": True}}
+            out_node = "9"
+        else:
+            graph["5"]["inputs"]["num_frames"] = 1
+            out_node = "8"
+
+        wfmod.localize_model_paths(graph)
+        conn = ctx.store.active("image")
+        base = (conn.base_url if conn and conn.base_url else None) or md.options.get("base_url") or "http://127.0.0.1:8188"
+        try:
+            await run_in_threadpool(get_server(base).ensure_up)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"ComfyUI not reachable: {exc}"}, status_code=502)
+
+        async def events():
+            try:
+                async for ev in stream_generate(base, graph, out_node, float(md.options.get("timeout_s", 600))):
+                    yield f"data: {json.dumps(ev)}\n\n"
+            except Exception as exc:  # noqa: BLE001
+                yield f"data: {json.dumps({'type': 'error', 'error': str(exc)})}\n\n"
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
+
     @app.get("/api/workflow")
     def get_workflow(model: str):
         path = ctx.workflow_path(model)
@@ -159,6 +229,31 @@ def register(app, ctx):
         models_file.write_text(text + f"\n  # duplicated from {src}\n" + indented, encoding="utf-8")
         ctx.reload_settings()
         return {"ok": True, "key": key, "workflow": new_rel}
+
+    @app.post("/api/workflow/convert")
+    def convert_workflow(body: dict):
+        """Convert a ComfyUI UI/editor-format workflow ({nodes,links}) → API format, using the
+        live ComfyUI node definitions (/object_info) to map widgets→inputs. Returns
+        {ok, json, unknown_nodes}. unknown_nodes are class types not installed (mapping is
+        best-effort for those)."""
+        import httpx
+
+        from ...comfy.workflow_check import ui_to_api
+
+        body = body or {}
+        ui = body.get("json")
+        if not isinstance(ui, dict) or not isinstance(ui.get("nodes"), list):
+            return JSONResponse({"error": "not a UI-format workflow (expected {nodes:[…]})"}, status_code=400)
+        conn = ctx.store.active("image")
+        base = (conn.base_url if conn and conn.base_url else None) or "http://127.0.0.1:8188"
+        try:
+            get_server(base).ensure_up()
+            with httpx.Client(base_url=base, timeout=30) as client:
+                oi = client.get("/object_info").json()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not read ComfyUI node definitions: {exc}"}, status_code=502)
+        graph, unknown = ui_to_api(ui, oi)
+        return {"ok": True, "json": graph, "unknown_nodes": unknown}
 
     @app.post("/api/workflow/import")
     def import_workflow(body: dict):

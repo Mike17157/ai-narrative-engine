@@ -92,16 +92,30 @@ async def stream_generate(
             outputs = hist.get(prompt_id, {}).get("outputs", {})
             node_ids = [output_node] if output_node else list(outputs)
             images: list[str] = []
+            videos: list[str] = []
             for nid in node_ids:
-                for img in outputs.get(nid, {}).get("images", []):
+                out = outputs.get(nid, {})
+                for img in out.get("images", []):
                     r = await http.get("/view", params={
                         "filename": img["filename"],
                         "subfolder": img.get("subfolder", ""),
                         "type": img.get("type", "output"),
                     })
                     images.append("data:image/png;base64," + base64.b64encode(r.content).decode())
+                # VHS_VideoCombine emits its file under the "gifs" key (mp4/webm/gif).
+                for vid in (out.get("gifs", []) + out.get("videos", [])):
+                    r = await http.get("/view", params={
+                        "filename": vid["filename"],
+                        "subfolder": vid.get("subfolder", ""),
+                        "type": vid.get("type", "output"),
+                    })
+                    fn = vid["filename"].lower()
+                    mime = ("video/mp4" if fn.endswith(".mp4") else
+                            "video/webm" if fn.endswith(".webm") else
+                            "image/gif" if fn.endswith(".gif") else "video/mp4")
+                    videos.append(f"data:{mime};base64," + base64.b64encode(r.content).decode())
             finished = True
-            yield {"type": "image", "images": images}
+            yield {"type": "image", "images": images, "videos": videos}
       finally:
         # If we're torn down before finishing (client closed the SSE / pressed ✕,
         # an error, or a timeout), tell ComfyUI to stop the in-flight render so the

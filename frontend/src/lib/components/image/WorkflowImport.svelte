@@ -101,6 +101,28 @@
     translating = false;
   }
 
+  let converting = $state(false);
+  async function convertToApi() {
+    if (!wf || converting) return;
+    converting = true; msg = null;
+    try {
+      const res = await fetch('/api/workflow/convert', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ json: wf }),
+      });
+      const data = await res.json();
+      if (!data.ok) { msg = { ok: false, text: data.error || 'convert failed' }; converting = false; return; }
+      wf = data.json;
+      fmt = 'api';
+      cjk = scanCjk(wf, 'api');
+      await runCheck();
+      msg = (data.unknown_nodes || []).length
+        ? { ok: false, text: `Converted, but these node types aren't installed: ${data.unknown_nodes.join(', ')} — install them or the workflow won't run.` }
+        : { ok: true, text: 'Converted to API format — resolve any missing models below, then import.' };
+    } catch (e) { msg = { ok: false, text: 'convert failed: ' + e }; }
+    converting = false;
+  }
+
   function downloadJson() {
     const blob = new Blob([JSON.stringify(wf, null, 2)], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
@@ -240,9 +262,15 @@
     {/if}
 
     {#if fmt === 'ui'}
-      <div class="muted ui-note">This is a <b>UI-format</b> workflow (ComfyUI editor export). To register it as an image model, re-export it with <b>Save (API Format)</b> in ComfyUI and drop that file. You can still translate its prompts above and download the result.</div>
+      <div class="ui-note">
+        <b>⚠ Can't import — this is a UI-format export, not API format.</b>
+        The importer registers <b>API-format</b> graphs (node-id keyed). In ComfyUI: open the workflow →
+        gear ⚙ → enable <b>Dev mode</b> → <b>Save (API Format)</b>, then drop <i>that</i> file here.
+        You can still translate its prompts (above) and download the result below.
+      </div>
       <div class="foot">
-        <button class="primary" onclick={downloadJson}>⤓ Download workflow JSON</button>
+        <button class="primary" onclick={convertToApi} disabled={converting}>{converting ? 'Converting…' : '⚙ Convert to API & analyze'}</button>
+        <button class="ghost sm" onclick={downloadJson}>⤓ Download JSON</button>
       </div>
     {:else}
     <!-- I/O detection (override-able) -->
@@ -329,7 +357,9 @@
   .xlate { display: flex; align-items: center; gap: 12px; padding: 8px 12px; margin-bottom: 12px; border-radius: 10px;
     background: rgba(109,140,255,.08); border: 1px solid rgba(109,140,255,.3); }
   .xl-label { font-size: 12.5px; color: var(--text); flex: 1; }
-  .ui-note { line-height: 1.5; margin-bottom: 12px; }
+  .ui-note { line-height: 1.55; margin-bottom: 12px; font-size: 12.5px; color: var(--text);
+    padding: 10px 12px; border-radius: 10px; background: rgba(224,162,60,.1); border: 1px solid rgba(224,162,60,.4); }
+  .ui-note b { color: #e0a23c; }
 
   .wf-head { display: flex; align-items: baseline; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
   .wf-name { font-weight: 700; font-size: 13.5px; }
