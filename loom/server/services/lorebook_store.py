@@ -578,110 +578,44 @@ def top_by_priority(root: Path, scope: str, n: int) -> list[LoreEntry]:
 # Each: (book_id, metadata, [entry dicts]). Entries are keyword-triggered and editable
 # in the manager; they're examples to build on, not load-bearing config.
 
-def _gfn(fn: str, describe: str, keywords: list, params: dict, ops: list) -> dict:
-    """A graph-FUNCTION lore entry: its content is a JSON op-spec (see stories/graph_ops.py),
-    its keywords are the trigger terms. Authoring a function == adding one of these entries."""
+def _gfn(fn: str, keywords: list) -> dict:
+    """A function-book entry is now pure TRIGGER metadata: it NAMES a registered code
+    script (loom/stories/scripts.py) and supplies the keywords that surface it. The logic,
+    params, and description live in CODE — not in this row. Authoring a new built-in ==
+    adding an @script function; the entry only decides when it's offered to the model."""
     return {"id": fn, "title": fn, "keywords": keywords, "facet": "fn",
-            "content": json.dumps({"fn": fn, "describe": describe, "params": params, "ops": ops},
-                                  ensure_ascii=False)}
+            "content": json.dumps({"fn": fn}, ensure_ascii=False)}
 
 
+# Each book triggers a set of registered scripts. The script CODE (and which artifact it
+# mutates — dev graph / locations / cast) lives in stories/scripts.py; here we only choose
+# the trigger words. The same engine is artifact-agnostic, so all three share one mechanism.
 _GRAPH_FNS_ENTRIES = [
-    _gfn("add_beat", "Add a new beat to the arc of change.",
-         ["add a beat", "new beat", "insert beat", "add beat", "another beat"],
-         {"title": "the beat's title", "after": "id of the beat it follows (optional)"},
-         [{"op": "add", "path": "/nodes/-",
-           "value": {"id": "{{id}}", "title": "{{title}}", "inflection": "", "start": "",
-                     "end": "", "what_happened": "", "next": []}},
-          {"op": "append", "path": "/nodes/#{{after}}/next", "value": "{{id}}"}]),
-    _gfn("insert_between", "Insert a new beat BETWEEN two connected beats (rewires the arrow through it).",
-         ["insert between", "in between", "split the arrow", "between"],
-         {"a": "id of the beat before", "b": "id of the beat after", "title": "the new beat's title"},
-         [{"op": "add", "path": "/nodes/-",
-           "value": {"id": "{{id}}", "title": "{{title}}", "inflection": "", "start": "",
-                     "end": "", "what_happened": "", "next": []}},
-          {"op": "pull", "path": "/nodes/#{{a}}/next", "value": "{{b}}"},
-          {"op": "append", "path": "/nodes/#{{a}}/next", "value": "{{id}}"},
-          {"op": "append", "path": "/nodes/#{{id}}/next", "value": "{{b}}"}]),
-    _gfn("set_beat_field", "Set a field on an existing beat.",
-         ["rename", "retitle", "change the", "edit the beat", "set the", "update beat"],
-         {"id": "beat id", "field": "one of: title, inflection, start, end, what_happened, location",
-          "value": "new text"},
-         [{"op": "set", "path": "/nodes/#{{id}}/{{field}}", "value": "{{value}}"}]),
-    _gfn("connect", "Connect one beat to another (draw an arrow source -> target).",
-         ["connect", "branch", "link", "leads to", "arrow", "then", "sequence"],
-         {"source": "id the arrow starts from", "target": "id it points to"},
-         [{"op": "append", "path": "/nodes/#{{source}}/next", "value": "{{target}}"}]),
-    _gfn("disconnect", "Remove the arrow from one beat to another.",
-         ["disconnect", "unlink", "remove arrow", "detach"],
-         {"source": "id the arrow starts from", "target": "id it currently points to"},
-         [{"op": "pull", "path": "/nodes/#{{source}}/next", "value": "{{target}}"}]),
-    _gfn("delete_beat", "Delete a beat from the graph.",
-         ["delete", "remove beat", "drop the beat", "cut the beat"],
-         {"id": "id of the beat to delete"},
-         [{"op": "remove", "path": "/nodes/#{{id}}"}]),
-    _gfn("move_beat", "Reposition a beat to sit right after another in the sequence.",
-         ["move", "reposition", "put after", "relocate", "moved"],
-         {"id": "id of the beat to move", "after": "id of the beat it should follow (blank = end)"},
-         [{"op": "move", "path": "/nodes", "value": "{{id}}", "after": "{{after}}"}]),
-    _gfn("reorder_beats", "Set the full beat order at once (give every beat id in the new order).",
-         ["reorder", "re-order", "order the beats", "sequence them", "rearrange"],
-         {"order": "the complete list of beat ids in the desired order"},
-         [{"op": "reorder", "path": "/nodes", "value": "{{order}}"}]),
-    _gfn("set_spine", "Set a top-level spine field (logline, wound, lie, or truth).",
-         ["wound", "lie", "truth", "logline", "spine", "misbelief"],
-         {"field": "one of: logline, wound, lie, truth", "value": "new text"},
-         [{"op": "set", "path": "/{{field}}", "value": "{{value}}"}]),
+    _gfn("add_beat", ["add a beat", "new beat", "insert beat", "add beat", "another beat"]),
+    _gfn("insert_between", ["insert between", "in between", "split the arrow", "between"]),
+    _gfn("set_beat_field", ["rename", "retitle", "change the", "edit the beat", "set the", "update beat"]),
+    _gfn("connect", ["connect", "branch", "link", "leads to", "arrow", "then", "sequence"]),
+    _gfn("disconnect", ["disconnect", "unlink", "remove arrow", "detach"]),
+    _gfn("delete_beat", ["delete", "remove beat", "drop the beat", "cut the beat"]),
+    _gfn("move_beat", ["move", "reposition", "put after", "relocate", "moved"]),
+    _gfn("reorder_beats", ["reorder", "re-order", "order the beats", "sequence them", "rearrange"]),
+    _gfn("set_spine", ["wound", "lie", "truth", "logline", "spine", "misbelief"]),
 ]
 
-
-# A second example function book — operates on a LOCATIONS artifact ({start, locations:[…]}),
-# proving the engine is artifact-agnostic (same op dialect, different JSON document).
 _LOCATION_FNS_ENTRIES = [
-    _gfn("add_location", "Add a neutral location to the story.",
-         ["add a location", "new location", "another place", "add place", "new place"],
-         {"name": "the place's name", "description": "the place objectively (no people/events)"},
-         [{"op": "add", "path": "/locations/-",
-           "value": {"id": "{{id}}", "name": "{{name}}", "description": "{{description}}",
-                     "background_prompt": ""}}]),
-    _gfn("set_location_field", "Set a field on an existing location.",
-         ["rename location", "change the place", "edit location", "set the location", "update place"],
-         {"id": "location id", "field": "one of: name, description, background_prompt", "value": "new text"},
-         [{"op": "set", "path": "/locations/#{{id}}/{{field}}", "value": "{{value}}"}]),
-    _gfn("remove_location", "Delete a location.",
-         ["remove location", "delete place", "drop the location", "cut the place"],
-         {"id": "id of the location to delete"},
-         [{"op": "remove", "path": "/locations/#{{id}}"}]),
-    _gfn("set_start", "Set which location the story opens in.",
-         ["start location", "opening location", "begins at", "starts in", "set start"],
-         {"id": "id of the starting location"},
-         [{"op": "set", "path": "/start", "value": "{{id}}"}]),
+    _gfn("add_location", ["add a location", "new location", "another place", "add place", "new place"]),
+    _gfn("set_location_field", ["rename location", "change the place", "edit location", "set the location", "update place"]),
+    _gfn("remove_location", ["remove location", "delete place", "drop the location", "cut the place"]),
+    _gfn("set_start", ["start location", "opening location", "begins at", "starts in", "set start"]),
 ]
 
-
-# A third example function book — operates on a CAST artifact ({cast:[…]}), the wizard's
-# characters step. Cast members carry an `id` (seeded by the step) so set/remove can target
-# them; add_character mints a fresh one. Same op dialect, different JSON document.
 _CHARACTER_FNS_ENTRIES = [
-    _gfn("add_character", "Add a character to the cast.",
-         ["add a character", "new character", "another character", "add npc", "new npc",
-          "add a cast member", "introduce a character"],
-         {"name": "the character's name", "role": "their role in the story (e.g. mentor, rival)",
-          "persona": "who they are — personality, voice, wants (a paragraph)"},
-         [{"op": "add", "path": "/cast/-",
-           "value": {"id": "{{id}}", "name": "{{name}}", "role": "{{role}}", "persona": "{{persona}}",
-                     "appearance": "", "base_prompt": "", "primary": False}}]),
-    _gfn("set_character_field", "Set a field on an existing character.",
-         ["rename character", "change the character", "edit character", "set the character",
-          "update character", "change their role", "rewrite the persona"],
-         {"id": "character id", "field": "one of: name, role, persona, appearance, base_prompt",
-          "value": "new text"},
-         [{"op": "set", "path": "/cast/#{{id}}/{{field}}", "value": "{{value}}"}]),
-    _gfn("remove_character", "Remove a character from the cast (never the ★ main character).",
-         ["remove character", "delete character", "drop the character", "cut the character",
-          "remove npc", "kill off"],
-         {"id": "id of the character to remove"},
-         [{"op": "remove", "path": "/cast/#{{id}}"}]),
+    _gfn("add_character", ["add a character", "new character", "another character", "add npc", "new npc",
+                           "add a cast member", "introduce a character"]),
+    _gfn("set_character_field", ["rename character", "change the character", "edit character", "set the character",
+                                 "update character", "change their role", "rewrite the persona"]),
+    _gfn("remove_character", ["remove character", "delete character", "drop the character", "cut the character",
+                              "remove npc", "kill off"]),
 ]
 
 

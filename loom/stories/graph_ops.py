@@ -40,6 +40,8 @@ class GraphFunction:
     keywords: list[str] = field(default_factory=list)
     writes: str = "graph"  # the State-doc LEVEL this script mutates (default: the dev graph)
     reads: list[str] = field(default_factory=list)  # levels it reads (advisory; for context assembly)
+    impl: Any = None       # a registered code function (stories/scripts.py); when set it RUNS
+                           # instead of the `ops` template — the standard tool-calling path.
 
     def to_prompt(self) -> str:
         ps = ", ".join(f"{k} ({v})" for k, v in self.params.items()) or "(no params)"
@@ -49,8 +51,15 @@ class GraphFunction:
 # ── Parsing function-book entries ────────────────────────────────────────────────
 
 def parse_functions(entries: list) -> list[GraphFunction]:
-    """Turn the function-shaped entries of a book into GraphFunctions. A plain
-    (data) entry — whose content isn't a function spec — is ignored here."""
+    """Turn the function-shaped entries of a book into GraphFunctions. Two flavors:
+      • a registered CODE script — the entry just names it (`{"fn": "add_beat"}`) and
+        carries trigger keywords; logic/params/describe come from stories/scripts.py.
+      • a legacy inline op-spec (`{fn, ops}`) — the homegrown DSL, still honored as a
+        fallback for any function not (yet) in the registry.
+    A registered name ALWAYS runs its code impl, even if the entry also carries `ops`
+    (so old seeded entries upgrade to code automatically). Plain data entries are ignored."""
+    from . import scripts as _S
+
     out: list[GraphFunction] = []
     for e in entries or []:
         if not getattr(e, "enabled", True):
@@ -59,16 +68,28 @@ def parse_functions(entries: list) -> list[GraphFunction]:
         if spec is None:
             continue
         name = (spec.get("fn") or getattr(e, "title", "") or "").strip()
-        if not name or not isinstance(spec.get("ops"), list):
+        if not name:
             continue
+        reg = _S.get(name)
+        ops = spec.get("ops") if isinstance(spec.get("ops"), list) else None
+        if reg is None and ops is None:
+            continue   # unknown function with no inline ops — nothing to run
+        kws = [str(k) for k in (getattr(e, "keywords", []) or [])]
+        if reg is not None:
+            # Registered code script: CODE is canonical for logic/contract. The lorebook
+            # entry only contributes trigger keywords (and falls back to the code defaults).
+            describe, params, writes, impl = reg.describe, reg.params, reg.writes, reg.impl
+        else:
+            # Legacy inline op-spec (the DSL fallback): everything comes from the entry.
+            describe = (spec.get("describe") or getattr(e, "title", "") or name).strip()
+            params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
+            writes, impl = (spec.get("writes") or "graph").strip() or "graph", None
         out.append(GraphFunction(
-            name=name,
-            describe=(spec.get("describe") or getattr(e, "title", "") or name).strip(),
-            params=spec.get("params") if isinstance(spec.get("params"), dict) else {},
-            ops=spec["ops"],
-            keywords=[str(k) for k in (getattr(e, "keywords", []) or [])],
-            writes=str(spec.get("writes") or "graph").strip() or "graph",
+            name=name, describe=describe, params=params, ops=ops or [],
+            keywords=kws or (reg.keywords if reg else []),
+            writes=writes or "graph",
             reads=[str(r) for r in (spec.get("reads") or []) if r],
+            impl=impl,
         ))
     return out
 
@@ -81,8 +102,9 @@ def is_function_entry(entry) -> bool:
 
 
 def _parse_spec(content: str) -> dict | None:
-    """A function spec is a JSON object that either carries graph `ops` OR declares
-    `kind:"stage"` (a pipeline-stage function — see stage_spec)."""
+    """A function spec is a JSON object that either carries graph `ops`, declares
+    `kind:"stage"` (a pipeline-stage function — see stage_spec), or simply names a
+    registered code script (`{"fn": "<registered name>"}` — the trigger-only form)."""
     content = content.strip()
     if not content.startswith("{"):
         return None
@@ -92,7 +114,14 @@ def _parse_spec(content: str) -> dict | None:
         return None
     if not isinstance(spec, dict):
         return None
-    return spec if ("ops" in spec or spec.get("kind") == "stage") else None
+    if "ops" in spec or spec.get("kind") == "stage":
+        return spec
+    fn = spec.get("fn")
+    if fn:
+        from . import scripts as _S
+        if _S.get(str(fn)) is not None:
+            return spec
+    return None
 
 
 # ── Stage functions (pipeline behavior expressed as lore) ────────────────────────
@@ -241,16 +270,30 @@ def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tup
         if not isinstance(call, dict):
             continue
         fn = by_name.get(str(call.get("fn", "")))
-        params = _call_params(call)
+        raw = _call_params(call)
         if fn is None:
             log.append({"fn": call.get("fn"), "ok": False, "error": "unknown function"})
             continue
-        params = {**params, "id": params.get("id") or _new_id()}
         level = (fn.writes or "graph").strip() or "graph"
-        st, sub = _SD.apply_ops(st, fn.ops, level=level, params=params)
-        applied = sum(1 for s in sub if s.get("ok") and s.get("changed"))
-        log.append({"fn": fn.name, "ok": True, "applied": applied, "params": params, "level": level})
-        log.extend(s for s in sub if not s.get("ok"))   # surface any failed sub-ops
+        if fn.impl is not None:
+            # CODE path (tool-calling): run the registered function on the level's doc.
+            root = st["levels"]
+            if not isinstance(root.get(level), (dict, list)):
+                root[level] = {}
+            kw = {k: v for k, v in raw.items() if k in (fn.params or {})}
+            try:
+                fn.impl(root[level], _id=_new_id(), **kw)
+                st["revision"] = int(st.get("revision") or 0) + 1
+                log.append({"fn": fn.name, "ok": True, "applied": 1, "params": kw, "level": level})
+            except Exception as exc:  # noqa: BLE001 — one bad call never sinks the batch
+                log.append({"fn": fn.name, "ok": False, "error": str(exc)})
+        else:
+            # Legacy DSL path: interpolate + apply the inline op-spec template.
+            params = {**raw, "id": raw.get("id") or _new_id()}
+            st, sub = _SD.apply_ops(st, fn.ops, level=level, params=params)
+            applied = sum(1 for s in sub if s.get("ok") and s.get("changed"))
+            log.append({"fn": fn.name, "ok": True, "applied": applied, "params": params, "level": level})
+            log.extend(s for s in sub if not s.get("ok"))   # surface any failed sub-ops
     return st, log
 
 
