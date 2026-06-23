@@ -29,7 +29,8 @@ slot. The same code runs state-natively once callers target a specific level.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import uuid
+from dataclasses import dataclass
 from typing import Any, Callable
 
 
@@ -58,6 +59,26 @@ def script(name: str, *, describe: str, params: dict | None = None,
 
 def get(name: str) -> ScriptDef | None:
     return REGISTRY.get(name)
+
+
+def new_id() -> str:
+    """A fresh unique id for CREATE scripts (passed to every impl as `_id`)."""
+    return "n" + uuid.uuid4().hex[:6]
+
+
+def invoke(script: "ScriptDef | str", doc: dict, params: dict | None = None,
+           *, _id: str | None = None) -> dict:
+    """Run a registered script against `doc` (mutates in place; returns it). This is the
+    ONE place a script executes — `graph_ops.apply_calls` (the model path) and the test
+    flow both go through here, so behavior can't drift between them. Params are filtered to
+    the script's declared keys (a stray model param can't crash the call) and a fresh `_id`
+    is supplied. Raises KeyError for an unregistered name."""
+    sd = script if isinstance(script, ScriptDef) else REGISTRY.get(script)
+    if sd is None:
+        raise KeyError(f"no such script: {script!r}")
+    kw = {k: v for k, v in (params or {}).items() if k in sd.params}
+    sd.impl(doc, _id=_id or new_id(), **kw)
+    return doc
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────────

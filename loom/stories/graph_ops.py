@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import json
 import re
-import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -238,16 +237,13 @@ def _call_params(call: dict) -> dict:
 
 # ── Applying calls (run the registered code impl on the target level) ────────────
 
-def _new_id() -> str:
-    return "n" + uuid.uuid4().hex[:6]
-
-
 def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tuple[dict, list[dict]]:
     """Apply the model's function CALLS to a State doc (level-aware): each call runs its
-    registered code `impl` against the doc at the function's `writes` level. Returns
-    (new_state, log). Never raises — a bad call is skipped and logged."""
+    registered code script (via scripts.invoke) against the doc at the function's `writes`
+    level. Returns (new_state, log). Never raises — a bad call is skipped and logged."""
     import copy
 
+    from . import scripts as _S
     from . import state_doc as _SD
 
     st = _SD.normalize(copy.deepcopy(state))
@@ -265,11 +261,10 @@ def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tup
         root = st["levels"]
         if not isinstance(root.get(level), (dict, list)):
             root[level] = {}
-        kw = {k: v for k, v in _call_params(call).items() if k in (fn.params or {})}
         try:
-            fn.impl(root[level], _id=_new_id(), **kw)
+            _S.invoke(fn.name, root[level], _call_params(call))
             st["revision"] = int(st.get("revision") or 0) + 1
-            log.append({"fn": fn.name, "ok": True, "applied": 1, "params": kw, "level": level})
+            log.append({"fn": fn.name, "ok": True, "applied": 1, "level": level})
         except Exception as exc:  # noqa: BLE001 — one bad call never sinks the batch
             log.append({"fn": fn.name, "ok": False, "error": str(exc)})
     return st, log

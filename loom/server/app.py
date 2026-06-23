@@ -171,11 +171,11 @@ def create_app(root: str | Path = ".") -> FastAPI:
     except Exception:  # noqa: BLE001 — never block startup on seeding
         pass
 
-    # Fold the pipeline stages into the unified lorebook→preset model (behavior-matched stage
-    # presets bound to _stage_<stage> function books). Idempotent; never clobbers user edits.
+    # Ensure each pipeline stage has a behavior-matched `stage_<stage>` preset; stages resolve
+    # straight to these by convention (no lorebook middleman). Idempotent; never clobbers edits.
     try:
         from .services import presets as _presets_seed
-        _presets_seed.seed_stage_lorebooks(root)
+        _presets_seed.seed_stage_presets(root)
     except Exception:  # noqa: BLE001 — never block startup on seeding
         pass
 

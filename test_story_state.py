@@ -36,10 +36,83 @@ def section(name: str) -> None:
     print(f"\n[{name}]")
 
 
-# ── stories/scripts.py + graph_ops.py ────────────────────────────────────────────
+# ── The script testing FLOW ───────────────────────────────────────────────────────
+# One declarative case per registered script: (doc, params, check). Every script runs
+# through stories/scripts.py:invoke — the same seam the model path uses — so a passing
+# case proves the real behavior. `test_script_coverage` asserts the table covers the WHOLE
+# registry, so a new @script can't ship without a case here. Adding a script => add a row.
 
-def test_graph_scripts() -> None:
-    section("graph scripts (registry + apply_ops)")
+def _ids(doc):
+    return [n.get("id") for n in doc.get("nodes", [])]
+
+
+SCRIPT_CASES = {
+    # graph (the development graph)
+    "add_beat": ({"nodes": [{"id": "b0", "title": "Open", "next": []}]}, {"title": "Crack", "after": "b0"},
+                 lambda d: len(d["nodes"]) == 2 and d["nodes"][0]["next"] == [d["nodes"][1]["id"]]
+                 and set(d["nodes"][1]) == {"id", "title", "inflection", "start", "end", "what_happened", "next"}),
+    "insert_between": ({"nodes": [{"id": "a", "next": ["b"]}, {"id": "b", "next": []}]}, {"a": "a", "b": "b", "title": "mid"},
+                       lambda d: d["nodes"][0]["next"] == [d["nodes"][2]["id"]] and d["nodes"][2]["next"] == ["b"]),
+    "set_beat_field": ({"nodes": [{"id": "b0", "title": "Open", "next": []}]}, {"id": "b0", "field": "title", "value": "Shut"},
+                       lambda d: d["nodes"][0]["title"] == "Shut"),
+    "connect": ({"nodes": [{"id": "b0", "next": []}, {"id": "b1", "next": []}]}, {"source": "b0", "target": "b1"},
+                lambda d: d["nodes"][0]["next"] == ["b1"]),
+    "disconnect": ({"nodes": [{"id": "b0", "next": ["b1"]}]}, {"source": "b0", "target": "b1"},
+                   lambda d: d["nodes"][0]["next"] == []),
+    "delete_beat": ({"nodes": [{"id": "b0"}, {"id": "b1"}]}, {"id": "b1"},
+                    lambda d: _ids(d) == ["b0"]),
+    "move_beat": ({"nodes": [{"id": "b0"}, {"id": "b1"}, {"id": "b2"}]}, {"id": "b0", "after": "b1"},
+                  lambda d: _ids(d) == ["b1", "b0", "b2"]),
+    "reorder_beats": ({"nodes": [{"id": "b0"}, {"id": "b1"}, {"id": "b2"}]}, {"order": ["b2", "b1", "b0"]},
+                      lambda d: _ids(d) == ["b2", "b1", "b0"]),
+    "set_spine": ({}, {"field": "wound", "value": "abandonment"},
+                  lambda d: d.get("wound") == "abandonment"),
+    # locations
+    "add_location": ({"locations": []}, {"name": "Pier", "description": "a wooden pier"},
+                     lambda d: d["locations"][0]["name"] == "Pier"
+                     and set(d["locations"][0]) == {"id", "name", "description", "background_prompt"}),
+    "set_location_field": ({"locations": [{"id": "l0", "name": "X"}]}, {"id": "l0", "field": "name", "value": "Dock"},
+                           lambda d: d["locations"][0]["name"] == "Dock"),
+    "remove_location": ({"locations": [{"id": "l0"}]}, {"id": "l0"},
+                        lambda d: d["locations"] == []),
+    "set_start": ({}, {"id": "l0"}, lambda d: d.get("start") == "l0"),
+    # cast
+    "add_character": ({"cast": []}, {"name": "Aria", "role": "rival", "persona": "sharp"},
+                      lambda d: d["cast"][0]["name"] == "Aria" and d["cast"][0]["primary"] is False),
+    "set_character_field": ({"cast": [{"id": "c0", "role": "rival"}]}, {"id": "c0", "field": "role", "value": "ally"},
+                            lambda d: d["cast"][0]["role"] == "ally"),
+    "remove_character": ({"cast": [{"id": "c0"}]}, {"id": "c0"}, lambda d: d["cast"] == []),
+}
+
+
+def test_script_coverage() -> None:
+    section("script coverage (every registered script has a case)")
+    from loom.stories import scripts as S
+    missing = set(S.REGISTRY) - set(SCRIPT_CASES)
+    extra = set(SCRIPT_CASES) - set(S.REGISTRY)
+    check(not missing, f"scripts missing a test case: {sorted(missing)}")
+    check(not extra, f"cases for unknown scripts: {sorted(extra)}")
+
+
+def test_scripts_via_invoke() -> None:
+    section("scripts (run each case through scripts.invoke)")
+    import copy
+    from loom.stories import scripts as S
+    for name, (doc, params, ok) in SCRIPT_CASES.items():
+        out = S.invoke(name, copy.deepcopy(doc), dict(params))
+        check(ok(out), f"{name}: behaves as specified")
+    # invoke filters stray params and raises on an unknown name
+    out = S.invoke("set_spine", {}, {"field": "lie", "value": "I'm fine", "bogus": "x"})
+    check(out.get("lie") == "I'm fine", "invoke ignores undeclared params")
+    try:
+        S.invoke("nope", {}, {})
+        check(False, "invoke raises on unknown script")
+    except KeyError:
+        check(True, "invoke raises on unknown script")
+
+
+def test_graph_ops_integration() -> None:
+    section("graph_ops (registry resolution + apply_ops via the model path)")
     from loom.stories import graph_ops as GO
 
     class E:
@@ -49,78 +122,18 @@ def test_graph_scripts() -> None:
     def trig(fn, kws=()):
         return E(json.dumps({"fn": fn}), kws, fn)
 
-    fns = GO.parse_functions([trig(n) for n in
-        ["add_beat", "insert_between", "set_beat_field", "connect", "disconnect",
-         "delete_beat", "move_beat", "reorder_beats", "set_spine"]])
-    check(len(fns) == 9 and all(f.impl is not None for f in fns), "all 9 graph fns resolve to code")
-    check(fns[0].describe.startswith("Add a new beat"), "describe comes from code")
-    check("title" in fns[0].params, "params come from code")
-
-    # add_beat appends a full node AND wires the parent's `next`
-    g, _ = GO.apply_ops({"logline": "x", "nodes": [{"id": "b0", "title": "Open", "next": []}]},
+    fns = GO.parse_functions([trig("add_beat", ["beat"]), trig("set_spine")])
+    check(len(fns) == 2 and all(f.impl is not None for f in fns), "entries resolve to code")
+    check(fns[0].describe.startswith("Add a new beat") and "title" in fns[0].params, "describe/params canonical from code")
+    check(fns[0].keywords == ["beat"], "lorebook entry contributes trigger keywords")
+    # the bare-graph endpoint path still wires correctly through apply_ops -> invoke
+    g, _ = GO.apply_ops({"nodes": [{"id": "b0", "next": []}]},
                         [{"fn": "add_beat", "params": json.dumps({"title": "Crack", "after": "b0"})}], fns)
-    nid = g["nodes"][1]["id"]
-    check(len(g["nodes"]) == 2 and g["nodes"][0]["next"] == [nid], "add_beat wires parent.next")
-    check(set(g["nodes"][1]) == {"id", "title", "inflection", "start", "end", "what_happened", "next"},
-          "add_beat produces the full node shape")
-
-    # insert_between rewires the arrow through the new node
-    g, _ = GO.apply_ops({"nodes": [{"id": "a", "next": ["b"]}, {"id": "b", "next": []}]},
-                        [{"fn": "insert_between", "params": json.dumps({"a": "a", "b": "b", "title": "mid"})}], fns)
-    mid = next(n for n in g["nodes"] if n.get("title") == "mid")
-    check(g["nodes"][0]["next"] == [mid["id"]] and mid["next"] == ["b"], "insert_between rewires arrow")
-
-    # spine / reorder / move / delete / connect / disconnect
-    g = {"logline": "", "nodes": [{"id": "b0", "next": []}, {"id": "b1", "next": []}, {"id": "b2", "next": []}]}
-    g, _ = GO.apply_ops(g, [{"fn": "set_spine", "params": json.dumps({"field": "wound", "value": "abandonment"})}], fns)
-    check(g.get("wound") == "abandonment", "set_spine sets a top-level field")
-    g, _ = GO.apply_ops(g, [{"fn": "reorder_beats", "params": {"order": ["b2", "b0", "b1"]}}], fns)
-    check([n["id"] for n in g["nodes"]] == ["b2", "b0", "b1"], "reorder_beats")
-    g, _ = GO.apply_ops(g, [{"fn": "move_beat", "params": json.dumps({"id": "b2", "after": "b1"})}], fns)
-    check([n["id"] for n in g["nodes"]] == ["b0", "b1", "b2"], "move_beat")
-    g, _ = GO.apply_ops(g, [{"fn": "connect", "params": json.dumps({"source": "b0", "target": "b2"})}], fns)
-    check(g["nodes"][0]["next"] == ["b2"], "connect")
-    g, _ = GO.apply_ops(g, [{"fn": "disconnect", "params": json.dumps({"source": "b0", "target": "b2"})}], fns)
-    check(g["nodes"][0]["next"] == [], "disconnect")
-    g, _ = GO.apply_ops(g, [{"fn": "delete_beat", "params": json.dumps({"id": "b1"})}], fns)
-    check([n["id"] for n in g["nodes"]] == ["b0", "b2"], "delete_beat")
-
-    # an unknown / non-registered fn is skipped (no inline-code path anymore)
-    check(GO.parse_functions([trig("nonesuch")]) == [], "unknown fn ignored")
-    check(GO.is_function_entry(E("Plain world lore.", [], "Harbor")) is False, "data entry is not a function")
-    check(GO.is_function_entry(trig("set_spine")) is True, "registered {fn} entry is a function")
+    check(len(g["nodes"]) == 2 and g["nodes"][0]["next"] == [g["nodes"][1]["id"]], "apply_ops wires via invoke")
+    check(GO.parse_functions([trig("nonesuch")]) == [], "unregistered fn ignored")
+    check(GO.is_function_entry(E("Plain lore.", [], "Harbor")) is False, "data entry is not a function")
     _, log = GO.apply_ops({}, [{"fn": "ghost", "params": "{}"}], fns)
     check(any(not x["ok"] for x in log), "unknown call logged as failure")
-
-
-def test_location_and_cast_scripts() -> None:
-    section("location + cast scripts (artifact-agnostic)")
-    from loom.stories import graph_ops as GO
-
-    class E:
-        def __init__(s, content, keywords=(), title="", enabled=True):
-            s.content, s.keywords, s.title, s.enabled = content, list(keywords), title, enabled
-
-    loc = GO.parse_functions([E(json.dumps({"fn": n}), [], n)
-                              for n in ["add_location", "set_location_field", "remove_location", "set_start"]])
-    d = {"locations": [], "start": None}
-    d, _ = GO.apply_ops(d, [{"fn": "add_location", "params": json.dumps({"name": "Pier", "description": "a wooden pier"})}], loc)
-    lid = d["locations"][0]["id"]
-    check(d["locations"][0] == {"id": lid, "name": "Pier", "description": "a wooden pier", "background_prompt": ""},
-          "add_location shape")
-    d, _ = GO.apply_ops(d, [{"fn": "set_start", "params": json.dumps({"id": lid})}], loc)
-    check(d["start"] == lid, "set_start")
-    d, _ = GO.apply_ops(d, [{"fn": "remove_location", "params": json.dumps({"id": lid})}], loc)
-    check(d["locations"] == [], "remove_location")
-
-    cast = GO.parse_functions([E(json.dumps({"fn": n}), [], n)
-                               for n in ["add_character", "set_character_field", "remove_character"]])
-    c = {"cast": []}
-    c, _ = GO.apply_ops(c, [{"fn": "add_character", "params": json.dumps({"name": "Aria", "role": "rival", "persona": "sharp"})}], cast)
-    check(c["cast"][0]["name"] == "Aria" and c["cast"][0]["primary"] is False, "add_character shape")
-    cid = c["cast"][0]["id"]
-    c, _ = GO.apply_ops(c, [{"fn": "set_character_field", "params": json.dumps({"id": cid, "field": "role", "value": "ally"})}], cast)
-    check(c["cast"][0]["role"] == "ally", "set_character_field")
 
 
 # ── stories/state_engine.py (WORLD_OPS) ──────────────────────────────────────────
@@ -164,6 +177,11 @@ def test_world_ops() -> None:
     entries = LS.load_lorebook(root, "thread-test")
     check(any("distrusts" in (e.content or "") for e in entries), "fact written back to the thread scope")
     check(ws2["log"] and ws2["log"][0].startswith("(established:"), "fact logs an episodic note")
+
+    # coverage: every registered world op was exercised above (move/mood/entity/rel/set_flag/
+    # item_add/item_remove/log in the batch, fact here) — a new op can't ship untested.
+    exercised = {"move", "mood", "entity", "rel", "set_flag", "item_add", "item_remove", "log", "fact"}
+    check(exercised == set(SE.WORLD_OPS), f"every world op tested (untested: {sorted(set(SE.WORLD_OPS) - exercised)})")
 
 
 # ── stories/state_doc.py ──────────────────────────────────────────────────────────
@@ -238,6 +256,7 @@ def test_sim_ops() -> None:
         SIM.SIM_OPS["learn"](c, u.get("learned"))
         SIM.SIM_OPS["set_emotion"](c, u.get("emotion"))
     check(cast[0]["knowledge"] == ["Daniel lied."] and cast[0]["state"] == "wary", "sim updates apply, blanks no-op")
+    check({"learn", "set_emotion"} == set(SIM.SIM_OPS), "every sim op tested")
 
 
 # ── real DB function books all resolve to code ─────────────────────────────────────
@@ -256,9 +275,24 @@ def test_real_db_books_resolve_to_code() -> None:
     check(total >= 15, "all built-in function books resolved")
 
 
+def test_stage_resolution() -> None:
+    section("stage resolution (stage -> preset by convention, no book middleman)")
+    from loom.server.services import presets as P
+    root = Path(tempfile.mkdtemp())
+    P.seed_stage_presets(root)
+    p = P.stage_preset(root, "characters")
+    check(p is not None and p["id"] == "stage_characters", "stage resolves to its stage_<stage> preset")
+    check(P.stage_preset(root, "nope") is None, "unknown stage -> None (caller falls back)")
+    check(P.stage_preset(root, "") is None, "blank stage -> None")
+    n = len(P.load_presets(root)["presets"])
+    P.seed_stage_presets(root)
+    check(len(P.load_presets(root)["presets"]) == n, "seed_stage_presets is idempotent")
+
+
 def main() -> int:
-    for t in (test_graph_scripts, test_location_and_cast_scripts, test_world_ops, test_state_doc,
-              test_session_roundtrip, test_sim_ops, test_real_db_books_resolve_to_code):
+    for t in (test_script_coverage, test_scripts_via_invoke, test_graph_ops_integration,
+              test_world_ops, test_state_doc, test_session_roundtrip, test_sim_ops,
+              test_stage_resolution, test_real_db_books_resolve_to_code):
         try:
             t()
         except Exception as exc:  # noqa: BLE001

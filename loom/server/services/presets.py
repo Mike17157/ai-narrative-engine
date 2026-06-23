@@ -403,17 +403,13 @@ _STAGE_NAMES = {
 }
 
 
-def seed_stage_lorebooks(root: Path) -> None:
-    """Make pipeline STAGES resolve through the unified lorebook→preset path, matching every
-    other function. For each stage, ensure a behavior-matched stage PRESET (model from
+def seed_stage_presets(root: Path) -> None:
+    """Ensure each pipeline STAGE has a behavior-matched preset `stage_<stage>` (model from
     story_builder.json, system from the pipeline's DEFAULT_SYSTEMS where it has one — else
-    empty, so the caller's own system stands) and a `_stage_<stage>` FUNCTION book bound to
-    it (carrying a `{kind:"stage", fn}` entry). Idempotent: only fills what's missing, so user
-    edits/deletions are never clobbered. Behavior is identical to the legacy story_builder.json
-    path — this just routes it through presets so stages are editable + runnable anywhere."""
+    empty, so the caller's own system stands). Stages resolve straight to these presets by
+    convention (see stage_preset) — no lorebook middleman. Idempotent: only fills what's
+    missing, so user edits are never clobbered."""
     from .config_files import load_story_builder
-    from . import lorebook_store as _LS
-    from ...config.schema import LoreEntry
     try:
         from ...stories.pipeline._helpers import DEFAULT_SYSTEMS
     except Exception:  # noqa: BLE001
@@ -435,35 +431,35 @@ def seed_stage_lorebooks(root: Path) -> None:
     if added:
         save_presets(root, lib)
 
-    for stage in _STAGE_NAMES:
-        bid = stage_book_id(stage)
-        if not _LS.get_book(root, bid):
-            _LS.upsert_book(root, bid, name=f"Stage · {_STAGE_NAMES[stage]}",
-                            category="function", rating="sfw", scope="local",
-                            preset=f"stage_{stage}")
-        if not any(e.id == stage for e in _LS.load_lorebook(root, bid)):
-            spec = json.dumps({"kind": "stage", "fn": stage, "describe": _STAGE_NAMES[stage]},
-                              ensure_ascii=False)
-            _LS.upsert_entry(root, bid, LoreEntry(id=stage, title=_STAGE_NAMES[stage],
-                                                  content=spec, facet="stage"))
+
+def stage_preset(root: Path, stage: str) -> dict | None:
+    """Resolve a pipeline STAGE → its preset. Convention: stage `X` is backed by the preset
+    `stage_X` (seeded by seed_stage_presets) — a direct lookup, no lorebook middleman. For
+    back-compat a user may instead bind a stage via a `function` book holding a
+    `{kind:"stage", fn:X}` entry; that's honored as a fallback. Returns the preset dict, or
+    None (the caller then falls back to story_builder.json)."""
+    if not stage:
+        return None
+    p = get_preset(root, f"stage_{stage}")
+    if p:
+        return p
+    return _stage_preset_from_books(root, stage)
 
 
-def stage_preset(root: Path, stage: str) -> tuple[dict | None, dict | None]:
-    """Resolve a pipeline STAGE → (preset_dict, stage_spec) via the STAGE LOREBOOK that
-    declares it. A stage lorebook is a `function` book holding a `{kind:"stage", fn:<stage>}`
-    entry and bound to a preset (book.preset). Fast path: the conventional `_stage_<stage>`
-    book; fallback: scan function books for the declaring entry. Returns (None, None) when no
-    stage lorebook exists — the caller then falls back to story_builder.json."""
+def _stage_preset_from_books(root: Path, stage: str) -> dict | None:
+    """Back-compat fallback: find a stage's preset via a `function` book that declares it
+    (`{kind:"stage", fn:<stage>}` + book.preset). Only reached when no `stage_<stage>` preset
+    exists — e.g. a hand-authored binding."""
     from . import lorebook_store as _LS
     from ...stories.graph_ops import stage_spec as _stage_spec
-    if not stage:
-        return None, None
 
-    def _from_book(meta) -> tuple[dict | None, dict | None] | None:
+    def _from_book(meta) -> dict | None:
+        if not meta.get("preset"):
+            return None
         for e in _LS.load_lorebook(root, meta["id"]):
             spec = _stage_spec(getattr(e, "content", "") or "")
             if spec and str(spec.get("fn") or "").strip() == stage:
-                return (get_preset(root, meta.get("preset")) if meta.get("preset") else None), spec
+                return get_preset(root, meta["preset"])
         return None
 
     fast = _LS.get_book(root, stage_book_id(stage))
@@ -472,9 +468,8 @@ def stage_preset(root: Path, stage: str) -> tuple[dict | None, dict | None]:
         if hit is not None:
             return hit
     for meta in _LS.list_books(root):
-        if meta.get("category") != "function" or meta["id"] == stage_book_id(stage):
-            continue
-        hit = _from_book(meta)
-        if hit is not None:
-            return hit
-    return None, None
+        if meta.get("category") == "function" and meta["id"] != stage_book_id(stage):
+            hit = _from_book(meta)
+            if hit is not None:
+                return hit
+    return None

@@ -448,7 +448,7 @@ class AppContext:
         Returns a text provider (or None)."""
         from .services import presets as _presets
         if stage and not model_override:
-            preset, _spec = _presets.stage_preset(self.root, stage)
+            preset = _presets.stage_preset(self.root, stage)
             if preset:
                 params = {"max_tokens": max_tokens, **(preset.get("params") or {})}
                 prov = self.text_provider_for(
@@ -468,7 +468,7 @@ class AppContext:
         if not stage:
             return None
         from .services import presets as _presets
-        preset, _spec = _presets.stage_preset(self.root, stage)
+        preset = _presets.stage_preset(self.root, stage)
         return (preset or {}).get("system") or None
 
     def builder_ctx(self, body: dict, stage: str | None = None):
