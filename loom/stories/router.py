@@ -201,7 +201,14 @@ def register(app, ctx):
         actor = ctx.stage_provider("sim_actor")
         if director is None or actor is None:
             return JSONResponse({"error": "simulation models not configured (sim_director / sim_actor)"}, status_code=400)
+        # The sim lives in the thread's State doc `sim` level. Prefer the client-sent
+        # sim_state (contract unchanged); fall back to the stored level when a sid is given.
+        sid = (body.get("sid") or "").strip()
         sim_state = body.get("sim_state") or {}
+        if not sim_state.get("characters") and sid:
+            from ..server.services.story_sessions import load_session
+            from .simulation import sim_of
+            sim_state = sim_of((load_session(ctx.root, sid) or {}).get("state"))
         if not sim_state.get("characters"):
             return JSONResponse({"error": "no characters to simulate"}, status_code=400)
         steer = (body.get("steer") or "").strip()
@@ -232,6 +239,17 @@ def register(app, ctx):
                     break
                 yield f"data: {json.dumps(ev)}\n\n"
             if holder.get("state") is not None:
+                # Persist into the thread's State doc `sim` level when a sid was given
+                # (the client still receives the sim_state, so its contract is unchanged).
+                if sid:
+                    try:
+                        from ..server.services.story_sessions import load_session, save_session
+                        from .simulation import with_sim
+                        _sess = load_session(ctx.root, sid) or {}
+                        save_session(ctx.root, sid,
+                                     {**_sess, "state": with_sim(_sess.get("state"), holder["state"])})
+                    except Exception:  # noqa: BLE001 — persistence is best-effort
+                        pass
                 yield f'data: {json.dumps({"type": "state", "sim_state": holder["state"]})}\n\n'
             yield 'data: {"type": "done"}\n\n'
 
@@ -810,22 +828,34 @@ def register(app, ctx):
     @app.get("/api/stories/{key}/state")
     def get_world_state(key: str, sid: str | None = None):
         from ..server.services.story_sessions import load_session
+        from ..server.services import lorebook_store as _LS
         from . import state_engine as _SE
+        from . import state_doc as _SD
         sid = sid or f"play-{key}"
-        ws = _SE.normalize((load_session(ctx.root, sid) or {}).get("world_state") or {})
-        return {"sid": sid, "state": ws}
+        doc = _SD.normalize((load_session(ctx.root, sid) or {}).get("state"))
+        ws = _SE.world_of(doc)
+        # The full leveled view for the State viewer: graph/world/sim sizes from the doc,
+        # plus the `facts` level (its own libSQL scope) counted from the store.
+        levels = _SD.level_summary(doc)
+        try:
+            facts_n = len(_LS.load_lorebook(ctx.root, _SE.facts_scope(sid)) or [])
+            if facts_n:
+                levels["facts"] = {"size": facts_n}
+        except Exception:  # noqa: BLE001
+            pass
+        return {"sid": sid, "state": ws, "revision": doc.get("revision", 0), "levels": levels}
 
     @app.put("/api/stories/{key}/state")
     def put_world_state(key: str, body: dict):
-        """Manual override of the world-state doc (the state panel's edits). Body:
-        { sid?, state } — replaces the stored doc with the normalized payload."""
+        """Manual override of the world level (the state panel's edits). Body:
+        { sid?, state } — replaces the stored world level with the normalized payload."""
         from ..server.services.story_sessions import load_session, save_session
         from . import state_engine as _SE
         body = body or {}
         sid = body.get("sid") or f"play-{key}"
         sess = load_session(ctx.root, sid) or {}
         ws = _SE.normalize(body.get("state") or {})
-        save_session(ctx.root, sid, {**sess, "world_state": ws})
+        save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
         return {"ok": True, "state": ws}
 
     @app.post("/api/stories/{key}/state/reset")
@@ -834,7 +864,7 @@ def register(app, ctx):
         from . import state_engine as _SE
         sid = (body or {}).get("sid") or f"play-{key}"
         sess = load_session(ctx.root, sid) or {}
-        save_session(ctx.root, sid, {**sess, "world_state": _SE.empty_state()})
+        save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), _SE.empty_state())})
         return {"ok": True, "state": _SE.empty_state()}
 
     # ── Text-model roles (narrator / scribe / refusal fallback) ────────────────
@@ -2232,8 +2262,14 @@ def register(app, ctx):
         from . import state_engine as _SE0
         sid = body.get("sid") or f"play-{key}"
         _sess = load_session(ctx.root, sid) or {}
-        world_state = _SE0.normalize(_sess.get("world_state") or body.get("world_state") or {})
-        thread_scope = re.sub(r"[^\w\-]+", "_", f"thread-{sid}")
+        # The thread's mutable record is a State doc; the world-state engine owns its
+        # `world` level. Fall back to a client-seeded world_state only when the doc's
+        # world level is empty (a brand-new thread).
+        _doc_ws = _SE0.world_of(_sess.get("state"))
+        if not any(_doc_ws.get(k) for k in ("entities", "flags", "inventory", "log", "location")):
+            _doc_ws = _SE0.normalize(_sess.get("world_state") or body.get("world_state") or {})
+        world_state = _doc_ws
+        thread_scope = _SE0.facts_scope(sid)          # the `facts` level (engine write-back)
         story_scope = re.sub(r"[^\w\-]+", "_", f"story-{key}")
 
         # One-time migration: a story's legacy inline `lorebook` dict moves into the
@@ -2414,7 +2450,7 @@ def register(app, ctx):
             world_state = _SE.apply_deltas(world_state, data.get("state_deltas") or [],
                                            root=ctx.root, scope=thread_scope)
             world_state["location"] = loc or world_state.get("location") or ""
-            save_session(ctx.root, sid, {**_sess, "world_state": world_state})
+            save_session(ctx.root, sid, {**_sess, "state": _SE.with_world(_sess.get("state"), world_state)})
         except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
             pass
 

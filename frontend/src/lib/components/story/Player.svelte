@@ -23,11 +23,21 @@
   // World-state engine: the mutable model of this playthrough, evolved each turn by
   // the director's state_deltas and surfaced in a side panel.
   let worldState = $state(null);
+  let stateLevels = $state(null);   // {level: {size}} across the unified State doc
+  let stateRev = $state(0);
   let showState = $state(false);
   let lastGuard = $state(null);
+  // The world-state engine owns the `world` level; the panel also surfaces the sibling
+  // levels (graph / sim / facts) so the whole State doc is visible at a glance.
+  const LEVEL_LABEL = { canon: 'Canon', graph: 'Graph', draft: 'Draft', world: 'World', sim: 'Sim', facts: 'Facts', log: 'Log' };
+  let levelChips = $derived(Object.entries(stateLevels || {})
+    .filter(([, v]) => (v?.size || 0) > 0)
+    .map(([k, v]) => ({ key: k, label: LEVEL_LABEL[k] || k, size: v.size })));
   async function loadState() {
     const r = await get(`/stories/${storyKey}/state?sid=${playSid}`);
     worldState = r?.state || null;
+    stateLevels = r?.levels || null;
+    stateRev = r?.revision || 0;
   }
   async function resetState() {
     if (!confirm('Reset the world state for this playthrough? (lore and transcript are kept)')) return;
@@ -99,7 +109,9 @@
     history = [...history, { role: 'assistant', text: d.reply }];
     scene = { location: d.location, present: d.present || [], emotions: d.emotions || {}, movement: !!d.movement };
     if (d.state?.state) worldState = d.state.state;
+    if (typeof d.state?.revision === 'number') stateRev = d.state.revision;
     lastGuard = d.guard || null;
+    if (showState) loadState();   // refresh sibling-level counts (facts/sim grow as you play)
   }
   async function send() {
     const t = input.trim(); if (!t || busy) return;
@@ -133,7 +145,12 @@
   <div class="stage" style={bg ? `background-image:url('${bg}')` : ''} class:nobg={!bg}>
     {#if showState}
       <div class="statepanel">
-        <div class="sphead"><b>World state</b><button class="reset" onclick={resetState} title="Reset state">↺</button><button class="x" onclick={() => (showState = false)}>✕</button></div>
+        <div class="sphead"><b>State</b>{#if stateRev}<span class="sprev" title="State doc revision">r{stateRev}</span>{/if}<button class="reset" onclick={resetState} title="Reset state">↺</button><button class="x" onclick={() => (showState = false)}>✕</button></div>
+        {#if levelChips.length}
+          <div class="splevels" title="Levels of this thread's State doc">
+            {#each levelChips as c (c.key)}<span class="splevel" class:world={c.key === 'world'}>{c.label} {c.size}</span>{/each}
+          </div>
+        {/if}
         {#if !worldState || (!Object.keys(worldState.entities || {}).length && !Object.keys(worldState.flags || {}).length && !(worldState.inventory || []).length && !(worldState.log || []).length)}
           <div class="spempty">No state yet — it builds as you play.</div>
         {:else}
@@ -208,8 +225,13 @@
   }
   .sphead { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
   .sphead b { flex: 1; font-size: 12.5px; }
+  .sphead .sprev { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
   .sphead .reset, .sphead .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; box-shadow: none; }
   .sphead .reset:hover, .sphead .x:hover { color: #fff; }
+  .splevels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+  .splevel { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.06);
+             color: var(--muted); border: 1px solid rgba(255,255,255,.08); }
+  .splevel.world { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
   .spempty { color: var(--faint); }
   .spsec { margin-top: 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .5px; color: var(--accent); }
   .spent { display: flex; flex-direction: column; padding: 3px 0; border-bottom: 1px solid rgba(255,255,255,.06); }

@@ -76,6 +76,34 @@ CLOSE_SCHEMA = {
 }
 
 
+# ── State-doc bridge (the simulation OWNS the `sim` level) ───────────────────────
+# In the unified model the per-thread record is a State doc (loom/stories/state_doc.py)
+# with named levels; the simulation's cast + scenes are its `sim` level. The endpoint
+# still accepts/returns `sim_state` (client contract unchanged) but, given a `sid`, also
+# reads/persists it here so the State doc is the one home for thread state.
+
+SIM_LEVEL = "sim"
+
+
+def empty_sim(premise: str = "") -> dict:
+    return {"premise": premise, "characters": [], "scenes": []}
+
+
+def sim_of(state: dict | None) -> dict:
+    """Read the simulation state from a State doc's `sim` level (normalized shape)."""
+    from .state_doc import get_level
+    s = get_level(state or {}, SIM_LEVEL) or {}
+    return {"premise": s.get("premise", ""),
+            "characters": s.get("characters") or [],
+            "scenes": s.get("scenes") or []}
+
+
+def with_sim(state: dict | None, sim_state: dict) -> dict:
+    """Return the State doc with its `sim` level set to `sim_state`."""
+    from .state_doc import set_level
+    return set_level(state or {}, SIM_LEVEL, sim_state or {})
+
+
 def _data(res) -> dict:
     return getattr(res, "data", None) or {}
 

@@ -79,6 +79,35 @@ def normalize(ws: dict | None) -> dict:
     return ws
 
 
+# ── State-doc bridge (this engine OWNS the `world` level) ────────────────────────
+# In the unified model the per-thread mutable record is a State doc (loom/stories/
+# state_doc.py) with named levels. The world-state engine owns the `world` level; its
+# delta vocabulary (set_flag/move/mood/…) is unchanged — these helpers just let callers
+# be State-doc-native instead of poking the legacy flat `world_state` field.
+
+WORLD_LEVEL = "world"
+
+
+def facts_scope(sid: str) -> str:
+    """The thread-owned lorebook scope holding engine-established facts — this IS the
+    `facts` level (libSQL-backed so the facts stay retrievable). ONE source of truth for
+    the name (the play loop + retrieval both use it), so emergent facts never land in an
+    authored book."""
+    return re.sub(r"[^\w\-]+", "_", f"thread-{sid}")
+
+
+def world_of(state: dict | None) -> dict:
+    """Read the normalized world-state from a State doc's `world` level."""
+    from .state_doc import get_level
+    return normalize(get_level(state or {}, WORLD_LEVEL) or {})
+
+
+def with_world(state: dict | None, ws: dict) -> dict:
+    """Return the State doc with its `world` level set to `ws` (normalized)."""
+    from .state_doc import set_level
+    return set_level(state or {}, WORLD_LEVEL, normalize(ws))
+
+
 def _entity(ws: dict, name: str) -> dict:
     name = (name or "").strip()
     if not name:

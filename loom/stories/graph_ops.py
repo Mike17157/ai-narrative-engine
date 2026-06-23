@@ -38,6 +38,8 @@ class GraphFunction:
     params: dict           # {param_name: human description}
     ops: list              # the patch template
     keywords: list[str] = field(default_factory=list)
+    writes: str = "graph"  # the State-doc LEVEL this script mutates (default: the dev graph)
+    reads: list[str] = field(default_factory=list)  # levels it reads (advisory; for context assembly)
 
     def to_prompt(self) -> str:
         ps = ", ".join(f"{k} ({v})" for k, v in self.params.items()) or "(no params)"
@@ -65,6 +67,8 @@ def parse_functions(entries: list) -> list[GraphFunction]:
             params=spec.get("params") if isinstance(spec.get("params"), dict) else {},
             ops=spec["ops"],
             keywords=[str(k) for k in (getattr(e, "keywords", []) or [])],
+            writes=str(spec.get("writes") or "graph").strip() or "graph",
+            reads=[str(r) for r in (spec.get("reads") or []) if r],
         ))
     return out
 
@@ -104,6 +108,8 @@ class StageFunction:
     describe: str = ""
     schema: str = ""              # names a code-side output schema (optional)
     image_workflow: str = ""      # for stages that render (optional)
+    writes: str = ""              # the State-doc level a stage writes (e.g. "canon"/"graph"); "" = caller decides
+    reads: list[str] = field(default_factory=list)  # levels it reads (advisory)
 
 
 def stage_spec(content: str) -> dict | None:
@@ -124,6 +130,8 @@ def parse_stage_function(entry) -> StageFunction | None:
         describe=str(spec.get("describe") or getattr(entry, "title", "") or "").strip(),
         schema=str(spec.get("schema") or "").strip(),
         image_workflow=str(spec.get("image_workflow") or "").strip(),
+        writes=str(spec.get("writes") or "").strip(),
+        reads=[str(r) for r in (spec.get("reads") or []) if r],
     )
 
 
@@ -216,13 +224,16 @@ def _call_params(call: dict) -> dict:
 
 # ── Applying ops (the generic JSON-patch dialect) ────────────────────────────────
 
-def apply_ops(graph: dict, calls: list, functions: list[GraphFunction]) -> tuple[dict, list[dict]]:
-    """Apply the model's `graph_ops` calls to a COPY of the graph. Returns
-    (new_graph, log) where log records each call's outcome. Never raises — a bad call
-    is skipped and logged."""
+def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tuple[dict, list[dict]]:
+    """Apply the model's function CALLS to a State doc (level-aware). Each call's ops are
+    applied to the level the function declares via `writes` (default "graph"), through the
+    one unified delta engine in `state_doc`. Returns (new_state, log). Never raises — a bad
+    call is skipped and logged."""
     import copy
 
-    g = copy.deepcopy(graph or {})
+    from . import state_doc as _SD   # lazy: state_doc imports this module (avoid a cycle)
+
+    st = _SD.normalize(copy.deepcopy(state))
     by_name = {f.name: f for f in functions}
     log: list[dict] = []
 
@@ -235,15 +246,25 @@ def apply_ops(graph: dict, calls: list, functions: list[GraphFunction]) -> tuple
             log.append({"fn": call.get("fn"), "ok": False, "error": "unknown function"})
             continue
         params = {**params, "id": params.get("id") or _new_id()}
-        applied = 0
-        for op in fn.ops:
-            try:
-                if _apply_one(g, _interp(op, params)):
-                    applied += 1
-            except Exception as exc:  # noqa: BLE001 — one bad sub-op never sinks the call
-                log.append({"fn": fn.name, "op": op.get("op"), "ok": False, "error": str(exc)})
-        log.append({"fn": fn.name, "ok": True, "applied": applied, "params": params})
-    return g, log
+        level = (fn.writes or "graph").strip() or "graph"
+        st, sub = _SD.apply_ops(st, fn.ops, level=level, params=params)
+        applied = sum(1 for s in sub if s.get("ok") and s.get("changed"))
+        log.append({"fn": fn.name, "ok": True, "applied": applied, "params": params, "level": level})
+        log.extend(s for s in sub if not s.get("ok"))   # surface any failed sub-ops
+    return st, log
+
+
+def apply_ops(graph: dict, calls: list, functions: list[GraphFunction]) -> tuple[dict, list[dict]]:
+    """Back-compat shim for the workshop dev-graph endpoint: apply calls to a BARE graph
+    dict. Wraps the graph as the "graph" level of a State doc, delegates to apply_calls,
+    then unwraps. Returns (new_graph, log)."""
+    import copy
+
+    from . import state_doc as _SD
+
+    state = {"levels": {"graph": copy.deepcopy(graph or {})}, "revision": 0}
+    new_state, log = apply_calls(state, calls, functions)
+    return _SD.get_level(new_state, "graph", {}), log
 
 
 def _new_id() -> str:
