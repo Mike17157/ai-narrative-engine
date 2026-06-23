@@ -20,17 +20,9 @@ from pathlib import Path
 APP_FLAGS_DEFAULT = {"allow_nsfw": True, "img_detailer": True, "img_upscale": False}
 _BOOL_FLAGS = tuple(APP_FLAGS_DEFAULT)
 
-# Local text model — one OpenAI-compatible endpoint (llama.cpp's `llama-server`) serving a
-# GGUF off disk, so a preset can run locally instead of via an OpenRouter connection. Set up
-# by scripts/serve_meromero.sh; a preset opts in with its `local` toggle (see services/presets).
-#   base_url — the llama-server OpenAI-compatible base (…/v1)
-#   model    — the served alias (llama-server --alias)
-#   label    — display name in the preset editor
-LOCAL_MODEL_DEFAULT = {
-    "base_url": "http://127.0.0.1:8080/v1",
-    "model": "meromero",
-    "label": "MeroMero 26B (local)",
-}
+# Local text inference is no longer a special endpoint here — it's a first-class Ollama
+# CONNECTION (auto-seeded as `ollama-local`, see connections.py). A preset picks it like any
+# other connection. The old configs/app.json → local_model block is dropped on next save.
 
 
 def load_app_flags(root: Path) -> dict:
@@ -43,10 +35,7 @@ def load_app_flags(root: Path) -> dict:
             pass
     for k in _BOOL_FLAGS:
         cfg[k] = bool(cfg.get(k, APP_FLAGS_DEFAULT[k]))
-    lm = dict(LOCAL_MODEL_DEFAULT)
-    if isinstance(cfg.get("local_model"), dict):
-        lm.update({k: str(cfg["local_model"].get(k, lm[k]) or "") for k in LOCAL_MODEL_DEFAULT})
-    cfg["local_model"] = lm
+    cfg.pop("local_model", None)        # legacy field — retired in favour of the Ollama connection
     return cfg
 
 
@@ -55,14 +44,35 @@ def save_app_flags(root: Path, data: dict) -> dict:
     for k in _BOOL_FLAGS:
         if (data or {}).get(k) is not None:
             cfg[k] = bool(data[k])
-    lm_in = (data or {}).get("local_model")
-    if isinstance(lm_in, dict):
-        cfg["local_model"] = {k: str(lm_in.get(k, cfg["local_model"][k]) or "")
-                              for k in LOCAL_MODEL_DEFAULT}
     path = root / "configs" / "app.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(cfg, indent=2, ensure_ascii=False), encoding="utf-8")
     return cfg
+
+
+# -- per-workflow RunPod inference toggle ------------------------------------
+# Which image models (models.yaml keys) run on the RunPod serverless endpoint instead
+# of local ComfyUI. A flexible "run this workflow on RunPod" switch — the worker image
+# bundles every node pack, so any registered workflow can be flipped to the cloud GPU.
+def load_runpod_models(root: Path) -> list[str]:
+    path = root / "configs" / "runpod_models.json"
+    if path.is_file():
+        try:
+            d = json.loads(path.read_text(encoding="utf-8")) or {}
+            m = d.get("models")
+            if isinstance(m, list):
+                return [str(x) for x in m]
+        except (ValueError, OSError):
+            pass
+    return []
+
+
+def save_runpod_models(root: Path, models: list[str]) -> list[str]:
+    out = sorted({str(x) for x in (models or []) if x})
+    path = root / "configs" / "runpod_models.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"models": out}, indent=2), encoding="utf-8")
+    return out
 
 
 # -- story builder -----------------------------------------------------------
@@ -85,9 +95,7 @@ def load_story_builder(root: Path) -> dict:
     script-bound chat configs overlaid on top — so editing a stage's config in the ⚙
     modal drives the pipeline, while configs/story_builder.json remains the fallback.
     A stage config's attached lorebooks are folded into that stage's system prompt."""
-    cfg = _story_builder_raw(root)
-    _overlay_story_builder(cfg, root)
-    return cfg
+    return _story_builder_raw(root)
 
 
 def _stage_model(cfg: dict, stage: str | None, override: str | None = None) -> str:
@@ -112,19 +120,10 @@ def _image_roles_raw(root: Path) -> dict:
 
 
 def load_image_roles(root: Path) -> dict:
-    """Per-role image workflow overrides, with the unified `image:<role>` script configs
-    overlaid on top (the ⚙ modal edits those; image_roles.json is the fallback)."""
-    cfg = _image_roles_raw(root)
-    for role in ("base", "style", "sprite", "scene", "chat"):
-        c = script_config(root, f"image:{role}")
-        wf = (c or {}).get("workflow") if c else None
-        if wf:
-            existing = cfg.get(role)
-            if isinstance(existing, dict):
-                cfg[role] = {**existing, "model": wf}
-            else:
-                cfg[role] = wf
-    return cfg
+    """Per-role image workflow overrides (configs/image_roles.json). Roles are pipeline
+    internals (base/sprite/scene); chat-surface renders take the active preset's
+    image_workflow instead (see context.role_image_provider)."""
+    return _image_roles_raw(root)
 
 
 # -- text-model roles --------------------------------------------------------
@@ -218,56 +217,14 @@ def load_chatgen(root: Path) -> dict:
     cfg = dict(CHATGEN_DEFAULT)
     if path.is_file():
         cfg.update(json.loads(path.read_text(encoding="utf-8")))
-    c = script_config(root, "chatgen")
-    if c and c.get("system"):
-        cfg["system"] = c["system"]
     return cfg
 
 
-# -- named chat configs ------------------------------------------------------
-# A library of reusable chat "configurations" — each bundles a text model, a
-# system prompt, default attached lorebooks, and a creativity/invention level.
-# One is active at a time; the main chat (and any chat surface) reads the active
-# config as its default. Edited at the point of use via the ⚙ config modal, not
-# a settings page. Stored in configs/chat_configs.json.
-def _default_chat_config() -> dict:
-    # `script` binds a config to a pipeline action ('' = free chat). `workflow` is the
-    # ComfyUI workflow for image-role scripts (text scripts/chat use `model` instead).
-    # `params` holds inference controls (temperature, top_p, …) — see _PARAM_SPEC.
-    # `mode` is the ADDRESS mode — how the model is framed:
-    #   '' (auto) → roleplay for free chat, assist for script-bound flows
-    #   'roleplay' → the model BECOMES the character (in-character dialogue)
-    #   'assist'   → the model is a developmental collaborator working WITH the writer
-    #                ON the document; the character is the SUBJECT, never inhabited.
-    # `context` holds context-window controls (history depth, what extra context to inject).
-    return {"id": "default", "name": "Default", "model": "", "system": "",
-            "lorebooks": [], "params": {}, "script": "", "workflow": "",
-            "mode": "", "context": {}}
-
-
-CHAT_CONFIGS_DEFAULT = {"active": "default", "configs": [_default_chat_config()]}
-
-# The editable fields of a single config (stray UI keys are dropped on save).
-_CHAT_CONFIG_FIELDS = ("id", "name", "model", "system", "lorebooks", "params",
-                       "script", "workflow", "mode", "context")
-
-# Context-window controls a config may set (key → coercion). Blank = sensible default.
-_CONTEXT_SPEC = {"history_turns": int, "lore_top_k": int, "include_persona": bool}
-
-
-def _clean_context(raw: dict) -> dict:
-    out: dict = {}
-    for k, cast in _CONTEXT_SPEC.items():
-        v = (raw or {}).get(k)
-        if v is None or v == "":
-            continue
-        try:
-            out[k] = cast(v)
-        except (TypeError, ValueError):
-            pass
-    return out
-
-
+# -- address mode + inference params -----------------------------------------
+# NOTE: the parallel chat_configs.json / SCRIPTS overlay system was removed in the
+# preset-unification overhaul — presets are the single chat primitive, and pipeline
+# stage/prompt config lives directly in story_builder.json / chatgen.json /
+# promptgen.json / image_roles.json (read raw above). Only these pure helpers remain.
 def address_mode(cfg: dict) -> str:
     """Resolve a config's effective address mode. Explicit 'roleplay'/'assist' wins;
     otherwise script-bound configs assist the writer and free chat roleplays."""
@@ -295,192 +252,9 @@ def _clean_params(raw: dict) -> dict:
             pass
     return out
 
-# Every config is a "chat with rules": a model + a system prompt + lorebooks + a SCRIPT
-# (the pipeline action whose rules it encodes). These are the built-in scripts — the old
-# settings/story-gen stages, now first-class configs. `kind` decides the editor: 'text'
-# scripts (+ free chat) pick a text model; 'image' scripts pick a ComfyUI workflow.
-SCRIPTS = [
-    {"id": "", "label": "Free chat", "group": "Chat", "kind": "text"},
-    {"id": "storyboard", "label": "Storyboard", "group": "Story builder", "kind": "text"},
-    {"id": "locations", "label": "Locations", "group": "Story builder", "kind": "text"},
-    {"id": "characters", "label": "Characters", "group": "Story builder", "kind": "text"},
-    {"id": "wardrobe", "label": "Wardrobe", "group": "Story builder", "kind": "text"},
-    {"id": "base_image", "label": "Base image", "group": "Story builder", "kind": "text"},
-    {"id": "chatgen", "label": "Chat prompt", "group": "Prompts", "kind": "text"},
-    {"id": "promptgen", "label": "Tag prompt", "group": "Prompts", "kind": "text"},
-    {"id": "image:base", "label": "Base", "group": "Image roles", "kind": "image"},
-    {"id": "image:style", "label": "Style", "group": "Image roles", "kind": "image"},
-    {"id": "image:sprite", "label": "Sprite", "group": "Image roles", "kind": "image"},
-    {"id": "image:scene", "label": "Scene", "group": "Image roles", "kind": "image"},
-    {"id": "image:chat", "label": "Chat", "group": "Image roles", "kind": "image"},
-]
-# The text builder stages that live under story_builder.json (script id == stage name).
-_BUILDER_STAGES = ("storyboard", "locations", "characters", "wardrobe", "base_image")
-
-
-def _clean_chat_config(raw: dict) -> dict:
-    cfg = _default_chat_config()
-    cfg.update({k: v for k, v in (raw or {}).items() if k in _CHAT_CONFIG_FIELDS})
-    cfg["lorebooks"] = [str(b) for b in (cfg.get("lorebooks") or []) if b]
-    cfg["script"] = str(cfg.get("script") or "")
-    cfg["params"] = _clean_params(cfg.get("params") or {})
-    cfg["mode"] = cfg.get("mode") if cfg.get("mode") in ("roleplay", "assist") else ""
-    cfg["context"] = _clean_context(cfg.get("context") or {})
-    return cfg
-
-
-def _seed_script_config(root: Path, spec: dict) -> dict:
-    """Build a config for a built-in script, seeded from its legacy config file so the
-    migration is loss-free. Uses RAW loaders (no overlay) to avoid recursion."""
-    sid = spec["id"]
-    cfg = _default_chat_config()
-    cfg.update({"id": "script_" + (sid.replace(":", "_") or "chat"),
-                "name": spec["label"], "script": sid})
-    if sid in _BUILDER_STAGES:
-        sb = _story_builder_raw(root)
-        cfg["model"] = (sb.get("models") or {}).get(sid, "") or ""
-        cfg["system"] = (sb.get("systems") or {}).get(sid, "") or ""
-    elif sid == "chatgen":
-        path = root / "configs" / "chatgen.json"
-        raw = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-        cfg["system"] = raw.get("system", "") or ""
-    elif sid == "promptgen":
-        path = root / "configs" / "promptgen.json"
-        raw = json.loads(path.read_text(encoding="utf-8")) if path.is_file() else {}
-        cfg["model"] = raw.get("model", "") or ""
-        cfg["system"] = raw.get("system", "") or ""
-    elif sid.startswith("image:"):
-        role = sid.split(":", 1)[1]
-        entry = _image_roles_raw(root).get(role)
-        cfg["workflow"] = (entry.get("model") if isinstance(entry, dict) else entry) or ""
-    return cfg
-
-
-def _ensure_script_configs(root: Path, data: dict) -> bool:
-    """Add a config for every built-in script that doesn't have one yet (seeded from the
-    legacy files). Returns True if anything was added (caller should persist)."""
-    have = {c.get("script") for c in data["configs"] if c.get("script")}
-    added = False
-    for spec in SCRIPTS:
-        if spec["id"] and spec["id"] not in have:
-            data["configs"].append(_seed_script_config(root, spec))
-            added = True
-    return added
-
-
-def load_chat_configs(root: Path) -> dict:
-    """The chat-config library: {active, configs:[...]}. Always returns at least one free
-    config plus one per built-in script (lazily migrated in from the legacy config files)."""
-    path = root / "configs" / "chat_configs.json"
-    data = dict(CHAT_CONFIGS_DEFAULT)
-    if path.is_file():
-        try:
-            loaded = json.loads(path.read_text(encoding="utf-8")) or {}
-            if isinstance(loaded.get("configs"), list) and loaded["configs"]:
-                data = loaded
-        except (ValueError, OSError):
-            pass
-    data["configs"] = [_clean_chat_config(c) for c in data.get("configs") or []]
-    if not any(c.get("script", "") == "" for c in data["configs"]):
-        data["configs"].insert(0, _default_chat_config())
-    if _ensure_script_configs(root, data):
-        data = save_chat_configs(root, data)            # persist the one-time migration
-    ids = {c["id"] for c in data["configs"]}
-    if data.get("active") not in ids:
-        # Prefer a free-chat config as the default active selection.
-        free = next((c["id"] for c in data["configs"] if c.get("script", "") == ""), None)
-        data["active"] = free or data["configs"][0]["id"]
-    return data
-
-
-def script_config(root: Path, script: str) -> dict | None:
-    """The config bound to a given script id (e.g. 'storyboard', 'image:base'), or None."""
-    if not script:
-        return None
-    for c in load_chat_configs(root)["configs"]:
-        if c.get("script") == script:
-            return c
-    return None
-
-
-def _stage_lore_block(root: Path, books: list) -> str:
-    """Render the enabled entries of a stage's attached lorebooks as a rules block
-    (no transcript to retrieve against — stages apply their books wholesale, capped)."""
-    if not books:
-        return ""
-    try:
-        import re as _re
-
-        from .lorebook import format_lore_block
-        from . import lorebook_store as _LS
-        from ...stories.graph_ops import is_function_entry
-        entries = []
-        for b in books:
-            scope = _re.sub(r"[^\w\-]+", "_", str(b))
-            entries += [e for e in _LS.load_lorebook(root, scope)
-                        if e.enabled and e.content and not is_function_entry(e)]
-            if len(entries) >= 8:
-                break
-        return format_lore_block(entries[:8]) if entries else ""
-    except Exception:  # noqa: BLE001 — lore is additive; never break a stage on it
-        return ""
-
-
-def _overlay_story_builder(cfg: dict, root: Path) -> None:
-    """Fold each builder stage's script config (model/system/lorebooks/params) onto the
-    raw story_builder cfg in place. A stage's lorebooks are appended to its system; its
-    inference params land under cfg['params'][stage] for builder_ctx to apply."""
-    try:
-        from ...stories.pipeline._helpers import DEFAULT_SYSTEMS
-    except Exception:  # noqa: BLE001
-        DEFAULT_SYSTEMS = {}
-    by_script = {c.get("script"): c for c in load_chat_configs(root)["configs"] if c.get("script")}
-    models, systems = cfg.setdefault("models", {}), cfg.setdefault("systems", {})
-    params = cfg.setdefault("params", {})
-    for stage in _BUILDER_STAGES:
-        c = by_script.get(stage)
-        if not c:
-            continue
-        if c.get("model"):
-            models[stage] = c["model"]
-        if c.get("params"):
-            params[stage] = c["params"]
-        lore = _stage_lore_block(root, c.get("lorebooks") or [])
-        if c.get("system") or lore:
-            base = c.get("system") or systems.get(stage) or DEFAULT_SYSTEMS.get(stage) or ""
-            systems[stage] = (base + ("\n\n" + lore if lore else "")).strip()
-
-
 def stage_params(cfg: dict, stage: str | None) -> dict:
     """The inference params for a builder stage (from its overlaid script config)."""
     return (cfg.get("params") or {}).get(stage or "") or {}
-
-
-def save_chat_configs(root: Path, data: dict) -> dict:
-    data = data or {}
-    out = {
-        "active": data.get("active") or "default",
-        "configs": [_clean_chat_config(c) for c in data.get("configs") or []],
-    }
-    if not out["configs"]:
-        out["configs"] = [_default_chat_config()]
-    ids = {c["id"] for c in out["configs"]}
-    if out["active"] not in ids:
-        out["active"] = out["configs"][0]["id"]
-    path = root / "configs" / "chat_configs.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
-    return out
-
-
-def active_chat_config(root: Path, config_id: str | None = None) -> dict:
-    """The active config dict (or the one named by `config_id` if given)."""
-    data = load_chat_configs(root)
-    want = config_id or data["active"]
-    for c in data["configs"]:
-        if c["id"] == want:
-            return c
-    return data["configs"][0]
 
 
 # -- image-prompt generator config ------------------------------------------
@@ -492,12 +266,6 @@ def load_promptgen(root: Path) -> dict:
     cfg = dict(PROMPTGEN_DEFAULT)
     if path.is_file():
         cfg.update(json.loads(path.read_text(encoding="utf-8")))
-    c = script_config(root, "promptgen")           # `enabled` stays from the json
-    if c:
-        if c.get("model"):
-            cfg["model"] = c["model"]
-        if c.get("system"):
-            cfg["system"] = c["system"]
     return cfg
 
 

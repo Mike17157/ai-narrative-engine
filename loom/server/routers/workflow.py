@@ -68,6 +68,34 @@ def register(app, ctx):
                 return JSONResponse({"error": f"translation failed: {exc}"}, status_code=500)
         return {"ok": True, "translation": out[0]} if single else {"ok": True, "translations": out}
 
+    @app.get("/api/runpod-models")
+    def list_runpod_models():
+        """Image models + whether each runs on RunPod serverless (vs local ComfyUI)."""
+        from ..services import config_files as _cf
+        flagged = set(_cf.load_runpod_models(ctx.root))
+        rp = ctx.runpod_config
+        models = [{"key": k, "name": (md.options.get("title") or k), "runpod": k in flagged}
+                  for k, md in ctx.base_settings.models.items() if md.kind == "image"]
+        return {"models": sorted(models, key=lambda m: m["key"]),
+                "configured": bool(rp.get("api_key") and rp.get("serverless_endpoint_id")),
+                "endpoint_id": rp.get("serverless_endpoint_id", "")}
+
+    @app.put("/api/runpod-models")
+    def set_runpod_model(body: dict):
+        """Flip one image model between local ComfyUI and RunPod serverless."""
+        from ..services import config_files as _cf
+        body = body or {}
+        key = str(body.get("key") or "")
+        md = ctx.base_settings.models.get(key)
+        if md is None or md.kind != "image":
+            return JSONResponse({"error": f"no image model '{key}'"}, status_code=404)
+        flagged = set(_cf.load_runpod_models(ctx.root))
+        if body.get("runpod"):
+            flagged.add(key)
+        else:
+            flagged.discard(key)
+        return {"ok": True, "models": _cf.save_runpod_models(ctx.root, list(flagged))}
+
     @app.post("/api/wan/render")
     async def wan_render(body: dict):
         """Render the `wan` workflow as a still OR a video via one flag. mode='image' →

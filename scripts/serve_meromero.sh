@@ -22,7 +22,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-MODEL="${MODEL:-G4-MeroMero-26B-A4B-it-uncensored-heretic-Q4_K_S.gguf}"
+MODEL="${MODEL:-models/llm/G4-MeroMero-26B-A4B-it-uncensored-heretic-Q4_K_S.gguf}"
 PORT="${PORT:-8080}"
 NGL="${NGL:-999}"
 CTX="${CTX:-8192}"

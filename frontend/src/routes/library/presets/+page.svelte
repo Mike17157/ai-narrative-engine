@@ -49,6 +49,16 @@
     modelsLoading = false;
   }
 
+  // Image WORKFLOWS (a preset bundles one — not an image "model"). Each runs local or cloud.
+  let imageWorkflows = $state([]);
+  let imageWfItems = $derived([{ value: '', label: 'None — use the active image connection' },
+    ...imageWorkflows.map((m) => ({ value: m.key, label: m.key }))]);
+  const IMG_PROVIDERS = [
+    { v: '', label: 'Auto', hint: 'Use the global per-workflow default' },
+    { v: 'local', label: 'Local', hint: 'Run on local ComfyUI' },
+    { v: 'cloud', label: 'Cloud', hint: 'Run on RunPod serverless' },
+  ];
+
   // Which lorebooks bind to each preset (the reverse of the binding) — shown so you can see
   // at a glance what a preset drives.
   let books = $state([]);
@@ -67,6 +77,13 @@
       .map(([group, items]) => ({ group, items, ord: Math.min(...items.map((p) => p.order || 0)) }))
       .sort((a, b) => a.ord - b.ord);
   });
+  // CHAT presets are what you pick for a conversation (group 'Chat'/empty). Everything else is
+  // a pipeline-stage / function preset — engine internals, tucked under an advanced section so
+  // the chat-preset list stays clean.
+  const _isChat = (g) => g === 'Chat' || g === 'Other';
+  let chatGroups = $derived(groupedPresets.filter((g) => _isChat(g.group)));
+  let pipelineGroups = $derived(groupedPresets.filter((g) => !_isChat(g.group)));
+  let showPipeline = $state(false);
 
   const MODES = [
     { v: '', label: 'Auto', hint: 'Roleplay for free chat, Assist for function flows' },
@@ -99,9 +116,11 @@
 
   onMount(load);
   async function load() {
-    const [pr, bk] = await Promise.all([get('/presets'), get('/lorebooks').catch(() => ({}))]);
+    const [pr, bk, md] = await Promise.all([
+      get('/presets'), get('/lorebooks').catch(() => ({})), get('/models').catch(() => ({}))]);
     presets = pr.presets || [];
     books = bk.books || [];
+    imageWorkflows = md.image || [];
     await refreshAll();   // populate app.conns so the connection picker is ready
     if (!selId || !presets.some((p) => p.id === selId)) selId = presets[0]?.id || null;
     snap = sel ? JSON.stringify(sel) : null;
@@ -134,6 +153,17 @@
   function pick(p) { selId = p.id; snap = JSON.stringify(p); }
   const paramCount = (p) => Object.values(p?.params || {}).filter((v) => v !== '' && v != null).length;
 
+  // Lorebooks this preset ATTACHES (composition: world info, sprites, functions). Stored on
+  // the preset as `lorebooks`; the autosave effect persists the change.
+  function editAttachedBooks() {
+    openBrowse({
+      kind: 'lorebook', multi: true, value: [...(sel.lorebooks || [])],
+      title: `Lorebooks for “${sel.name}”`,
+      onConfirm: (ids) => { sel.lorebooks = ids; },
+    });
+  }
+  const bookName = (id) => books.find((b) => b.id === id)?.name || id;
+
   // Edit which lorebooks bind to THIS preset via the reusable browse modal. The binding
   // lives on each book (book.preset); confirming diffs the selection and PATCHes the books
   // that changed — added → this preset, removed → '' (cleared).
@@ -156,24 +186,38 @@
 </script>
 
 <div class="wrap">
+  {#snippet presetRow(p)}
+    <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
+      <span class="nm">{p.name || p.id}</span>
+      <span class="tags">
+        {#if p.image_workflow}<span class="mtag img" title="renders with {p.image_workflow}{p.image_provider ? ' · ' + p.image_provider : ''}">🖼</span>{/if}
+        {#if (connections.find((c) => c.id === p.connection)?.provider) === 'ollama'}<span class="mtag local" title="runs on a local model">local</span>{/if}
+        <span class="mtag" class:assist={(p.mode || '') === 'assist'} class:rp={(p.mode || '') === 'roleplay'}>
+          {p.mode || 'auto'}
+        </span>
+        {#if (p.lorebooks || []).length}<span class="btag" title="lorebooks attached to this preset">{p.lorebooks.length}📚</span>{/if}
+      </span>
+    </button>
+  {/snippet}
+
   <div class="list">
-    <div class="lhead">Presets <span class="lo">— grouped by function, in pipeline order</span></div>
-    {#each groupedPresets as grp (grp.group)}
-      <div class="pgroup">{grp.group}</div>
-      {#each grp.items as p (p.id)}
-        <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
-          <span class="nm">{p.name || p.id}</span>
-          <span class="tags">
-            {#if p.local}<span class="mtag local" title="runs on the local model">local</span>{/if}
-            <span class="mtag" class:assist={(p.mode || '') === 'assist'} class:rp={(p.mode || '') === 'roleplay'}>
-              {p.mode || 'auto'}
-            </span>
-            {#if boundBooks(p.id).length}<span class="btag" title="lorebooks bound to this preset">{boundBooks(p.id).length}📚</span>{/if}
-          </span>
-        </button>
-      {/each}
+    <div class="lhead">Chat presets <span class="lo">— a chat model + image workflow + lorebooks</span></div>
+    {#each chatGroups as grp (grp.group)}
+      {#each grp.items as p (p.id)}{@render presetRow(p)}{/each}
     {/each}
     <button class="new" onclick={newPreset}>＋ New preset</button>
+
+    {#if pipelineGroups.length}
+      <button class="advtoggle" onclick={() => (showPipeline = !showPipeline)}>
+        {showPipeline ? '▾' : '▸'} Pipeline &amp; functions <span class="lo">— engine internals</span>
+      </button>
+      {#if showPipeline}
+        {#each pipelineGroups as grp (grp.group)}
+          <div class="pgroup">{grp.group}</div>
+          {#each grp.items as p (p.id)}{@render presetRow(p)}{/each}
+        {/each}
+      {/if}
+    {/if}
   </div>
 
   {#if sel}
@@ -196,31 +240,50 @@
         <label>Description <span class="lo">— what this preset is for</span></label>
         <textarea class="fld ta" rows="1" use:autosize={sel.description} bind:value={sel.description}></textarea>
       </div>
-      <label class="localrow" title="Run this preset on the local GGUF model instead of OpenRouter">
-        <input type="checkbox" bind:checked={sel.local} />
-        <span class="locallabel">Local model
-          <span class="lo">— use {app.localModel?.label || 'the local model'} instead of OpenRouter.
-            <a href="/settings/system">configure endpoint</a>
-          </span>
-        </span>
-      </label>
-      {#if !sel.local}
-        <div class="erow">
-          <label>Connection</label>
-          <Combobox items={connItems} value={sel.connection || ''} placeholder="Active text connection"
-            onpick={(v) => { sel.connection = v; sel.model = ''; }} />
-          <button class="mng" class:on={manageConn} onclick={() => (manageConn = !manageConn)} title="Add / edit API connections">⚙ Manage</button>
-        </div>
-        {#if manageConn}
-          <div class="connmng">
-            <ConnectionPanel kind="text" />
-          </div>
-        {/if}
-        <div class="erow">
-          <label>Model</label>
-          <Combobox items={modelItems} value={sel.model} placeholder={modelsLoading ? 'loading…' : 'Connection default'} onpick={(v) => (sel.model = v)} />
+      <div class="erow">
+        <label>Connection</label>
+        <Combobox items={connItems} value={sel.connection || ''} placeholder="Active text connection"
+          onpick={(v) => { sel.connection = v; sel.model = ''; }} />
+        <button class="mng" class:on={manageConn} onclick={() => (manageConn = !manageConn)} title="Add / edit API connections">⚙ Manage</button>
+      </div>
+      {#if manageConn}
+        <div class="connmng">
+          <ConnectionPanel kind="text" />
         </div>
       {/if}
+      <div class="erow">
+        <label>Model</label>
+        <Combobox items={modelItems} value={sel.model} placeholder={modelsLoading ? 'loading…' : 'Connection default'} onpick={(v) => (sel.model = v)} />
+      </div>
+
+      <div class="erow">
+        <label title="The image WORKFLOW this preset renders with (not an image model — a workflow already carries its checkpoints/LoRAs).">Image workflow</label>
+        <Combobox items={imageWfItems} value={sel.image_workflow || ''} placeholder="None — active image connection" onpick={(v) => (sel.image_workflow = v)} />
+      </div>
+      {#if sel.image_workflow}
+        <div class="erow">
+          <label title="Where this workflow runs.">Run on</label>
+          <div class="seg">
+            {#each IMG_PROVIDERS as p}
+              <button class="segbtn" class:on={(sel.image_provider || '') === p.v} title={p.hint} onclick={() => (sel.image_provider = p.v)}>{p.label}</button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <div class="erow col">
+        <label style="display:flex; align-items:center; gap:8px">Lorebooks <span class="lo">— attached to this preset (world info, sprites, functions/scripts)</span>
+          <button class="addb" onclick={editAttachedBooks}>＋ Attach</button>
+        </label>
+        {#if (sel.lorebooks || []).length}
+          <div class="chips">
+            {#each sel.lorebooks as id}<a class="chip" href="/library/lorebooks?book={id}">{bookName(id)}</a>{/each}
+          </div>
+        {:else}
+          <p class="lo">No lorebooks attached. Click <b>Attach</b> to compose this preset with world info, sprites or functions.</p>
+        {/if}
+      </div>
+
       <div class="erow">
         <label title="How the model is framed.">Address</label>
         <div class="seg">
@@ -313,6 +376,11 @@
   .mtag.assist { color: var(--accent); background: rgba(109,140,255,.14); }
   .mtag.rp { color: var(--good); background: rgba(100,210,130,.12); }
   .mtag.local { color: var(--warn); background: rgba(230,170,90,.14); }
+  .mtag.img { background: none; padding: 0; font-size: 12px; }
+  .advtoggle { margin-top: 10px; padding: 7px 9px; border-radius: 8px; background: none; border: 0; box-shadow: none;
+    color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    text-align: left; cursor: pointer; }
+  .advtoggle:hover { color: var(--text); background: var(--elev); filter: none; }
   .btag { font-size: 9.5px; color: var(--faint); }
   .new { margin-top: 4px; padding: 9px 11px; border-radius: 9px; background: none; border: 1px dashed var(--border);
     color: var(--muted); font-size: 12.5px; cursor: pointer; box-shadow: none; }
@@ -338,11 +406,6 @@
     border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
   .mng:hover, .mng.on { color: var(--accent); border-color: var(--accent); filter: none; }
   .connmng { border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px; background: var(--bg); }
-  .localrow { display: flex; align-items: flex-start; gap: 9px; cursor: pointer; padding: 2px 0; }
-  .localrow input { width: 16px; height: 16px; margin-top: 1px; flex: none; }
-  .locallabel { font-size: 13px; font-weight: 600; color: var(--text); }
-  .locallabel .lo { font-weight: 400; }
-  .locallabel a { color: var(--accent); }
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
   .segbtn { background: var(--bg); border: 0; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 600;
     padding: 7px 14px; cursor: pointer; border-right: 1px solid var(--border-soft); }

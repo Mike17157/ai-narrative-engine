@@ -35,10 +35,17 @@ def _default_preset() -> dict:
             # Organization: `group` buckets presets by function; `order` sequences them
             # (the pipeline flow — spine → arc → cast → image → sim — since they feed each other).
             "group": "", "order": 0,
+            # `connection` is the saved API endpoint (incl. local Ollama — see connections.py);
+            # `model` is a model on it. Picking the auto-seeded `ollama-local` connection = run local.
             "connection": "", "model": "", "mode": "",
-            # `local` routes this preset to the local GGUF endpoint (configs/app.json →
-            # local_model) instead of its connection/model — the OpenRouter ⇄ local toggle.
-            "local": False,
+            # Image side — the unified preset bundles the IMAGE WORKFLOW too (not an image
+            # "model"; a workflow already encodes its checkpoints/LoRAs). `image_workflow` is a
+            # models.yaml image key; `image_provider` picks where it runs ("" = global default,
+            # "local" = ComfyUI, "cloud" = RunPod serverless); `image_preset` is the LoRA "look".
+            "image_workflow": "", "image_provider": "", "image_preset": "",
+            # Lorebooks this preset composes (the universal container — world info, sprites,
+            # functions/scripts). A list of book ids.
+            "lorebooks": [],
             # Prompt slots (positions in the assembled prompt):
             #   system       — top system message (standing rules)
             #   author_note  — injected into history `author_depth` turns from the end (strong steer)
@@ -204,7 +211,8 @@ def _clean_preset(raw: dict) -> dict:
     p = _default_preset()
     p.update({k: v for k, v in (raw or {}).items()
               if k in ("id", "name", "description", "group", "order", "connection", "model",
-                       "mode", "local", "system", "author_note", "author_depth", "post_history",
+                       "mode", "image_workflow", "image_provider", "image_preset", "lorebooks",
+                       "system", "author_note", "author_depth", "post_history",
                        "params", "stop", "reasoning_effort")})
     p["id"] = str(p.get("id") or "").strip() or "preset"
     p["name"] = str(p.get("name") or p["id"]).strip()
@@ -217,7 +225,10 @@ def _clean_preset(raw: dict) -> dict:
     p["connection"] = str(p.get("connection") or "").strip()
     p["model"] = str(p.get("model") or "").strip()
     p["mode"] = p["mode"] if p.get("mode") in _MODES else ""
-    p["local"] = bool(p.get("local"))
+    p["image_workflow"] = str(p.get("image_workflow") or "").strip()
+    p["image_provider"] = p["image_provider"] if p.get("image_provider") in ("", "local", "cloud") else ""
+    p["image_preset"] = str(p.get("image_preset") or "").strip()
+    p["lorebooks"] = [str(b).strip() for b in (p.get("lorebooks") or []) if str(b).strip()]
     p["system"] = str(p.get("system") or "")
     p["author_note"] = str(p.get("author_note") or "")
     try:
@@ -248,14 +259,25 @@ def load_presets(root: Path) -> dict:
                 data = loaded
         except (ValueError, OSError):
             pass
-    data["presets"] = [_clean_preset(p) for p in data.get("presets") or []
-                       if p.get("id") not in _RETIRED_PRESETS]
+    # One-time migration: the legacy per-preset `local` flag (routed to configs/app.json →
+    # local_model) is gone. A preset that had it now points at the auto-seeded `ollama-local`
+    # connection instead — flipped here on the raw dict so _clean_preset (which dropped the
+    # field) persists the new shape on first load.
+    raw = [p for p in data.get("presets") or [] if p.get("id") not in _RETIRED_PRESETS]
+    migrated = False
+    for p in raw:
+        if p.pop("local", False):
+            p["connection"] = "ollama-local"
+            if not (p.get("model") or "").strip():
+                p["model"] = "meromero"
+            migrated = True
+    data["presets"] = [_clean_preset(p) for p in raw]
     # Ensure the default + every built-in seed exists (by id). New seeds appear on existing
     # installs too; user EDITS to a seed are preserved (we only add missing ids). A deleted
     # built-in seed re-appears on next load — like the reserved lorebooks.
     by_id = {p["id"]: p for p in data["presets"]}
     have = set(by_id)
-    added = False
+    added = migrated
     if "default" not in have:
         data["presets"].insert(0, _default_preset()); added = True; have.add("default")
     for s in _SEED_PRESETS:
@@ -364,3 +386,95 @@ def preset_for_books(root: Path, books: list) -> dict | None:
             fn_bound = pid
     pid = fn_bound or any_bound
     return get_preset(root, pid) if pid else None
+
+
+# Convention id for a stage lorebook (a function book declaring one pipeline stage).
+def stage_book_id(stage: str) -> str:
+    return f"_stage_{stage}"
+
+
+# Pipeline stages, folded into the lorebook→preset model like every other function. Each gets
+# a `stage_<stage>` PRESET (its model + system) bound to a `_stage_<stage>` function book.
+_STAGE_NAMES = {
+    "storyboard": "Storyboard", "spine": "Spine", "locations": "Locations",
+    "characters": "Characters", "wardrobe": "Wardrobe", "base_image": "Base image",
+    "emotion": "Emotion", "workshop": "Workshop", "sim_director": "Sim director",
+    "sim_actor": "Sim actor",
+}
+
+
+def seed_stage_lorebooks(root: Path) -> None:
+    """Make pipeline STAGES resolve through the unified lorebook→preset path, matching every
+    other function. For each stage, ensure a behavior-matched stage PRESET (model from
+    story_builder.json, system from the pipeline's DEFAULT_SYSTEMS where it has one — else
+    empty, so the caller's own system stands) and a `_stage_<stage>` FUNCTION book bound to
+    it (carrying a `{kind:"stage", fn}` entry). Idempotent: only fills what's missing, so user
+    edits/deletions are never clobbered. Behavior is identical to the legacy story_builder.json
+    path — this just routes it through presets so stages are editable + runnable anywhere."""
+    from .config_files import load_story_builder
+    from . import lorebook_store as _LS
+    from ...config.schema import LoreEntry
+    try:
+        from ...stories.pipeline._helpers import DEFAULT_SYSTEMS
+    except Exception:  # noqa: BLE001
+        DEFAULT_SYSTEMS = {}
+
+    models = load_story_builder(root).get("models") or {}
+    lib = load_presets(root)
+    have = {p["id"] for p in lib["presets"]}
+    added = False
+    for stage in _STAGE_NAMES:
+        pid = f"stage_{stage}"
+        if pid not in have:
+            lib["presets"].append(_clean_preset({
+                "id": pid, "name": _STAGE_NAMES[stage], "group": "Pipeline stages",
+                "mode": "assist", "model": models.get(stage, "") or "",
+                "system": DEFAULT_SYSTEMS.get(stage, "") or "",
+            }))
+            added = True
+    if added:
+        save_presets(root, lib)
+
+    for stage in _STAGE_NAMES:
+        bid = stage_book_id(stage)
+        if not _LS.get_book(root, bid):
+            _LS.upsert_book(root, bid, name=f"Stage · {_STAGE_NAMES[stage]}",
+                            category="function", rating="sfw", scope="local",
+                            preset=f"stage_{stage}")
+        if not any(e.id == stage for e in _LS.load_lorebook(root, bid)):
+            spec = json.dumps({"kind": "stage", "fn": stage, "describe": _STAGE_NAMES[stage]},
+                              ensure_ascii=False)
+            _LS.upsert_entry(root, bid, LoreEntry(id=stage, title=_STAGE_NAMES[stage],
+                                                  content=spec, facet="stage"))
+
+
+def stage_preset(root: Path, stage: str) -> tuple[dict | None, dict | None]:
+    """Resolve a pipeline STAGE → (preset_dict, stage_spec) via the STAGE LOREBOOK that
+    declares it. A stage lorebook is a `function` book holding a `{kind:"stage", fn:<stage>}`
+    entry and bound to a preset (book.preset). Fast path: the conventional `_stage_<stage>`
+    book; fallback: scan function books for the declaring entry. Returns (None, None) when no
+    stage lorebook exists — the caller then falls back to story_builder.json."""
+    from . import lorebook_store as _LS
+    from ...stories.graph_ops import stage_spec as _stage_spec
+    if not stage:
+        return None, None
+
+    def _from_book(meta) -> tuple[dict | None, dict | None] | None:
+        for e in _LS.load_lorebook(root, meta["id"]):
+            spec = _stage_spec(getattr(e, "content", "") or "")
+            if spec and str(spec.get("fn") or "").strip() == stage:
+                return (get_preset(root, meta.get("preset")) if meta.get("preset") else None), spec
+        return None
+
+    fast = _LS.get_book(root, stage_book_id(stage))
+    if fast:
+        hit = _from_book(fast)
+        if hit is not None:
+            return hit
+    for meta in _LS.list_books(root):
+        if meta.get("category") != "function" or meta["id"] == stage_book_id(stage):
+            continue
+        hit = _from_book(meta)
+        if hit is not None:
+            return hit
+    return None, None

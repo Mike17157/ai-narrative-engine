@@ -70,12 +70,15 @@ def parse_functions(entries: list) -> list[GraphFunction]:
 
 
 def is_function_entry(entry) -> bool:
-    """True if this lore entry is a graph function (vs a plain data entry). Used to keep
-    function specs OUT of the data-lore injection — they're functions, not world facts."""
+    """True if this lore entry is a FUNCTION (a graph-op function OR a pipeline-stage
+    function), vs a plain data entry. Used to keep function specs OUT of the data-lore
+    injection — they're behaviors, not world facts."""
     return _parse_spec(getattr(entry, "content", "") or "") is not None
 
 
 def _parse_spec(content: str) -> dict | None:
+    """A function spec is a JSON object that either carries graph `ops` OR declares
+    `kind:"stage"` (a pipeline-stage function — see stage_spec)."""
     content = content.strip()
     if not content.startswith("{"):
         return None
@@ -83,7 +86,45 @@ def _parse_spec(content: str) -> dict | None:
         spec = json.loads(content)
     except (ValueError, TypeError):
         return None
-    return spec if isinstance(spec, dict) and "ops" in spec else None
+    if not isinstance(spec, dict):
+        return None
+    return spec if ("ops" in spec or spec.get("kind") == "stage") else None
+
+
+# ── Stage functions (pipeline behavior expressed as lore) ────────────────────────
+# A STAGE function is a lorebook entry whose content is `{kind:"stage", fn, schema?,
+# image_workflow?}`. It names a pipeline stage (storyboard/characters/wardrobe/…); the
+# stage's MODEL + SYSTEM come from the book's bound preset (Function→Lorebook→Preset).
+# Unlike graph-op functions these are resolved by NAME (linear pipeline), not keyword-
+# triggered. The output schema stays in code (structural); the spec only names which one.
+
+@dataclass
+class StageFunction:
+    fn: str                       # the stage id (e.g. "characters")
+    describe: str = ""
+    schema: str = ""              # names a code-side output schema (optional)
+    image_workflow: str = ""      # for stages that render (optional)
+
+
+def stage_spec(content: str) -> dict | None:
+    """The stage spec of an entry's content, or None if it isn't a stage function."""
+    spec = _parse_spec(content)
+    if spec and spec.get("kind") == "stage" and str(spec.get("fn") or "").strip():
+        return spec
+    return None
+
+
+def parse_stage_function(entry) -> StageFunction | None:
+    """Turn a stage-shaped lore entry into a StageFunction (or None)."""
+    spec = stage_spec(getattr(entry, "content", "") or "")
+    if spec is None:
+        return None
+    return StageFunction(
+        fn=str(spec["fn"]).strip(),
+        describe=str(spec.get("describe") or getattr(entry, "title", "") or "").strip(),
+        schema=str(spec.get("schema") or "").strip(),
+        image_workflow=str(spec.get("image_workflow") or "").strip(),
+    )
 
 
 # ── Trigger offering (transcript → which functions are available this turn) ──────

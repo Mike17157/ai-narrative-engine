@@ -35,11 +35,15 @@ class ProviderInfo(BaseModel):
 # pastes a key, no base URL to configure (base_url_editable=False). All are
 # OpenAI-compatible except Anthropic; "custom" is the escape hatch for any other
 # OpenAI-compatible endpoint, where the URL IS editable.
-def _t(id, label, url, editable=False):
-    return ProviderInfo(id=id, label=label, kind="text", default_base_url=url, base_url_editable=editable)
+def _t(id, label, url, editable=False, needs_key=True):
+    return ProviderInfo(id=id, label=label, kind="text", default_base_url=url,
+                        base_url_editable=editable, needs_key=needs_key)
 
 
 PROVIDERS: dict[str, ProviderInfo] = {
+    # Ollama — local OpenAI-compatible server (no key). Base URL editable so a remote/LAN
+    # Ollama works too. Lists whatever models are pulled; pick any from the model picker.
+    "ollama": _t("ollama", "Ollama (local)", "http://127.0.0.1:11434/v1", editable=True, needs_key=False),
     "openai": _t("openai", "OpenAI", "https://api.openai.com/v1"),
     "anthropic": _t("anthropic", "Anthropic (Claude)", "https://api.anthropic.com"),
     "google": _t("google", "Google AI Studio (Gemini)", "https://generativelanguage.googleapis.com/v1beta/openai"),
@@ -82,10 +86,11 @@ def test_connection(provider: str, api_key: str, base_url: str | None = None) ->
     if info is None:
         raise RuntimeError(f"unknown provider '{provider}'")
     base = (base_url or info.default_base_url).rstrip("/")
-    if not api_key:
+    if info.needs_key and not api_key:
         raise RuntimeError("API key is required")
 
-    bearer = {"Authorization": f"Bearer {api_key}"}
+    # Keyless providers (Ollama) call /models with no Authorization header.
+    bearer = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         if provider == "anthropic":
             r = httpx.get(f"{base}/v1/models",
@@ -145,7 +150,14 @@ class Connection(BaseModel):
         return d
 
     def to_model_options(self) -> dict[str, Any]:
-        return {"model": self.model, "api_key": self.api_key, "base_url": self.base_url}
+        opts: dict[str, Any] = {"model": self.model, "api_key": self.api_key, "base_url": self.base_url}
+        if self.provider == "ollama":
+            # Local Ollama needs no key (any bearer is accepted), and a reasoning-capable
+            # model returns EMPTY `content` over /v1 while thinking — "none" disables the
+            # channel. A config's params can still override reasoning_effort.
+            opts["api_key"] = self.api_key or "ollama"
+            opts["reasoning_effort"] = "none"
+        return opts
 
 
 class ConnectionStore:
@@ -164,6 +176,18 @@ class ConnectionStore:
         self._active: dict[str, str | None] = {k: None for k in self.KINDS}
         self._conns: dict[str, Connection] = {}
         self._load()
+        self._ensure_local_connection()
+
+    def _ensure_local_connection(self) -> None:
+        """Always offer a local Ollama provider so "run local" is a selectable option
+        everywhere (preset editor + every point-of-use ⚙ modal) with no manual setup.
+        Idempotent, and never changes the active selection — it's just an available choice."""
+        if any(c.provider == "ollama" for c in self._conns.values()):
+            return
+        self._conns["ollama-local"] = Connection(
+            id="ollama-local", kind="text", provider="ollama",
+            base_url="http://127.0.0.1:11434/v1", api_key="", model=None)
+        self._save()
 
     def _load(self) -> None:
         if not self.path.is_file():

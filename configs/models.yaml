@@ -115,3 +115,21 @@ models:
         positive: { node: "4", field: "positive_prompt" }
       output_node: "8"          # SaveImage
       timeout_s: 600
+
+  # --------------------------------------------------------------------------- #
+  # Wan I2V 14B — the heavy image-to-video MoE, RunPod-only (won't fit the local
+  # 12 GB card). provider:comfyui, but flagged in configs/runpod_models.json so the
+  # per-workflow toggle routes it to the serverless endpoint. 2-expert MoE: HIGH
+  # (Snatch Kiss v11) then LOW (Kijai A14B) via a step-split; init image →
+  # WanVideoImageToVideoEncode; output mp4 via VHS_VideoCombine (node 12).
+  # --------------------------------------------------------------------------- #
+  wan_i2v:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/wan_i2v_14b_api.json
+      inputs:
+        positive: { node: "7", field: "positive_prompt" }
+      output_node: "12"         # VHS_VideoCombine (mp4)
+      timeout_s: 900

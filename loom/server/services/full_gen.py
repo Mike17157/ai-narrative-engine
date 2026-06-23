@@ -38,7 +38,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     from loom.stories.pipeline import compose_base_prompt
     from loom.server.services import config_files
     _bp_cfg = ctx.load_story_builder()
-    _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+    _bp_prov = ctx.stage_provider("base_image")
     comp = compose_base_prompt(_bp_prov, ch.name, persona, fields.get("appearance", ""),
                                fields.get("role", ""), systems=(_bp_cfg.get("systems") or {}))
     base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
@@ -81,7 +81,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     emit({"type": "phase", "label": "Composing expressions + poses"})
     from loom.stories.pipeline import compose_expressions, compose_poses, compose_outfit_prompt
     _w_cfg = ctx.load_story_builder()
-    _w_prov = ctx.author_provider(config_files._stage_model(_w_cfg, "wardrobe"))
+    _w_prov = ctx.stage_provider("wardrobe")
     exprs = compose_expressions(_w_prov, persona)
     poses = compose_poses(_w_prov, persona, ctx.load_pose_library())
 

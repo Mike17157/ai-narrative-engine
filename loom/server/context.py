@@ -228,29 +228,16 @@ class AppContext:
         return output_prefix(self.workflow_family(model_id), role, character)
 
     def text_provider_for(self, model_sel: str | None, params: dict | None = None,
-                          connection: str | None = None, local: bool = False):
-        """Build a text provider for a model selection: a registered model key, or an
-        OpenRouter (etc.) model id run through a connection. `connection` (a preset's bound
-        connection id) is used when given — so different presets can target different
-        providers; otherwise the active text connection. `params` (temperature/top_p/…) are
-        merged into the provider options.
-
-        `local=True` ignores the connection/model entirely and routes to the local GGUF
-        endpoint (configs/app.json → local_model, served by llama-server) — the per-preset
-        OpenRouter ⇄ local toggle."""
+                          connection: str | None = None):
+        """Build a text provider for a model selection: a registered model key, or a model id
+        run through a connection. `connection` (a preset's bound connection id) is used when
+        given — so different presets can target different providers (including the local Ollama
+        connection); otherwise the active text connection. `params` (temperature/top_p/…) are
+        merged into the provider options. Local inference is just an Ollama connection now (its
+        keyless + no-think quirks ride along via Connection.to_model_options)."""
         from ..providers.registry import build_provider
 
         params = params or {}
-        if local:
-            lm = config_files.load_app_flags(self.root).get("local_model") or {}
-            base = (lm.get("base_url") or "").strip()
-            if not base:
-                return None
-            return build_provider(ModelDef(
-                provider="openai", kind="text",
-                options={"model": lm.get("model") or "local", "api_key": "sk-noop",
-                         "base_url": base, **params},
-            ))
         s = self.effective_settings()
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
             md = s.models[model_sel]
@@ -259,11 +246,11 @@ class AppContext:
             return build_provider(md)
         conn = (self.store.get(connection) if connection else None) or self.store.active("text")
         if conn:
-            return build_provider(ModelDef(
-                provider=conn.provider, kind="text",
-                options={"model": model_sel or conn.model, "api_key": conn.api_key,
-                         "base_url": conn.base_url, **params},
-            ))
+            opts = conn.to_model_options()          # carries provider quirks (e.g. Ollama keyless + no-think)
+            if model_sel:
+                opts["model"] = model_sel
+            opts.update(params)                     # a config's params win (incl. reasoning_effort)
+            return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
         return None
 
     def ip_provider(self):
@@ -276,11 +263,15 @@ class AppContext:
             return None
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=conn.to_model_options()))
 
-    def image_provider(self, model_id: str | None = None, output_variant: str | None = None):
-        """A ComfyUIProvider for an image model — an explicit workflow id if given,
-        else the active image connection (honouring its base_url override), plus
-        the resolved model id. (provider, id) or (None, error_message).
-        output_variant ('full'|'cutout') overrides whatever the model definition says."""
+    def image_provider(self, model_id: str | None = None, output_variant: str | None = None,
+                       provider_override: str | None = None):
+        """A provider for an image WORKFLOW — an explicit workflow id if given, else the active
+        image connection, plus the resolved model id. (provider, id) or (None, error_message).
+        output_variant ('full'|'cutout') overrides whatever the model definition says.
+
+        `provider_override` picks where the workflow runs (a preset's `image_provider`):
+          'cloud' → force RunPod serverless · 'local' → force local ComfyUI ·
+          '' / None → the global default (configs/runpod_models.json flags it per workflow)."""
         from ..providers.comfyui_provider import ComfyUIProvider
 
         conn = self.store.active("image")
@@ -289,12 +280,30 @@ class AppContext:
         if md is None or md.kind != "image":
             return None, "no image model selected — pick one in ⚙ Models → Image model"
         opts = dict(md.options)
-        if conn and conn.base_url:
-            opts["base_url"] = conn.base_url
         if output_variant:
             opts["output_variant"] = output_variant
+
+        # Where does this workflow run? Explicit override wins; otherwise the per-workflow
+        # global default (runpod_models.json). 'cloud' needs the serverless endpoint + key.
+        rp = self.runpod_config
+        want_cloud = (provider_override == "cloud") or \
+            (provider_override in (None, "") and model_id in self.runpod_models())
+        if want_cloud and rp.get("api_key") and rp.get("serverless_endpoint_id"):
+            from ..providers.runpod_serverless_provider import RunPodServerlessProvider
+            ropts = dict(opts)
+            ropts["endpoint_id"] = rp["serverless_endpoint_id"]
+            ropts["api_key"] = rp["api_key"]
+            return RunPodServerlessProvider(ropts), model_id
+
+        if conn and conn.base_url:
+            opts["base_url"] = conn.base_url
         opts["flags"] = {**opts.get("flags", {}), **self.image_flags()}
         return ComfyUIProvider(opts), model_id
+
+    def runpod_models(self) -> set[str]:
+        """Image-model keys flagged to run on RunPod serverless (configs/runpod_models.json)."""
+        from .services import config_files as _cf
+        return set(_cf.load_runpod_models(self.root))
 
     def image_flags(self) -> dict:
         """Global pipeline toggles for renders (configs/app.json) → the workflow's switch
@@ -326,15 +335,46 @@ class AppContext:
 
     def role_image_provider(self, role: str, override: str | None = None,
                             image_preset: str | None = None):
-        """Convenience: resolve role → (model_key + output_variant) → ComfyUIProvider.
+        """Convenience: resolve role → (model_key + output_variant) → image provider.
         When override is set the caller chose a model explicitly — skip role extra opts.
         The active (or per-render `image_preset`) LoRA stack is injected before return — the
-        single chokepoint every normal render path funnels through."""
+        single chokepoint every normal render path funnels through.
+
+        Chat-surface roles ('chat'/'scene') take the ACTIVE preset's image WORKFLOW + provider
+        (local/cloud) + look — the unified preset bundles them. Pipeline roles (base/sprite/
+        style) keep using image_roles.json. Backward-compatible: a preset with no
+        image_workflow falls straight through to the legacy role resolution."""
+        prov_override = ""
+        if not override and role in ("chat", "scene"):
+            from .services import presets as _P
+            ap = _P.active_preset(self.root)
+            if (ap.get("image_workflow") or "") in self.base_settings.models:
+                override = ap["image_workflow"]
+                prov_override = ap.get("image_provider") or ""
+                if image_preset is None and ap.get("image_preset"):
+                    image_preset = ap["image_preset"]
         model_id = self.role_model(role, override)
         variant = None if override else self.role_extra_opts(role).get("output_variant")
-        provider, mid = self.image_provider(model_id, output_variant=variant)
+        provider, mid = self.image_provider(model_id, output_variant=variant,
+                                            provider_override=prov_override)
         if provider is not None:
             self._apply_image_preset(provider, image_preset)
+        return provider, mid
+
+    def preset_image_provider(self, preset: dict | None, override: str | None = None,
+                              output_variant: str | None = None):
+        """The unified image entry: a PRESET's image workflow + provider (local/cloud) + look.
+        `preset.image_workflow` is the workflow (override wins); `preset.image_provider` routes
+        local⇄cloud; `preset.image_preset` is the LoRA stack. Falls back to the active image
+        connection when the preset names no workflow. The single chokepoint, same as
+        role_image_provider, so the LoRA look is always injected."""
+        preset = preset or {}
+        workflow = override or (preset.get("image_workflow") or None)
+        provider, mid = self.image_provider(
+            workflow, output_variant=output_variant,
+            provider_override=preset.get("image_provider") or "")
+        if provider is not None:
+            self._apply_image_preset(provider, preset.get("image_preset") or None)
         return provider, mid
 
     def _apply_image_preset(self, provider, preset_id: str | None) -> None:
@@ -399,16 +439,54 @@ class AppContext:
             opts["model"] = model_sel
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
 
-    def builder_ctx(self, body: dict, stage: str | None = None):
-        """(provider, systems) for a builder step, or (None, err).
-        Each stage carries its own model + inference params (from its script config)."""
+    def stage_provider(self, stage: str | None, model_override: str | None = None,
+                       max_tokens: int = 4096):
+        """The ONE model-resolution chokepoint for a pipeline stage. A STAGE LOREBOOK bound
+        to a PRESET supplies the stage's model + connection + params (so any stage can run
+        local Ollama, etc., like every chat surface). Falls back to the legacy
+        configs/story_builder.json per-stage model. An explicit `model_override` wins.
+        Returns a text provider (or None)."""
+        from .services import presets as _presets
+        if stage and not model_override:
+            preset, _spec = _presets.stage_preset(self.root, stage)
+            if preset:
+                params = {"max_tokens": max_tokens, **(preset.get("params") or {})}
+                prov = self.text_provider_for(
+                    preset.get("model") or None, params,
+                    connection=preset.get("connection") or None)
+                if prov is not None and hasattr(prov, "generate_text"):
+                    return prov
+                # preset present but unbuildable → fall through to the legacy config
         cfg = self.load_story_builder()
-        provider = self.author_provider(
-            config_files._stage_model(cfg, stage, (body or {}).get("model")),
+        return self.author_provider(
+            config_files._stage_model(cfg, stage, model_override),
             config_files.stage_params(cfg, stage))
+
+    def stage_system(self, stage: str | None) -> str | None:
+        """The stage's SYSTEM prompt from its bound preset (stage lorebook → preset), or None
+        to defer to the caller's default / story_builder.json systems."""
+        if not stage:
+            return None
+        from .services import presets as _presets
+        preset, _spec = _presets.stage_preset(self.root, stage)
+        return (preset or {}).get("system") or None
+
+    def builder_ctx(self, body: dict, stage: str | None = None):
+        """(provider, systems) for a builder step, or (None, err). The stage's model +
+        connection + params + system resolve through the unified stage chokepoint (a stage
+        lorebook bound to a preset), falling back to configs/story_builder.json. An explicit
+        per-request `body.model` override still wins."""
+        cfg = self.load_story_builder()
+        systems = dict(cfg.get("systems") or {})
+        model_override = (body or {}).get("model")
+        if not model_override:
+            sys_override = self.stage_system(stage)
+            if sys_override:
+                systems[stage] = sys_override
+        provider = self.stage_provider(stage, model_override)
         if provider is None or not hasattr(provider, "generate_text"):
             return None, "no chat connection — connect a chat model first"
-        return provider, (cfg.get("systems") or {})
+        return provider, systems
 
     # A thin seed → a thorough, disciplined-prose character sheet. The single "flesh thin→rich" front
     # door that feeds every downstream parser (appearance / pose / expression → tags).

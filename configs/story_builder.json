@@ -12,6 +12,7 @@
     "base_image": "anthropic/claude-sonnet-4-5",
     "emotion": "anthropic/claude-haiku-4-5"
   },
+  "systems": {},
   "inventions": {
     "spine": "inventive",
     "storyboard": "inventive",
@@ -21,5 +22,5 @@
     "base_image": "balanced",
     "emotion": "none"
   },
-  "systems": {}
+  "params": {}
 }

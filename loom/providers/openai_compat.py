@@ -58,6 +58,10 @@ class OpenAICompatProvider:
         effort = options.get("reasoning_effort")
         if effort in ("low", "medium", "high"):
             self.sampling["reasoning"] = {"effort": effort}
+        elif effort in ("none", "minimal"):
+            # OpenAI-style top-level field; Ollama uses this to DISABLE the thinking channel
+            # on reasoning models (without it a thinking model returns empty `content` over /v1).
+            self.sampling["reasoning_effort"] = effort
 
     def _err(self, resp) -> str:
         """Surface the provider's real error body, not a bare 'HTTP 404'."""

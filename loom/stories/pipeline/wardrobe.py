@@ -286,9 +286,7 @@ def apply_manifest(ctx, key: str, body: dict, *, provider=None,
         if provider is not None:
             return provider
         try:
-            from loom.server.services import config_files
-            cfg = ctx.load_story_builder()
-            return ctx.author_provider(config_files._stage_model(cfg, stage))
+            return ctx.stage_provider(stage)
         except Exception:  # noqa: BLE001
             return None
 

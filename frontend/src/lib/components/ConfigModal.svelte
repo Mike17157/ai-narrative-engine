@@ -6,7 +6,7 @@
   // the root layout; driven by the configModal store.
   import { onMount } from 'svelte';
   import { get, post, put } from '$lib/api.js';
-  import { refreshAll } from '$lib/app.svelte.js';
+  import { app, refreshAll } from '$lib/app.svelte.js';
   import { configModal, closeConfigModal } from '$lib/configModal.svelte.js';
   import Combobox from '$lib/components/shared/Combobox.svelte';
   import LorebookPicker from '$lib/components/shared/LorebookPicker.svelte';
@@ -59,6 +59,53 @@
   async function activatePreset(id) {
     const r = await post(`/presets/${id}/activate`);
     if (r.data?.active) presetLib = { ...presetLib, active: r.data.active };
+  }
+
+  // ── Provider/model toggle for the active preset (point-of-use) ──
+  // The active preset drives this surface's model. Surface a Provider (connection) + Model
+  // picker right here so you can flip between cloud and local without leaving the chat.
+  // Local = the Ollama connection (auto-seeded server-side, always present).
+  let activePreset = $derived(presetLib.presets.find((p) => p.id === presetLib.active)
+    || scopedPresets.find((p) => p.id === presetLib.active) || scopedPresets[0] || null);
+  let textConns = $derived((app.conns?.connections || []).filter((c) => c.kind === 'text'));
+  const connLabel = (c) => c.provider === 'ollama'
+    ? `${c.id} · local` : `${c.id} · ${c.provider}`;
+  let connItems = $derived([{ value: '', label: 'Active text connection' },
+    ...textConns.map((c) => ({ value: c.id, label: connLabel(c) }))]);
+  let providerValue = $derived(activePreset?.connection || '');
+
+  // Models available on the active preset's chosen connection.
+  let connModels = $state([]);
+  let connModelsFor = null;
+  let connModelItems = $derived(connModels.map((m) => ({ value: m.id, label: m.name || m.id })));
+  $effect(() => {
+    const cid = providerValue || null;
+    if (cid === connModelsFor) return;
+    connModelsFor = cid;
+    loadPresetModels(cid);
+  });
+  async function loadPresetModels(cid) {
+    try {
+      connModels = cid
+        ? (await post(`/connections/${encodeURIComponent(cid)}/test`)).data?.models || []
+        : (await get('/text-models')).models || [];
+    } catch { connModels = []; }
+  }
+
+  async function savePreset(p) {
+    const r = await post('/presets', $state.snapshot(p));
+    if (r.data?.presets) presetLib = { ...presetLib, presets: r.data.presets };
+  }
+  function pickProvider(v) {
+    if (!activePreset) return;
+    activePreset.connection = v;
+    activePreset.model = '';        // model belongs to the connection; reset on switch
+    savePreset(activePreset);
+  }
+  function pickPresetModel(v) {
+    if (!activePreset) return;
+    activePreset.model = v;
+    savePreset(activePreset);
   }
 
   // ── Image preset (the global-default LoRA-stack "look" applied to all image generation) ──
@@ -161,6 +208,22 @@
                   </div>
                 {/each}
               {/if}
+            </section>
+          {/if}
+
+          <!-- Provider/model toggle for the active preset — flip cloud ⇄ local here. -->
+          {#if activePreset}
+            <section class="card presetpick">
+              <div class="pphead"><h4>Model</h4><a class="liblink" href="/library/presets" onclick={closeConfigModal}>Edit in Library →</a></div>
+              <p class="hint">Provider &amp; model for <b>{activePreset.name}</b>. Pick a <b>· local</b> connection (Ollama) to run on your machine instead of the cloud.</p>
+              <div class="erow">
+                <label>Provider</label>
+                <Combobox items={connItems} value={providerValue} placeholder="Active text connection" onpick={pickProvider} />
+              </div>
+              <div class="erow">
+                <label>Model</label>
+                <Combobox items={connModelItems} value={activePreset.model || ''} placeholder={connModelItems.length ? 'Connection default' : 'connect to list models'} onpick={pickPresetModel} />
+              </div>
             </section>
           {/if}
 

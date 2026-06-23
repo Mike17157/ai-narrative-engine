@@ -116,7 +116,7 @@ def register(app, ctx):
             from loom.stories.pipeline import compose_poses as _compose_poses
             from ..services import config_files as _cfiles
             _w_cfg = ctx.load_story_builder()
-            _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe"))
+            _w_prov = ctx.stage_provider("wardrobe")
             pp = _compose_poses(_w_prov, _persona_text(c), ctx.load_pose_library())
         else:
             emo = (body.get("emotion") or "").strip()
@@ -516,8 +516,7 @@ def register(app, ctx):
             from ..services import config_files as _cfiles
             nsfw = bool(body.get("nsfw"))
             _emo_cfg = ctx.load_story_builder()
-            _emo_prov = ctx.author_provider(_cfiles._stage_model(_emo_cfg, "emotion",
-                                                                  body.get("model")))
+            _emo_prov = ctx.stage_provider("emotion", body.get("model"))
             affect = _compose_affect_range(_emo_prov, _persona_text(c), nsfw=nsfw,
                                            systems=(_emo_cfg.get("systems") or {}))
             if not (isinstance(affect, dict) and affect.get("range")):
@@ -755,8 +754,7 @@ def register(app, ctx):
         from loom.stories.pipeline import compose_outfit_prompt as _compose_outfit_prompt
         from ..services import config_files as _cfiles
         _w_cfg = ctx.load_story_builder()
-        _w_prov = ctx.author_provider(_cfiles._stage_model(_w_cfg, "wardrobe",
-                                                            (body or {}).get("model")))
+        _w_prov = ctx.stage_provider("wardrobe", (body or {}).get("model"))
         r = _compose_outfit_prompt(
             _w_prov, ch.system or "", (ch.fields or {}).get("appearance", ""),
             outfit.get("name", ""), brief_concept)
@@ -857,8 +855,7 @@ def register(app, ctx):
         from loom.stories.pipeline import compose_base_prompt as _compose_base_prompt
         from ..services import config_files as _cfiles
         _bp_cfg = ctx.load_story_builder()
-        _bp_prov = ctx.author_provider(_cfiles._stage_model(_bp_cfg, "base_image",
-                                                             (body or {}).get("model")))
+        _bp_prov = ctx.stage_provider("base_image", (body or {}).get("model"))
         out = await run_in_threadpool(lambda: _compose_base_prompt(
             _bp_prov, ch.name, ch.system or "", fields.get("appearance", ""),
             fields.get("role", ""), systems=(_bp_cfg.get("systems") or {})))

@@ -1,15 +1,10 @@
-"""Main chat — the standalone roleplay surface and its reusable *chat configs*.
+"""Main chat — the standalone roleplay surface.
 
-A chat config bundles a text model + system prompt + default lorebooks + creativity
-level. One is active at a time and the chat reads it as its default; the ⚙ config
-modal (used at every chat surface) edits this library at the point of use rather than
-on a settings page.
+The chat turn is driven by a PRESET (the unified primitive: chat model + image workflow
++ lorebooks), resolved Function→Lorebook→Preset or the active preset. The old parallel
+chat_configs/SCRIPTS library was retired in the preset-unification overhaul.
 
-  GET    /api/chat-configs              → { active, configs:[...] }
-  POST   /api/chat-configs              → upsert one config (by id) → full library
-  DELETE /api/chat-configs/{id}         → delete a config (never the last one)
-  POST   /api/chat-configs/{id}/activate→ make a config active
-  POST   /api/chat                      → STREAM the next chat turn (SSE: delta + done)
+  POST   /api/chat   → STREAM the next chat turn (SSE: delta + done)
 """
 from __future__ import annotations
 
@@ -101,13 +96,6 @@ def _compose_system(ctx, cfg: dict, character: str | None, persona: dict | None,
 
 
 def register(app, ctx):
-    # ── chat configs ─────────────────────────────────────────────────────────
-    @app.get("/api/chat-scripts")
-    def get_chat_scripts() -> dict:
-        """The built-in pipeline scripts a config can bind to (story-builder stages,
-        prompt configs, image roles) — drives the modal's Script picker."""
-        return {"scripts": _cf.SCRIPTS}
-
     # ── app-wide flags (global content gate, etc.) ───────────────────────────
     @app.get("/api/app-flags")
     def get_app_flags() -> dict:
@@ -116,46 +104,6 @@ def register(app, ctx):
     @app.put("/api/app-flags")
     def put_app_flags(body: dict):
         return {"ok": True, **_cf.save_app_flags(ctx.root, body or {})}
-
-    @app.get("/api/chat-configs")
-    def get_chat_configs() -> dict:
-        return _cf.load_chat_configs(ctx.root)
-
-    @app.post("/api/chat-configs")
-    def upsert_chat_config(body: dict):
-        """Create or update one config (matched by `id`). A blank/absent id mints a new one."""
-        body = body or {}
-        lib = _cf.load_chat_configs(ctx.root)
-        cid = (body.get("id") or "").strip()
-        if not cid:
-            existing = {c["id"] for c in lib["configs"]}
-            base, n, cid = "config", 2, "config"
-            while cid in existing:
-                cid, n = f"{base}-{n}", n + 1
-        body["id"] = cid
-        clean = _cf._clean_chat_config(body)
-        configs = [c for c in lib["configs"] if c["id"] != cid]
-        configs.append(clean)
-        out = _cf.save_chat_configs(ctx.root, {"active": lib["active"], "configs": configs})
-        return {"ok": True, **out, "id": cid}
-
-    @app.delete("/api/chat-configs/{config_id}")
-    def delete_chat_config(config_id: str):
-        lib = _cf.load_chat_configs(ctx.root)
-        if len(lib["configs"]) <= 1:
-            return JSONResponse({"error": "can't delete the last config"}, status_code=400)
-        configs = [c for c in lib["configs"] if c["id"] != config_id]
-        active = lib["active"] if lib["active"] != config_id else configs[0]["id"]
-        out = _cf.save_chat_configs(ctx.root, {"active": active, "configs": configs})
-        return {"ok": True, **out}
-
-    @app.post("/api/chat-configs/{config_id}/activate")
-    def activate_chat_config(config_id: str):
-        lib = _cf.load_chat_configs(ctx.root)
-        if config_id not in {c["id"] for c in lib["configs"]}:
-            return JSONResponse({"error": "no such config"}, status_code=404)
-        out = _cf.save_chat_configs(ctx.root, {"active": config_id, "configs": lib["configs"]})
-        return {"ok": True, **out}
 
     # ── the chat turn ────────────────────────────────────────────────────────
     @app.post("/api/chat")
@@ -186,7 +134,7 @@ def register(app, ctx):
         cfg = {"id": "preset:" + preset["id"], "name": preset.get("name", ""),
                "system": preset.get("system", ""), "params": preset.get("params") or {},
                "mode": preset.get("mode", ""), "model": preset.get("model", ""),
-               "connection": preset.get("connection", ""), "local": preset.get("local", False),
+               "connection": preset.get("connection", ""),
                "author_note": preset.get("author_note", ""), "author_depth": preset.get("author_depth", 4),
                "post_history": preset.get("post_history", ""), "stop": preset.get("stop") or [],
                "reasoning_effort": preset.get("reasoning_effort", ""),
@@ -198,13 +146,9 @@ def register(app, ctx):
             opts["stop"] = cfg["stop"]
         if cfg.get("reasoning_effort"):
             opts["reasoning_effort"] = cfg["reasoning_effort"]
-        provider = ctx.text_provider_for(model if not cfg.get("local") else None, opts,
-                                         connection=cfg.get("connection") or None,
-                                         local=bool(cfg.get("local")))
+        provider = ctx.text_provider_for(model, opts, connection=cfg.get("connection") or None)
         if provider is None or not hasattr(provider, "generate_text"):
-            err = ("local model endpoint not set — configure it in Settings → System"
-                   if cfg.get("local") else "no chat connection — connect a chat model first")
-            return JSONResponse({"error": err}, status_code=400)
+            return JSONResponse({"error": "no chat connection — connect a chat model first"}, status_code=400)
 
         history = [m for m in (body.get("history") or []) if isinstance(m, dict)]
         lorebooks = body.get("lorebooks")

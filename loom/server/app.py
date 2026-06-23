@@ -171,6 +171,14 @@ def create_app(root: str | Path = ".") -> FastAPI:
     except Exception:  # noqa: BLE001 — never block startup on seeding
         pass
 
+    # Fold the pipeline stages into the unified lorebook→preset model (behavior-matched stage
+    # presets bound to _stage_<stage> function books). Idempotent; never clobbers user edits.
+    try:
+        from .services import presets as _presets_seed
+        _presets_seed.seed_stage_lorebooks(root)
+    except Exception:  # noqa: BLE001 — never block startup on seeding
+        pass
+
     # Embed any lorebook entries that lack a semantic vector (seeded/imported/legacy), in
     # the background so the first request isn't blocked by model load. No-op without an embedder.
     try:

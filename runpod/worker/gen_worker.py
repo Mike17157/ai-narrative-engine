@@ -82,6 +82,8 @@ CORE_NODES = {
     "SamplerCustomAdvanced", "BasicScheduler", "BasicGuider", "RandomNoise", "KSamplerSelect",
     "Mahiro", "RescaleCFG", "ImageCrop", "ImageInvert", "ImageBlend", "JoinImageWithAlpha",
     "SplitImageWithAlpha", "VAEEncodeTiled", "VAEDecodeTiled",
+    # FLUX.2 core nodes (current ComfyUI master).
+    "EmptyFlux2LatentImage", "Flux2Scheduler",
 }
 
 # Curated custom-node class -> (repo_url, friendly_name). Prefixes ending in '*'
@@ -158,6 +160,15 @@ NODE_REPO: dict[str, tuple[str, str]] = {
     "DCWModelPatch": ("https://github.com/namemechan/ComfyUI-DCW.git", "DCW"),
     # ComfyUI_UltimateSDUpscale
     "UltimateSDUpscale": ("https://github.com/ssitu/ComfyUI_UltimateSDUpscale.git", "UltimateSDUpscale"),
+    # ComfyUI-WanVideoWrapper (Wan 2.x video models) — every WanVideo* class + the T5 loader.
+    "WanVideo*": ("https://github.com/kijai/ComfyUI-WanVideoWrapper.git", "WanVideoWrapper"),
+    "LoadWanVideoT5TextEncoder": ("https://github.com/kijai/ComfyUI-WanVideoWrapper.git", "WanVideoWrapper"),
+    # ComfyUI-VideoHelperSuite — mp4/webm muxing for video output.
+    "VHS_VideoCombine": ("https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git", "VideoHelperSuite"),
+    # ComfyUI-GGUF — GGUF clip/unet loaders (the FLUX.2 klein q8 text encoder).
+    "CLIPLoaderGGUF": ("https://github.com/city96/ComfyUI-GGUF.git", "GGUF"),
+    "DualCLIPLoaderGGUF": ("https://github.com/city96/ComfyUI-GGUF.git", "GGUF"),
+    "UnetLoaderGGUF": ("https://github.com/city96/ComfyUI-GGUF.git", "GGUF"),
     # NOTE on intentionally-absent packs (left for --online / manual resolution):
     #  - Merge Strings v2 [RvTools] / Lora Stack to String [RvTools]: the
     #    rvage/ComfyUI-RvTools repo is deprecated/removed. These only feed the
@@ -200,6 +211,16 @@ LOADER_INPUTS: dict[tuple[str, str], str] = {
     # Impact-Pack / Impact-Subpack auxiliary loaders.
     ("SAMLoader", "model_name"): "sams",
     ("UltralyticsDetectorProvider", "model_name"): "ultralytics",
+    # WanVideoWrapper loaders use non-standard filename fields.
+    ("WanVideoModelLoader", "model"): "diffusion_models",
+    ("LoadWanVideoT5TextEncoder", "model_name"): "text_encoders",
+    ("WanVideoVAELoader", "model_name"): "vae",
+    ("WanVideoLoraSelect", "lora"): "loras",
+    # ComfyUI-GGUF loaders (FLUX.2 klein q8 text encoder).
+    ("CLIPLoaderGGUF", "clip_name"): "text_encoders",
+    ("DualCLIPLoaderGGUF", "clip_name1"): "text_encoders",
+    ("DualCLIPLoaderGGUF", "clip_name2"): "text_encoders",
+    ("UnetLoaderGGUF", "unet_name"): "diffusion_models",
 }
 MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf", ".sft")
 PLACEHOLDER = "REPLACE_WITH"

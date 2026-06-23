@@ -169,7 +169,7 @@ def register(app, ctx):
         from .simulation import design_cast
         body = body or {}
         cfg = ctx.load_story_builder()
-        prov = ctx.author_provider(config_files._stage_model(cfg, "characters"))
+        prov = ctx.stage_provider("characters")
         if prov is None:
             return JSONResponse({"error": "no character-design model configured"}, status_code=400)
         premise = (body.get("premise") or "").strip()
@@ -197,8 +197,8 @@ def register(app, ctx):
 
         body = body or {}
         cfg = ctx.load_story_builder()
-        director = ctx.author_provider(config_files._stage_model(cfg, "sim_director"))
-        actor = ctx.author_provider(config_files._stage_model(cfg, "sim_actor"))
+        director = ctx.stage_provider("sim_director")
+        actor = ctx.stage_provider("sim_actor")
         if director is None or actor is None:
             return JSONResponse({"error": "simulation models not configured (sim_director / sim_actor)"}, status_code=400)
         sim_state = body.get("sim_state") or {}
@@ -370,7 +370,7 @@ def register(app, ctx):
         systems = dict(saved)
         if body.get("system"):           # the unsaved edit for the target stage
             systems[stage] = body["system"]
-        t_prov = ctx.author_provider(body.get("model") or config_files._stage_model(cfg, stage))
+        t_prov = ctx.stage_provider(stage, body.get("model"))
         if t_prov is None:
             return JSONResponse({"error": "no author model configured"}, status_code=400)
         extras = ctx.card_extras(ch, body.get("character"))
@@ -378,7 +378,7 @@ def register(app, ctx):
 
         def gen_board(target: bool):
             sysd = systems if (target and stage == "storyboard") else saved
-            prov = t_prov if (target and stage == "storyboard") else ctx.author_provider(config_files._stage_model(cfg, "storyboard"))
+            prov = t_prov if (target and stage == "storyboard") else ctx.stage_provider("storyboard")
             s, p = B.storyboard_inputs(name=ch.name, persona=ch.system, extras=extras, systems=sysd)
             return B.parse_storyboard(prov.generate_text(system=s, prompt=p).text or "")
 
@@ -480,8 +480,8 @@ def register(app, ctx):
                                    compose_expressions as _compose_expressions,
                                    compose_affect_range as _compose_affect_range)
             _bp_cfg = ctx.load_story_builder()
-            _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
-            _emo_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "emotion"))
+            _bp_prov = ctx.stage_provider("base_image")
+            _emo_prov = ctx.stage_provider("emotion")
             _bp_sys = (_bp_cfg.get("systems") or {})
 
             def _enrich(item):
@@ -1831,7 +1831,7 @@ def register(app, ctx):
         from concurrent.futures import ThreadPoolExecutor
         from .pipeline import compose_base_prompt as _compose_base_prompt
         _bp_cfg = ctx.load_story_builder()
-        _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+        _bp_prov = ctx.stage_provider("base_image")
         _bp_sys = (_bp_cfg.get("systems") or {})
 
         def _bp(item):
@@ -2074,7 +2074,7 @@ def register(app, ctx):
 
             from .pipeline import compose_base_prompt as _compose_base_prompt
             _bp_cfg = ctx.load_story_builder()
-            _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+            _bp_prov = ctx.stage_provider("base_image")
             _bp_sys = (_bp_cfg.get("systems") or {})
 
             def _bp(item):
@@ -2633,7 +2633,7 @@ def register(app, ctx):
             emit({"type": "phase", "label": "Composing the base-image prompt"})
             from .pipeline import compose_base_prompt as _compose_base_prompt
             _bp_cfg = ctx.load_story_builder()
-            _bp_prov = ctx.author_provider(config_files._stage_model(_bp_cfg, "base_image"))
+            _bp_prov = ctx.stage_provider("base_image")
             comp = _compose_base_prompt(_bp_prov, revised["name"], revised["persona"],
                                         revised["appearance"], revised["role"],
                                         systems=(_bp_cfg.get("systems") or {}))
@@ -2698,7 +2698,7 @@ def register(app, ctx):
                     fresh_poses = _compose_poses(w_prov or provider, revised["persona"], ctx.load_pose_library())
                     emit({"type": "phase", "label": "Composing emotional expression range"})
                     _emo_cfg = ctx.load_story_builder()
-                    _emo_prov = ctx.author_provider(config_files._stage_model(_emo_cfg, "emotion"))
+                    _emo_prov = ctx.stage_provider("emotion")
                     fresh_affect = _compose_affect_range(_emo_prov, revised["persona"],
                                                         systems=(_emo_cfg.get("systems") or {}))
                     apply_body: dict = {"expressions": fresh_exprs, "poses": fresh_poses}
@@ -2742,7 +2742,7 @@ def register(app, ctx):
         if location is None:
             return JSONResponse({"error": "no such location"}, status_code=404)
         cfg = config_files.load_story_builder(ctx.root)
-        provider = ctx.author_provider(config_files._stage_model(cfg, "locations"))
+        provider = ctx.stage_provider("locations")
         if provider is None or not hasattr(provider, "generate_text"):
             return JSONResponse({"error": "no author model configured"}, status_code=400)
         locsys = (cfg.get("systems") or {}).get("locations") or DEFAULT_SYSTEMS["locations"]
