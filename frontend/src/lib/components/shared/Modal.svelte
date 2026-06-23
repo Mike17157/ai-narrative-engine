@@ -39,12 +39,17 @@
 {/if}
 
 <style>
+  /* The modal's RESTING state must be fully visible. Do NOT gate visibility on a CSS
+     entrance animation: a keyframe like `from { opacity: 0 }` pins the element at opacity 0
+     for as long as the animation hasn't advanced — and the timeline freezes in a
+     backgrounded tab (or stalls under a busy main thread), leaving the modal invisible with
+     no way to recover. A subtle scale-in is safe because its start frame (.98) is still
+     fully visible even if it never advances. */
   .overlay {
     position: fixed; inset: 0;
     background: rgba(6, 8, 12, .62);
     display: grid; place-items: center;
     padding: 24px; backdrop-filter: blur(2px);
-    animation: fade .12s ease;
   }
   .dlg {
     width: min(92vw, var(--mw, 520px));
@@ -67,9 +72,8 @@
     max-height: none;
     height: var(--mh, 90vh);
   }
-  /* Entrance is opacity-only on purpose: an animated transform on the dialog can
-     stick at its start frame when composited over the overlay's backdrop-filter,
-     leaving the box shifted/scaled and throwing click targets off by a few px. */
-  @keyframes fade { from { opacity: 0; } }
-  @keyframes pop { from { opacity: 0; } }
+  /* Scale-only entrance: a stuck start frame is scale(.98) — visually identical and still
+     fully clickable — so a frozen timeline can never hide or break the dialog. */
+  @keyframes pop { from { transform: scale(.985); } }
+  @media (prefers-reduced-motion: reduce) { .dlg { animation: none; } }
 </style>
