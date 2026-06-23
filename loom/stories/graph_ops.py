@@ -33,15 +33,16 @@ from typing import Any
 
 @dataclass
 class GraphFunction:
+    """A model-callable function, resolved from the registry (stories/scripts.py). It pairs
+    the registered code `impl` with this deployment's trigger `keywords` (from the lorebook
+    entry). The model calls it by `name`; `impl` runs against the `writes` level's doc."""
     name: str
     describe: str
-    params: dict           # {param_name: human description}
-    ops: list              # the patch template
+    params: dict           # {param_name: human description} — the model schema
     keywords: list[str] = field(default_factory=list)
     writes: str = "graph"  # the State-doc LEVEL this script mutates (default: the dev graph)
     reads: list[str] = field(default_factory=list)  # levels it reads (advisory; for context assembly)
-    impl: Any = None       # a registered code function (stories/scripts.py); when set it RUNS
-                           # instead of the `ops` template — the standard tool-calling path.
+    impl: Any = None       # the registered code function (def impl(doc, *, _id, **params))
 
     def to_prompt(self) -> str:
         ps = ", ".join(f"{k} ({v})" for k, v in self.params.items()) or "(no params)"
@@ -51,13 +52,10 @@ class GraphFunction:
 # ── Parsing function-book entries ────────────────────────────────────────────────
 
 def parse_functions(entries: list) -> list[GraphFunction]:
-    """Turn the function-shaped entries of a book into GraphFunctions. Two flavors:
-      • a registered CODE script — the entry just names it (`{"fn": "add_beat"}`) and
-        carries trigger keywords; logic/params/describe come from stories/scripts.py.
-      • a legacy inline op-spec (`{fn, ops}`) — the homegrown DSL, still honored as a
-        fallback for any function not (yet) in the registry.
-    A registered name ALWAYS runs its code impl, even if the entry also carries `ops`
-    (so old seeded entries upgrade to code automatically). Plain data entries are ignored."""
+    """Resolve the function-book entries into callable GraphFunctions. An entry names a
+    registered code script (`{"fn": "add_beat"}`) and carries the trigger keywords; the
+    logic/params/describe are CANONICAL in code (stories/scripts.py). An entry whose `fn`
+    isn't registered (or a plain data entry) is ignored — there's no inline-code path."""
     from . import scripts as _S
 
     out: list[GraphFunction] = []
@@ -68,28 +66,15 @@ def parse_functions(entries: list) -> list[GraphFunction]:
         if spec is None:
             continue
         name = (spec.get("fn") or getattr(e, "title", "") or "").strip()
-        if not name:
-            continue
         reg = _S.get(name)
-        ops = spec.get("ops") if isinstance(spec.get("ops"), list) else None
-        if reg is None and ops is None:
-            continue   # unknown function with no inline ops — nothing to run
+        if reg is None:
+            continue   # not a registered script — nothing to run
         kws = [str(k) for k in (getattr(e, "keywords", []) or [])]
-        if reg is not None:
-            # Registered code script: CODE is canonical for logic/contract. The lorebook
-            # entry only contributes trigger keywords (and falls back to the code defaults).
-            describe, params, writes, impl = reg.describe, reg.params, reg.writes, reg.impl
-        else:
-            # Legacy inline op-spec (the DSL fallback): everything comes from the entry.
-            describe = (spec.get("describe") or getattr(e, "title", "") or name).strip()
-            params = spec.get("params") if isinstance(spec.get("params"), dict) else {}
-            writes, impl = (spec.get("writes") or "graph").strip() or "graph", None
         out.append(GraphFunction(
-            name=name, describe=describe, params=params, ops=ops or [],
-            keywords=kws or (reg.keywords if reg else []),
-            writes=writes or "graph",
+            name=name, describe=reg.describe, params=reg.params,
+            keywords=kws or reg.keywords, writes=reg.writes,
             reads=[str(r) for r in (spec.get("reads") or []) if r],
-            impl=impl,
+            impl=reg.impl,
         ))
     return out
 
@@ -251,16 +236,19 @@ def _call_params(call: dict) -> dict:
     return {k: v for k, v in p.items() if v is not None and v != ""}
 
 
-# ── Applying ops (the generic JSON-patch dialect) ────────────────────────────────
+# ── Applying calls (run the registered code impl on the target level) ────────────
+
+def _new_id() -> str:
+    return "n" + uuid.uuid4().hex[:6]
+
 
 def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tuple[dict, list[dict]]:
-    """Apply the model's function CALLS to a State doc (level-aware). Each call's ops are
-    applied to the level the function declares via `writes` (default "graph"), through the
-    one unified delta engine in `state_doc`. Returns (new_state, log). Never raises — a bad
-    call is skipped and logged."""
+    """Apply the model's function CALLS to a State doc (level-aware): each call runs its
+    registered code `impl` against the doc at the function's `writes` level. Returns
+    (new_state, log). Never raises — a bad call is skipped and logged."""
     import copy
 
-    from . import state_doc as _SD   # lazy: state_doc imports this module (avoid a cycle)
+    from . import state_doc as _SD
 
     st = _SD.normalize(copy.deepcopy(state))
     by_name = {f.name: f for f in functions}
@@ -270,30 +258,20 @@ def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tup
         if not isinstance(call, dict):
             continue
         fn = by_name.get(str(call.get("fn", "")))
-        raw = _call_params(call)
-        if fn is None:
+        if fn is None or fn.impl is None:
             log.append({"fn": call.get("fn"), "ok": False, "error": "unknown function"})
             continue
         level = (fn.writes or "graph").strip() or "graph"
-        if fn.impl is not None:
-            # CODE path (tool-calling): run the registered function on the level's doc.
-            root = st["levels"]
-            if not isinstance(root.get(level), (dict, list)):
-                root[level] = {}
-            kw = {k: v for k, v in raw.items() if k in (fn.params or {})}
-            try:
-                fn.impl(root[level], _id=_new_id(), **kw)
-                st["revision"] = int(st.get("revision") or 0) + 1
-                log.append({"fn": fn.name, "ok": True, "applied": 1, "params": kw, "level": level})
-            except Exception as exc:  # noqa: BLE001 — one bad call never sinks the batch
-                log.append({"fn": fn.name, "ok": False, "error": str(exc)})
-        else:
-            # Legacy DSL path: interpolate + apply the inline op-spec template.
-            params = {**raw, "id": raw.get("id") or _new_id()}
-            st, sub = _SD.apply_ops(st, fn.ops, level=level, params=params)
-            applied = sum(1 for s in sub if s.get("ok") and s.get("changed"))
-            log.append({"fn": fn.name, "ok": True, "applied": applied, "params": params, "level": level})
-            log.extend(s for s in sub if not s.get("ok"))   # surface any failed sub-ops
+        root = st["levels"]
+        if not isinstance(root.get(level), (dict, list)):
+            root[level] = {}
+        kw = {k: v for k, v in _call_params(call).items() if k in (fn.params or {})}
+        try:
+            fn.impl(root[level], _id=_new_id(), **kw)
+            st["revision"] = int(st.get("revision") or 0) + 1
+            log.append({"fn": fn.name, "ok": True, "applied": 1, "params": kw, "level": level})
+        except Exception as exc:  # noqa: BLE001 — one bad call never sinks the batch
+            log.append({"fn": fn.name, "ok": False, "error": str(exc)})
     return st, log
 
 
@@ -308,140 +286,3 @@ def apply_ops(graph: dict, calls: list, functions: list[GraphFunction]) -> tuple
     state = {"levels": {"graph": copy.deepcopy(graph or {})}, "revision": 0}
     new_state, log = apply_calls(state, calls, functions)
     return _SD.get_level(new_state, "graph", {}), log
-
-
-def _new_id() -> str:
-    return "n" + uuid.uuid4().hex[:6]
-
-
-def _interp(value: Any, params: dict) -> Any:
-    """Recursively replace {{param}} placeholders. A string that is EXACTLY "{{param}}"
-    yields the raw param value (preserving lists/dicts/numbers — e.g. a reorder's id list);
-    otherwise placeholders are substituted as text."""
-    if isinstance(value, str):
-        whole = re.fullmatch(r"\{\{\s*([\w]+)\s*\}\}", value)
-        if whole and whole.group(1) in params:
-            return params[whole.group(1)]
-        return re.sub(r"\{\{\s*([\w]+)\s*\}\}", lambda m: str(params.get(m.group(1).strip(), "")), value)
-    if isinstance(value, dict):
-        return {k: _interp(v, params) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_interp(v, params) for v in value]
-    return value
-
-
-def _apply_one(graph: dict, op: dict) -> bool:
-    """Apply a single interpolated patch op. Returns True if it changed the graph.
-    Ops: set/replace, add (append with /-), append (push to list), remove, pull."""
-    kind = (op.get("op") or "").lower()
-    path = op.get("path") or ""
-    value = op.get("value")
-    parent, key = _navigate(graph, path)
-    if parent is None:
-        return False   # unresolved path (e.g. an optional {{after}} that wasn't provided)
-
-    if kind in ("set", "replace"):
-        parent[key] = value
-        return True
-    if kind == "add":
-        if key == "-" and isinstance(parent, list):
-            parent.append(value); return True
-        parent[key] = value; return True
-    if kind == "append":
-        target = parent[key] if (isinstance(parent, dict) and key in parent) or \
-            (isinstance(parent, list) and isinstance(key, int) and key < len(parent)) else None
-        if isinstance(target, list):
-            target.append(value); return True
-        return False
-    if kind == "pull":
-        target = parent[key] if key in parent else None
-        if isinstance(target, list) and value in target:
-            target.remove(value); return True
-        return False
-    if kind == "remove":
-        if isinstance(parent, list) and isinstance(key, int):
-            del parent[key]; return True
-        if isinstance(parent, dict) and key in parent:
-            del parent[key]; return True
-        return False
-    if kind == "move":
-        # Relocate the list element whose id == `value` to just after the element whose
-        # id == op["after"] (or to the end when `after` is missing/blank).
-        target = parent[key] if (isinstance(parent, dict) and isinstance(parent.get(key), list)) else None
-        if not isinstance(target, list):
-            return False
-        i = _index_of(target, value)
-        if i is None:
-            return False
-        el = target.pop(i)
-        after = op.get("after")
-        j = _index_of(target, after) if after else None
-        target.insert((j + 1) if j is not None else len(target), el)
-        return True
-    if kind == "reorder":
-        # Reorder the list at `path` so its elements follow the id order in `value`
-        # (ids not listed keep their original relative order, appended after).
-        target = parent[key] if (isinstance(parent, dict) and isinstance(parent.get(key), list)) else None
-        if not isinstance(target, list) or not isinstance(value, list):
-            return False
-        order = [str(x) for x in value]
-        ranked = sorted(range(len(target)),
-                        key=lambda i: (order.index(str(target[i].get("id"))) if isinstance(target[i], dict)
-                                       and str(target[i].get("id")) in order else len(order) + i))
-        parent[key] = [target[i] for i in ranked]
-        return True
-    return False
-
-
-def _navigate(obj: Any, path: str):
-    """Walk a path like '/nodes/#b2/next' and return (parent_container, last_key).
-    Tokens: '-' (append slot), '#<id>' (list element by its `id`), <int> (index), or a key.
-    Returns (None, None) when a token can't be resolved (so optional ops no-op)."""
-    tokens = [t for t in path.split("/") if t != ""]
-    if not tokens:
-        return None, None
-    cur = obj
-    for tok in tokens[:-1]:
-        nxt = _step(cur, tok)
-        if nxt is None:
-            return None, None
-        cur = nxt
-    return cur, _last_key(cur, tokens[-1])
-
-
-def _step(container: Any, tok: str):
-    if tok.startswith("#"):
-        return _by_id(container, tok[1:])
-    if isinstance(container, list):
-        if tok.lstrip("-").isdigit():
-            i = int(tok)
-            return container[i] if -len(container) <= i < len(container) else None
-        return None
-    if isinstance(container, dict):
-        return container.get(tok)
-    return None
-
-
-def _last_key(container: Any, tok: str):
-    if tok == "-":
-        return "-"
-    if tok.startswith("#"):
-        idx = _index_of(container, tok[1:])
-        return idx if idx is not None else "-"   # unresolved → harmless append slot
-    if isinstance(container, list) and tok.lstrip("-").isdigit():
-        return int(tok)
-    return tok
-
-
-def _by_id(container: Any, node_id: str):
-    idx = _index_of(container, node_id)
-    return container[idx] if idx is not None else None
-
-
-def _index_of(container: Any, node_id: str):
-    if not isinstance(container, list) or not node_id:
-        return None
-    for i, el in enumerate(container):
-        if isinstance(el, dict) and str(el.get("id")) == str(node_id):
-            return i
-    return None

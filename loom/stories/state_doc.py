@@ -3,13 +3,13 @@
 This is the third leg of the unified model, distinct from the other two:
 
   • **Lorebook = Knowledge** — *composed* (authored, retrieved, injected read-only).
-  • **Script   = Behavior**  — *emits deltas* (graph-ops / stage functions); it "stacks".
-  • **State    = Memory**    — *accumulates* those deltas. The thread's save file.
+  • **Script   = Behavior**  — registered code (stories/scripts.py) the model calls.
+  • **State    = Memory**    — *accumulates* those mutations. The thread's save file.
 
 A chat preset composes static lore; a story accumulates a State doc. That difference
 is the whole reason stories felt different — and historically it was smeared across
 three separate accumulators (the dev `graph`, the `world_state` engine, the simulation
-`sim_state`). This module is the ONE leveled document + ONE delta engine they fold into.
+`sim_state`). This module is the ONE leveled document they fold into.
 
 Shape::
 
@@ -21,20 +21,16 @@ Default levels (the set is extensible — any key is allowed)::
     graph   arc / development nodes          (structural scripts write here)
     draft   enriched chapter draft
     world   runtime world-state (entities/flags/inventory/location/clock/log)
-    facts   emergent facts (Phase D: mirrored to the thread's `state-<sid>` lore scope)
+    sim     simulation cast + scenes
+    facts   emergent facts (mirrored to the thread's `thread-<sid>` lore scope)
 
-Scripts declare which level they write; `apply_ops` applies a generic JSON-patch op
-scoped to a level, reusing the path dialect already proven in `graph_ops`
-(`/nodes/#id/next`, `/flags/key`, `/-` append, …). A script that writes level "world"
-simply has its op paths prefixed with `/world`, so existing bare-path graph functions
-keep working unchanged once they declare `writes: "graph"`.
+This module owns the doc SHAPE and migration. The MUTATIONS are applied by the
+registered code scripts: `graph_ops.apply_calls` runs a script's `impl` against its
+`writes` level; `state_engine.apply_deltas` dispatches world ops to `WORLD_OPS`.
 """
 from __future__ import annotations
 
-import copy
 from typing import Any
-
-from . import graph_ops as _GO   # the JSON-patch dialect (_apply_one / _interp) lives here
 
 # The canonical level names. Not enforced — a State doc may carry any levels — but these
 # are what the migrations seed and what the engines target.
@@ -131,43 +127,6 @@ def to_session_fields(state: dict) -> dict:
     return out
 
 
-# ── The ONE delta engine ─────────────────────────────────────────────────────────
-
-def _scope(op: dict, level: str | None) -> dict:
-    """Prefix an op's path with `/<level>` unless it already targets that level root.
-    A bare `/nodes/-` authored for the dev graph becomes `/graph/nodes/-`."""
-    if not level:
-        return op
-    path = op.get("path") or ""
-    root = f"/{level}"
-    if path == root or path.startswith(root + "/"):
-        return op
-    if not path.startswith("/"):
-        path = "/" + path
-    return {**op, "path": root + path}
-
-
-def apply_ops(state: dict, ops: list, *, level: str | None = None,
-              params: dict | None = None) -> tuple[dict, list[dict]]:
-    """Apply generic JSON-patch ops to the State doc's levels (on a deepcopy; returns
-    (new_state, log)). Reuses the graph_ops dialect with `state['levels']` as the root
-    object. When `level` is given the level container is ensured and each op path is
-    scoped under `/<level>`. `params` interpolates `{{placeholders}}` in the ops. Never
-    raises — a bad op is skipped and logged."""
-    st = normalize(copy.deepcopy(state))
-    root = st["levels"]
-    if level and not isinstance(root.get(level), (dict, list)):
-        root[level] = {}
-    log: list[dict] = []
-    for op in ops or []:
-        if not isinstance(op, dict):
-            continue
-        op2 = _GO._interp(op, params or {}) if params else op
-        op2 = _scope(op2, level)
-        try:
-            changed = _GO._apply_one(root, op2)
-            log.append({"op": op2.get("op"), "path": op2.get("path"), "ok": True, "changed": changed})
-        except Exception as exc:  # noqa: BLE001 — one bad op never sinks the batch
-            log.append({"op": op2.get("op"), "path": op2.get("path"), "ok": False, "error": str(exc)})
-    st["revision"] = int(st.get("revision") or 0) + 1
-    return st, log
+# Mutations are applied by the registered code scripts (stories/scripts.py) via
+# graph_ops.apply_calls / state_engine.apply_deltas — each runs against the relevant
+# level's doc. This module owns the doc SHAPE (levels) and migration, not a delta engine.
