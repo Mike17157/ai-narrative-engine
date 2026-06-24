@@ -1,16 +1,7 @@
 <script>
-  import { onMount } from 'svelte';
-  import { get } from '$lib/api.js';
   import { app } from '$lib/app.svelte.js';
-  import Combobox from '$lib/components/shared/Combobox.svelte';
   import { askConfirm } from '$lib/confirm.svelte.js';
-  import { goto } from '$app/navigation';
   import { chars, blurb, selectChar, deleteChar } from '$lib/characters.svelte.js';
-
-  function openChar(c) {
-    if (c.story) goto(`/stories/${c.story}/cast?c=${c.key}`);
-    else selectChar(c.key);
-  }
 
   async function delCard(c) {
     if (await askConfirm({ title: `Delete ${c.name || c.key}?`,
@@ -19,12 +10,6 @@
   }
 
   let query = $state('');
-  let storyFilter = $state('');   // '' = all · '__lib' · '__detached' · <story key>
-  let storyNames = $state({}); // story key -> name
-  onMount(async () => {
-    try { for (const s of await get('/stories')) storyNames[s.key] = s.name; storyNames = { ...storyNames }; }
-    catch { /* offline */ }
-  });
 
   const lsNum = (k, d) => { try { return +localStorage.getItem(k) || d; } catch { return d; } };
   let cardSize = $state(lsNum('loom.cardSize', 170));   // card WIDTH; the image scales with it
@@ -37,34 +22,12 @@
     const tags = (c.fields?.tags || []).join(' ');
     return `${c.name} ${c.key} ${tags} ${blurb(c)}`.toLowerCase().includes(q);
   };
-  // Library = ONLY imported / standalone cards (not generated, not story-bound).
-  let library = $derived(chars.list.filter((c) => !c.story && !c.generated && match(c)));
-  // Detached = generated characters that lost their story (junk to clean up).
-  let detached = $derived(chars.list.filter((c) => !c.story && c.generated && match(c)));
-  // Story sections = characters bound to a story.
-  let storyGroups = $derived.by(() => {
-    const g = {};
-    for (const c of chars.list) if (c.story && match(c)) (g[c.story] ||= []).push(c);
-    return Object.entries(g)
-      .map(([key, list]) => ({ key, name: storyNames[key] || key, list }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  });
-
-  // Filter-by-story dropdown options.
-  let filterItems = $derived([
-    { value: '', label: 'All characters' },
-    { value: '__lib', label: `Library / imported (${library.length})` },
-    ...(detached.length ? [{ value: '__detached', label: `Detached (${detached.length})` }] : []),
-    ...storyGroups.map((g) => ({ value: g.key, label: `${g.name} (${g.list.length})` }))
-  ]);
-  const showLib = $derived(storyFilter === '' || storyFilter === '__lib');
-  const showDetached = $derived(storyFilter === '' || storyFilter === '__detached');
-  const shownStories = $derived(storyFilter === '' ? storyGroups
-    : storyGroups.filter((g) => g.key === storyFilter));
+  let shown = $derived((chars.list || []).filter(match)
+    .sort((a, b) => (a.name || a.key).localeCompare(b.name || b.key)));
 </script>
 
 {#snippet card(c)}
-  <div class="pcard" class:sel={c.key === app.activeChar} role="button" tabindex="0" onclick={() => openChar(c)}>
+  <div class="pcard" class:sel={c.key === app.activeChar} role="button" tabindex="0" onclick={() => selectChar(c.key)}>
     {#if c.reference || c.avatar}
       <img class="pav" src={c.reference || c.avatar} alt={c.name} />
     {:else}
@@ -79,7 +42,6 @@
 
 <div class="searchbar">
   <input class="search" placeholder="Search characters by name, tag, or description…" bind:value={query} />
-  <div class="storyfilter"><Combobox items={filterItems} bind:value={storyFilter} placeholder="Filter by story…" /></div>
 </div>
 
 <div class="knobs">
@@ -88,37 +50,17 @@
 </div>
 
 <div class="cols" style="--cardw:{cardSize}px; --texth:{textH}px">
-  {#if showLib}
-    <section>
-      <h3 class="sec">Library <span class="cnt">{library.length}</span>
-        <span class="lo">— imported cards; reusable in chat & new stories</span></h3>
-      {#if library.length}
-        <div class="grid">{#each library as c (c.key)}{@render card(c)}{/each}</div>
-      {:else}<p class="empty">No imported characters{query ? ' match' : ' yet'}.</p>{/if}
-    </section>
-  {/if}
-
-  {#if showDetached && detached.length}
-    <section>
-      <h3 class="sec detached">Detached <span class="cnt">{detached.length}</span>
-        <span class="lo">— generated characters whose story is gone; safe to delete</span></h3>
-      <div class="grid">{#each detached as c (c.key)}{@render card(c)}{/each}</div>
-    </section>
-  {/if}
-
-  {#each shownStories as g (g.key)}
-    <section>
-      <h3 class="sec story">{g.name} <span class="cnt">{g.list.length}</span>
-        <span class="lo">— characters bound to this story</span></h3>
-      <div class="grid">{#each g.list as c (c.key)}{@render card(c)}{/each}</div>
-    </section>
-  {/each}
+  <section>
+    <h3 class="sec">Characters <span class="cnt">{shown.length}</span></h3>
+    {#if shown.length}
+      <div class="grid">{#each shown as c (c.key)}{@render card(c)}{/each}</div>
+    {:else}<p class="empty">No characters{query ? ' match' : ' yet'}.</p>{/if}
+  </section>
 </div>
 
 <style>
   .searchbar { display: flex; align-items: center; gap: 12px; }
   .search { flex: 1; padding: 9px 12px; }
-  .storyfilter { width: 240px; flex: none; }
   .knobs {
     position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 40;
     display: flex; gap: 22px; align-items: center; padding: 10px 20px;
@@ -130,8 +72,6 @@
 
   .cols { margin-top: 16px; padding-bottom: 72px; display: flex; flex-direction: column; gap: 22px; }
   .sec { font-size: 14px; font-weight: 700; margin: 0 0 10px; display: flex; align-items: baseline; gap: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border-soft); }
-  .sec.story { color: var(--accent); }
-  .sec.detached { color: var(--bad); }
   .cnt { font-size: 11.5px; color: var(--muted); background: var(--elev); border: 1px solid var(--border-soft); border-radius: 999px; padding: 1px 8px; font-weight: 600; }
   .lo { font-size: 11.5px; color: var(--faint); font-weight: 400; }
   .empty { color: var(--muted); font-size: 13px; margin: 0; }
