@@ -234,6 +234,50 @@ def register(app, ctx) -> None:
         await run_in_threadpool(lambda: _write_grid_config(ctx, data))
         return {"ok": True}
 
+    def _serverless():
+        """(base_url, headers) for the serverless endpoint, or (None, reason)."""
+        rp = ctx.runpod_config
+        eid, key = rp.get("serverless_endpoint_id"), rp.get("api_key")
+        if not (eid and key):
+            return None, "RunPod serverless not configured (api_key + endpoint id)"
+        return (f"https://api.runpod.ai/v2/{eid}",
+                {"Authorization": f"Bearer {key}"}), eid
+
+    @app.get("/api/runpod/status")
+    def serverless_status():
+        """Live serverless health: job counts (queued / in-progress / failed) + worker
+        states. Shows whether jobs are piling up or the worker is just failing them."""
+        import httpx
+        conn, eid = _serverless()
+        if conn is None:
+            return {"configured": False, "reason": eid}
+        base, headers = conn
+        try:
+            with httpx.Client(base_url=base, headers=headers, timeout=20) as c:
+                h = c.get("/health"); h.raise_for_status()
+                return {"configured": True, "endpoint_id": eid, **h.json()}
+        except httpx.HTTPError as exc:
+            return JSONResponse({"configured": True, "endpoint_id": eid, "error": str(exc)}, status_code=502)
+
+    @app.post("/api/runpod/purge")
+    def serverless_purge():
+        """Clear the serverless endpoint's QUEUE (pending jobs). Does NOT stop a job already
+        executing on a worker. Returns how many were removed + the post-purge job counts."""
+        import httpx
+        conn, eid = _serverless()
+        if conn is None:
+            return JSONResponse({"error": eid}, status_code=400)
+        base, headers = conn
+        try:
+            with httpx.Client(base_url=base, headers=headers, timeout=20) as c:
+                r = c.post("/purge-queue"); r.raise_for_status()
+                out = r.json() if r.text else {}
+                h = c.get("/health")
+                return {"ok": True, "endpoint_id": eid, **out,
+                        "jobs": (h.json().get("jobs") if h.status_code < 300 else None)}
+        except httpx.HTTPError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=502)
+
     @app.get("/api/runpod/volume/status")
     def volume_status():
         cfg = VolumeConfig()
