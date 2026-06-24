@@ -483,6 +483,27 @@
       "params": {},
       "stop": [],
       "reasoning_effort": ""
+    },
+    {
+      "id": "stage_character",
+      "name": "Character (local)",
+      "description": "",
+      "group": "Pipeline stages",
+      "order": 0,
+      "connection": "ollama-local",
+      "model": "meromero:latest",
+      "mode": "assist",
+      "image_workflow": "",
+      "image_provider": "",
+      "image_preset": "",
+      "lorebooks": [],
+      "system": "",
+      "author_note": "",
+      "author_depth": 4,
+      "post_history": "",
+      "params": {},
+      "stop": [],
+      "reasoning_effort": ""
     }
   ]
 }

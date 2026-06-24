@@ -195,6 +195,8 @@ class Arc(BaseModel):
     name: str
     mini_ending: str = ""         # what this arc leaves the protagonist with
     dramatic_function: str = ""   # e.g. "Introduction — You · Need · Go"
+    themes: list[str] = Field(default_factory=list)  # themes this arc explores (arc-level, not story-level)
+    premise: str = ""             # the dramatic situation/tension this arc puts the cast through
     cast: list[str] = Field(default_factory=list)   # character keys active in this arc
     nodes: dict[str, ArcBeat] = Field(default_factory=dict)  # legacy flat chain
     start: str = ""               # id of the first ArcBeat node (legacy)

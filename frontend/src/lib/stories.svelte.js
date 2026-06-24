@@ -6,21 +6,20 @@ import { startJob } from './app.svelte.js';
 import { get, post, put, del } from './api.js';
 import { consumeSse } from './sse.js';
 import { loadChars } from './characters.svelte.js';
-import { graphToBoard, graphToArcs } from './story_graph_model.js';
 
 const blankWizard = () => ({
-  step: 0,                 // 0 setup · 1 spine · 2 storyboard · 3 scenes · 4 characters
+  step: 0,                 // lean flow: 0 premise · 1 characters · 2 outfits · 3 scenes
   character: '', charName: '', model: '',
   busy: false, streaming: false, streamText: '', error: null,
   name: '',
-  spine: null,             // { wound, lie, truth, heart, beats[], logline, tone, themes }
-  board: null,             // { logline, premise, tone, themes, beats[] }
-  locations: null,         // [{ id, name, description, background_prompt }]
+  // Character-first lean fields:
+  premise: '',             // the story seed — enough on its own (no spine/storyboard)
+  castKeys: [],            // the cast: existing character keys developed in the Lab
+  locations: null,         // [{ id, name, description, background_prompt }] — generated from premise
   start: null,
-  cast: null,              // [{ name, persona, appearance, role, base_prompt, primary }] — protagonist first
-  intended_ending: '',     // destination locked in during workshop phase 1
-  arcs: [],                // [{id, name, mini_ending, dramatic_function, cast, rationale}]
-  workshopPremise: '',     // premise text from workshop, passed to spine + storyboard
+  arcs: [],                // OPTIONAL themed arcs woven from the cast
+  // Legacy fields kept so old drafts still load (unused by the lean flow):
+  spine: null, board: null, cast: null, intended_ending: '', workshopPremise: '',
   draftId: null,           // server-side draft ID once persisted
   existingStoryKey: null,  // if set, save overwrites this story instead of creating a new one
   sessionId: null,         // server-side console checkpoint id (consult/graph), persists across reloads
@@ -109,25 +108,21 @@ export function resetWizard() { stories.wizard = blankWizard(); }
 
 export function gotoStep(n) { stories.wizard.step = n; } // non-linear: jump to any step
 
-// Derive per-step build status from ARTIFACT PRESENCE (not the raw `step` index, which
-// is only a soft "where gen last left off" hint). Defensive across all three shapes:
-// a wizard draft (board/locations/cast arrays), the live stories.wizard, and a loaded
-// Story (storyboard object, locations array). Never call this on a saved-story LIST
-// summary — those omit spine/beats. status: 'done' | 'active' | 'todo'.
+// Derive per-step build status for the LEAN character-first flow from artifact presence
+// (not the raw `step` index, a soft hint). Steps: Characters · Outfits · Scenes (Premise is
+// the entry, not a status chip). Outfits can't be derived client-side, so it shows active by
+// step only. status: 'done' | 'active' | 'todo'.
 export function storySteps(s) {
   if (!s) return [];
-  const board     = s.board || s.storyboard || null;
-  const beats      = board?.beats || [];
-  const spineDone  = !!(s.spine && (s.spine.wound || s.spine.lie || s.spine.truth));
-  const locCount   = typeof s.locations === 'number' ? s.locations : (s.locations?.length || 0);
-  const castCount  = Array.isArray(s.cast) ? s.cast.length : 0;
-  const step       = s.step;   // present only on drafts / live wizard
+  const castCount = Array.isArray(s.castKeys) ? s.castKeys.length
+                  : (Array.isArray(s.cast) ? s.cast.length : 0);
+  const locCount  = typeof s.locations === 'number' ? s.locations : (s.locations?.length || 0);
+  const step      = s.step;   // present only on drafts / live wizard
   const stat = (done, idx) => done ? 'done' : (step != null && idx === step) ? 'active' : 'todo';
   return [
-    { key: 'spine',      label: 'Spine',      route: 'spine',      status: stat(spineDone,        1) },
-    { key: 'storyboard', label: 'Storyboard', route: 'storyboard', status: stat(beats.length > 0, 2) },
-    { key: 'scenes',     label: 'Scenes',     route: 'scenes',     status: stat(locCount > 0,     3) },
-    { key: 'cast',       label: 'Cast',       route: 'characters', status: stat(castCount > 0,    4) },
+    { key: 'characters', label: 'Characters', route: 'characters', status: stat(castCount > 0, 1) },
+    { key: 'outfits',    label: 'Outfits',    route: 'outfits',    status: stat(false,         2) },
+    { key: 'scenes',     label: 'Scenes',     route: 'scenes',     status: stat(locCount > 0,  3) },
   ];
 }
 
@@ -137,21 +132,17 @@ export function storySteps(s) {
 let _draftTimer = null;
 async function _flushDraft() {
   const wz = stories.wizard;
-  if (!wz.character) return;
+  if (!wz.premise && !wz.castKeys?.length && !wz.character) return;
   const body = {
     ...(wz.draftId ? { id: wz.draftId } : {}),
     step: wz.step,
     name: wz.name || wz.charName || '',
-    premise: wz.board?.premise || '',
+    premise: wz.premise || '',
     character: wz.character,
     charName: wz.charName,
-    spine: wz.spine,
-    board: wz.board,
+    castKeys: wz.castKeys,
     locations: wz.locations,
     start: wz.start,
-    cast: wz.cast,
-    intended_ending: wz.intended_ending,
-    workshopPremise: wz.workshopPremise,
     arcs: wz.arcs,
     existingStoryKey: wz.existingStoryKey,
     sessionId: wz.sessionId,
@@ -171,7 +162,7 @@ function scheduleDraftSave() {
 export async function resumeDraft(id, to = 'step') {
   let r = null;
   try { r = await get(`/stories/draft/${id}`); } catch { r = null; }
-  if (!r?.character) {
+  if (!r || (!r.character && !(r.castKeys?.length) && !r.premise)) {
     stories.msg = { err: true, text: 'Could not load that draft — is the backend running?' };
     return;
   }
@@ -184,12 +175,11 @@ export async function resumeDraft(id, to = 'step') {
   };
   if (to === 'overview') { goto('/stories/new/overview'); return; }
   const step = r.step ?? 0;
-  const stepRoutes = ['setup', 'spine', 'storyboard', 'scenes', 'characters'];
-  goto(`/stories/new/${stepRoutes[step] || 'setup'}`);
+  const stepRoutes = ['premise', 'characters', 'outfits', 'scenes'];
+  goto(`/stories/new/${stepRoutes[step] || 'premise'}`);
 }
 
 const w = () => stories.wizard;
-function reqBody(extra = {}) { return { character: w().character, ...extra }; }  // per-stage cfg is server-side
 
 async function postCancelable(path, payload) {
   abortCtl = new AbortController();
@@ -206,183 +196,37 @@ async function postCancelable(path, payload) {
   } finally { abortCtl = null; }
 }
 
-// Stage 0.5 — Generate the emotional spine BEFORE the storyboard.
-// Streams JSON token-by-token, then emits a final `spine` event.
-export async function generateSpine(workshopPremise = '') {
-  const wz = w();
-  wz.busy = true; wz.streaming = true; wz.error = null; wz.streamText = '';
-  abortCtl = new AbortController();
-  const job = startJob('Emotional spine', wz.charName || wz.character, 'stories/new/spine');
-  job.onCancel = cancelGen;
-  let spine = null;
-  const premise = workshopPremise || wz.workshopPremise || wz.board?.premise || '';
-  const intendedEnding = wz.intended_ending || '';
-  try {
-    const res = await fetch('/api/stories/spine', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character: wz.character, premise, intended_ending: intendedEnding }),
-      signal: abortCtl.signal
-    });
-    await consumeSse(res, (ev) => {
-      if (ev.type === 'delta') wz.streamText += ev.text;
-      else if (ev.type === 'spine') spine = ev.spine;
-      else if (ev.type === 'error') wz.error = ev.error;
-    });
-    if (spine) {
-      wz.spine = spine;
-      // Pre-seed board fields from spine so storyboard can use them as defaults.
-      if (!wz.board) wz.board = { logline: '', premise: '', tone: '', themes: [], beats: [], heart: '' };
-      if (!wz.board.heart && spine.heart) wz.board.heart = spine.heart;
-      if (!wz.board.logline && spine.logline) wz.board.logline = spine.logline;
-      if (!wz.board.tone && spine.tone) wz.board.tone = spine.tone;
-      if (!wz.board.themes?.length && spine.themes?.length) wz.board.themes = spine.themes;
-      wz.step = 1;
-      job.status = 'done';
-    } else if (!wz.error) { wz.error = 'no spine produced'; job.status = 'error'; }
-  } catch (e) {
-    if (e?.name !== 'AbortError') wz.error = String(e);
-    job.status = e?.name === 'AbortError' ? 'cancelled' : 'error';
-  } finally {
-    wz.busy = false; wz.streaming = false; abortCtl = null;
-    if (job.status === 'running') job.status = wz.error ? 'error' : 'cancelled';
-  }
-}
-
-// Stage 1 — streams the storyboard live; uses spine for context if available.
-export async function genStoryboard(workshopPremise = '') {
-  const wz = w();
-  wz.busy = true; wz.streaming = true; wz.error = null; wz.streamText = '';
-  abortCtl = new AbortController();
-  const job = startJob('Storyboard', wz.charName || wz.character, 'stories/new/storyboard');
-  job.onCancel = cancelGen;
-  let board = null;
-  const premise = workshopPremise || wz.workshopPremise || '';
-  const bodyExtra = {
-    ...(premise ? { premise } : {}),
-    ...(wz.spine ? { spine: wz.spine } : {}),
-  };
-  try {
-    const res = await fetch('/api/stories/storyboard', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(reqBody(bodyExtra)), signal: abortCtl.signal
-    });
-    await consumeSse(res, (ev) => {
-      if (ev.type === 'delta') wz.streamText += ev.text;
-      else if (ev.type === 'board') board = ev.board;
-      else if (ev.type === 'error') wz.error = ev.error;
-    });
-    if (board) {
-      wz.board = { logline: board.logline || '', premise: board.premise || '', tone: board.tone || '',
-                   themes: board.themes || [], beats: board.beats || [], heart: board.heart || '' };
-      if (!wz.name) wz.name = wz.charName || '';
-      wz.step = 2;
-      job.status = 'done';
-    } else if (!wz.error) { wz.error = 'no storyboard produced'; job.status = 'error'; }
-  } catch (e) {
-    if (e?.name !== 'AbortError') wz.error = String(e);
-    job.status = e?.name === 'AbortError' ? 'cancelled' : 'error';
-  } finally {
-    wz.busy = false; wz.streaming = false; abortCtl = null;
-    if (job.status === 'running') job.status = wz.error ? 'error' : 'cancelled';
-  }
-}
-
-export async function regenStoryboard() { await genStoryboard(); }
-
-// Faithful draft: expand the development graph node-by-node into chapters (preserving
-// branches), instead of re-deriving from a premise string. Seeds spine from the graph
-// core and writes board + arcs. Returns true on success (caller navigates to storyboard).
-export async function draftFromGraph(graph) {
-  const wz = w();
-  wz.busy = true; wz.streaming = true; wz.error = null;
-  wz.streamText = 'Expanding each beat of the arc into a chapter…';
-  wz.workshopPremise = graph?.logline || '';
-  // The consultation already produced the spine — carry it straight in.
-  wz.spine = {
-    wound: graph?.wound || '', lie: graph?.lie || '', truth: graph?.truth || '',
-    heart: '', logline: graph?.logline || '', tone: wz.board?.tone || '', themes: wz.board?.themes || [], beats: [],
-  };
-  abortCtl = new AbortController();
-  const job = startJob('Drafting from graph', wz.charName || wz.character, 'stories/new/storyboard');
-  job.onCancel = cancelGen;
-  let enriched = null;
-  try {
-    const res = await fetch('/api/stories/expand-graph', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character: wz.character, graph }), signal: abortCtl.signal,
-    });
-    await consumeSse(res, (ev) => {
-      // delta is raw structured-output JSON — ignore it; show a friendly status instead.
-      if (ev.type === 'graph') enriched = ev.graph;
-      else if (ev.type === 'error') wz.error = ev.error;
-    });
-    const g = enriched || graph;
-    wz.board = graphToBoard(g, { tone: wz.board?.tone || '', themes: wz.board?.themes || [], heart: wz.spine.heart });
-    wz.arcs = graphToArcs(g);
-    if (!wz.name) wz.name = wz.charName || '';
-    if (!wz.error) { wz.step = 2; job.status = 'done'; return true; }
-    job.status = 'error'; return false;
-  } catch (e) {
-    if (e?.name !== 'AbortError') wz.error = String(e);
-    job.status = e?.name === 'AbortError' ? 'cancelled' : 'error';
-    return false;
-  } finally {
-    wz.busy = false; wz.streaming = false; abortCtl = null;
-  }
-}
-
-export async function genScenes() {
+// LEAN flow — generate locations straight from the PREMISE (no storyboard needed).
+export async function genScenesFromPremise() {
   const wz = w(); wz.busy = true; wz.error = null;
-  const job = startJob('Scene extraction', wz.charName || wz.character, 'stories/new/scenes');
+  const job = startJob('Locations', wz.name || 'story', 'stories/new/scenes');
   job.onCancel = cancelGen;
-  const r = await postCancelable('/stories/extract-scenes', reqBody({ board: wz.board }));
+  const r = await postCancelable('/stories/extract-scenes', { premise: wz.premise || '' });
   wz.busy = false;
   if (!r) { job.status = 'cancelled'; return; }
-  if (r.ok && r.data?.locations) { wz.locations = r.data.locations; wz.start = r.data.start; wz.step = 3; job.status = 'done'; }
-  else { wz.error = r.data?.error || 'scene extraction failed'; job.status = 'error'; }
+  if (r.ok && r.data?.locations) { wz.locations = r.data.locations; wz.start = r.data.start; job.status = 'done'; }
+  else { wz.error = r.data?.error || 'location generation failed'; job.status = 'error'; }
 }
 
-export async function genCharacters() {
-  const wz = w(); wz.busy = true; wz.error = null;
-  const job = startJob('Character extraction', wz.charName || wz.character, 'stories/new/characters');
-  job.onCancel = cancelGen;
-  const r = await postCancelable('/stories/extract-characters', reqBody({ board: wz.board }));
-  wz.busy = false;
-  if (!r) { job.status = 'cancelled'; return; }
-  if (r.ok && r.data?.cast !== undefined) {
-    wz.cast = r.data.cast || [];                          // one uniform list, protagonist first
-    const prot = wz.cast.find((c) => c.primary);
-    if (prot?.name) wz.charName = prot.name;
-    wz.step = 4; job.status = 'done';
-  } else { wz.error = r.data?.error || 'character extraction failed'; job.status = 'error'; }
-}
-
-export async function suggestArcs(intendedEnding, messages) {
-  const wz = w();
-  wz.busy = true; wz.error = null;
-  try {
-    const res = await fetch('/api/stories/workshop/arcs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        character: wz.character,
-        messages,
-        intended_ending: intendedEnding,
-        story_cast: [],
-      }),
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok && data?.arcs) {
-      wz.intended_ending = intendedEnding;
-      wz.arcs = data.arcs;
-    } else {
-      wz.error = data?.error || 'arc suggestion failed';
-    }
-  } catch (e) {
-    wz.error = String(e);
-  } finally {
-    wz.busy = false;
-  }
+// LEAN flow — persist the cast + locations (+ optional arcs) as a Story (no spine/storyboard).
+export async function saveLeanStory() {
+  const wz = w(); stories.saving = true; wz.error = null;
+  const r = await post('/stories/from-cast', {
+    name: wz.name || '', premise: wz.premise || '',
+    characters: wz.castKeys || [], arcs: wz.arcs || [],
+    locations: wz.locations || [], start: wz.start,
+  });
+  stories.saving = false;
+  if (r.data?.ok) {
+    stories.msg = { ok: true, text: `✓ Saved “${wz.name || 'story'}”` };
+    const key = r.data.key, draftId = wz.draftId;
+    await Promise.all([loadStories(), loadChars()]);
+    if (draftId) del(`/stories/draft/${draftId}`).catch(() => {});
+    // Navigate AWAY from /stories/new BEFORE clearing the cast — otherwise the wizard
+    // guard sees an empty cast and bounces us back to premise.
+    await goto(`/stories/${key}/overview`);
+    stories.wizard = blankWizard();
+  } else { wz.error = r.data?.error || 'save failed'; }
 }
 
 export async function expandArc(storyKey, arcId, onDelta, onArc) {
@@ -417,60 +261,6 @@ export async function expandGraphRequest(character, graph) {
   } catch { /* fall back to the raw graph */ }
   return enriched || graph;
 }
-
-export async function saveStory() {
-  const wz = w();
-  stories.saving = true; wz.error = null;
-  const r = await post('/stories', {
-    name: wz.name, premise: wz.board?.premise || '', tone: wz.board?.tone || '',
-    themes: wz.board?.themes || [],
-    storyboard: { logline: wz.board?.logline || '', beats: wz.board?.beats || [], heart: wz.board?.heart || '' },
-    locations: wz.locations || [], start: wz.start,
-    cast: wz.cast || [], source_character: wz.character,
-    intended_ending: wz.intended_ending || '',
-    arcs: wz.arcs || [],
-    spine: wz.spine || null,
-    ...(wz.existingStoryKey ? { existing_key: wz.existingStoryKey } : {}),
-  });
-  stories.saving = false;
-  if (r.data?.ok) {
-    stories.msg = { ok: true, text: `✓ Saved “${wz.name}”` + (r.data.created_characters?.length ? ` (+${r.data.created_characters.length} NPCs)` : '') };
-    const storyKey = r.data.key;
-    const draftId = wz.draftId;
-    // Reload chars too: the story's freshly-generated cast must be in chars.list or every
-    // charName(key) lookup falls back to the raw key (e.g. “riley_costello”).
-    await Promise.all([loadStories(), loadChars()]);
-    if (draftId) del(`/stories/draft/${draftId}`).catch(() => {});
-    stories.wizard = blankWizard();
-    // Kick off wardrobe planning immediately — navigate to cast so the user sees progress.
-    let wardrobeJob = null;
-    try {
-      const wr = await post(`/stories/${storyKey}/plan-wardrobe-all`, {});
-      if (wr.data?.job) wardrobeJob = wr.data.job;
-    } catch { /* non-fatal — user can plan wardrobes manually from the cast page */ }
-    goto(wardrobeJob ? `/stories/${storyKey}/cast?job=${wardrobeJob}` : `/stories/${storyKey}/cast`);
-  } else { wz.error = r.data?.error || 'save failed'; }
-}
-
-// --- wizard draft editing ---
-export function addBeat() { w().board.beats.push({ title: '', summary: '', location: '', characters: [] }); }
-export function removeBeat(i) { w().board.beats.splice(i, 1); }
-export function moveBeat(i, dir) {
-  const b = w().board.beats, j = i + dir;
-  if (j < 0 || j >= b.length) return;
-  [b[i], b[j]] = [b[j], b[i]];
-}
-export function addLocation() {
-  const n = w().locations.length + 1, id = `place-${n}`;
-  w().locations.push({ id, name: `Location ${n}`, description: '', background_prompt: '' });
-  if (!w().start) w().start = id;
-}
-export function removeLocation(i) {
-  const [gone] = w().locations.splice(i, 1);
-  if (w().start === gone.id) w().start = w().locations[0]?.id || null;
-}
-export function addNpc() { w().cast.push({ name: '', role: '', appearance: '', persona: '', base_prompt: '', primary: false }); }
-export function removeNpc(i) { if (!w().cast[i]?.primary) w().cast.splice(i, 1); }   // never remove the protagonist
 
 // --- saved-story actions (route-based) ------------------------------------ //
 export async function deleteStory(key) {
@@ -555,13 +345,13 @@ if (browser) {
       JSON.stringify(stories.wizard);
       try { localStorage.setItem(DRAFT_LS, JSON.stringify(stories.wizard)); } catch { /* quota */ }
     });
-    // Auto-save to server when a character is selected (debounced 1.5 s).
+    // Auto-save to server once the build has any substance (debounced 1.5 s).
     $effect(() => {
       const wz = stories.wizard;
-      if (!wz.character) return;
+      if (!wz.premise && !wz.castKeys?.length && !wz.character) return;
       // Track fields that warrant a server re-save.
-      JSON.stringify({ step: wz.step, name: wz.name, premise: wz.board?.premise,
-                       board: wz.board, locations: wz.locations, cast: wz.cast });
+      JSON.stringify({ step: wz.step, name: wz.name, premise: wz.premise,
+                       castKeys: wz.castKeys, locations: wz.locations, arcs: wz.arcs });
       scheduleDraftSave();
     });
   });

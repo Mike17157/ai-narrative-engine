@@ -58,21 +58,18 @@ export function settingsTree() {
 export function storiesTree(path = '') {
   const list = stories.list || [];
 
-  // Mode B — wizard. Step ✓ marks are driven by ARTIFACT PRESENCE (storySteps), not
-  // the raw step index, so back-navigation / re-runs show accurate state. All 5 real
-  // steps appear (Setup · Spine · Storyboard · Scenes · Cast) plus the overview hub.
+  // Mode B — lean wizard: Premise · Characters · Outfits · Scenes (no spine/storyboard).
+  // Step ✓ marks are driven by ARTIFACT PRESENCE (storySteps), not the raw step index.
   if (path.startsWith('/stories/new')) {
     const st = Object.fromEntries(storySteps(stories.wizard).map((s) => [s.route, s.status]));
     const STEPS = [
-      { id: 'wz-setup',      label: 'Setup',      href: '/stories/new/setup',      route: null },
-      { id: 'wz-spine',      label: 'Spine',      href: '/stories/new/spine',      route: 'spine' },
-      { id: 'wz-storyboard', label: 'Storyboard', href: '/stories/new/storyboard', route: 'storyboard' },
+      { id: 'wz-premise',    label: 'Premise',    href: '/stories/new/premise',    route: null },
+      { id: 'wz-characters', label: 'Characters', href: '/stories/new/characters', route: 'characters' },
+      { id: 'wz-outfits',    label: 'Outfits',    href: '/stories/new/outfits',    route: 'outfits' },
       { id: 'wz-scenes',     label: 'Scenes',     href: '/stories/new/scenes',     route: 'scenes' },
-      { id: 'wz-cast',       label: 'Cast',       href: '/stories/new/characters', route: 'characters' },
     ];
     return [
       { id: 'wz-back', label: '← Library', href: '/stories', match: 'exact' },
-      { id: 'wz-overview', label: 'Overview', href: '/stories/new/overview' },
       ...STEPS.map((s) => {
         const done = s.route ? st[s.route] === 'done' : false;
         return { id: s.id, label: done ? s.label + ' ✓' : s.label, href: s.href, done };
@@ -100,6 +97,7 @@ export function storiesTree(path = '') {
   return [
     { id: 'library', label: 'Library', href: '/stories', match: 'exact' },
     { id: 'drafts', label: `In progress${draftCount ? ` (${draftCount})` : ''}`, href: '/stories/drafts' },
+    { id: 'charlab', label: 'Character Lab', href: '/stories/characters' },
   ];
 }
 

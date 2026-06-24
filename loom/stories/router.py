@@ -335,6 +335,333 @@ def register(app, ctx):
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
+    # ── Character psyche scaffold — build ONE character through a conversation ──────
+    # Exemplars (life/saying/reaction) accrete into the character's own lorebook
+    # (scope = character key) as the interview agrees on them. See character_scaffold.py.
+
+    def _char_scope(key: str) -> str:
+        return re.sub(r"[^\w\-]+", "_", str(key or ""))
+
+    def _facet_cards(scope: str) -> list[dict]:
+        from ..server.services import lorebook_store as LS
+        out = []
+        for e in LS.load_lorebook(ctx.root, scope):
+            if (e.source or "") != "interview":
+                continue
+            out.append({"id": e.id, "type": e.facet or "life", "title": e.title,
+                        "keywords": list(e.keywords or []), "content": e.content})
+        return out
+
+    @app.post("/api/stories/character/{key}/interview")
+    def character_interview(key: str, body: dict):
+        """One conversational turn developing a character. Returns the agent's `reply` and
+        commits any newly-agreed exemplars to the character lorebook.
+        Body: { messages: [{role, content}], model?: str }"""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import (
+            INTERVIEW_SCHEMA, INTERVIEW_SYSTEM, facet_to_entry, interview_prompt)
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(key)
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        provider, _systems = ctx.builder_ctx(body, "character")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+
+        scope = _char_scope(key)
+        entries = LS.load_lorebook(ctx.root, scope)
+        prompt = interview_prompt(ch.name, ch.system, entries, body.get("messages") or [])
+        try:
+            res = provider.generate_text(system=INTERVIEW_SYSTEM, prompt=prompt, emits=INTERVIEW_SCHEMA)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"interview failed: {exc}"}, status_code=500)
+
+        data = res.data or {}
+        saved = []
+        for f in (data.get("facets") or []):
+            e = facet_to_entry(f)
+            if e is not None:
+                LS.upsert_entry(ctx.root, scope, e)
+                saved.append(e.id)
+        return {"ok": True, "reply": (data.get("reply") or "").strip(),
+                "saved": saved, "facets": _facet_cards(scope)}
+
+    @app.get("/api/stories/character/{key}/facets")
+    def character_facets(key: str):
+        """All exemplar cards established for a character (read from its lorebook)."""
+        if ctx.base_settings.characters.get(key) is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        return {"ok": True, "facets": _facet_cards(_char_scope(key))}
+
+    @app.post("/api/stories/character/{key}/facets/{entry_id}/refine")
+    def character_refine_facet(key: str, entry_id: str, body: dict):
+        """Regenerate ONE exemplar given a writer instruction (the iterate primitive)."""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import REFINE_SCHEMA, FACET_TYPES
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(key)
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        scope = _char_scope(key)
+        entry = next((e for e in LS.load_lorebook(ctx.root, scope) if e.id == entry_id), None)
+        if entry is None:
+            return JSONResponse({"error": "no such facet"}, status_code=404)
+        provider, _systems = ctx.builder_ctx(body, "character")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+
+        instruction = (body.get("instruction") or "").strip() or "Sharpen and make it more specific."
+        ftype = entry.facet or "life"
+        guide = {"life": "a vivid 1-3 sentence scene from their past",
+                 "saying": "an actual line in their voice",
+                 "reaction": "a 'When <situation>, they <do/say>' pattern"}.get(ftype, "")
+        prompt = (
+            f"CHARACTER: {ch.name}\nPERSONA:\n{ch.system or '(thin)'}\n\n"
+            f"CURRENT {ftype.upper()} EXEMPLAR — \"{entry.title}\":\n{entry.content}\n\n"
+            f"WRITER'S INSTRUCTION: {instruction}\n\n"
+            f"Rewrite this {ftype} exemplar as {guide}. Keep it true to the character. "
+            "Output structured JSON only.")
+        try:
+            res = provider.generate_text(
+                system=f"You refine one character exemplar. Type: {ftype}. Concrete, specific, "
+                       "in-character. No abstract trait talk.", prompt=prompt, emits=REFINE_SCHEMA)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"refine failed: {exc}"}, status_code=500)
+        d = res.data or {}
+        if (d.get("content") or "").strip():
+            entry.title = (d.get("title") or entry.title).strip()
+            entry.content = d["content"].strip()
+            if d.get("keywords"):
+                entry.keywords = [str(k).strip() for k in d["keywords"] if str(k).strip()]
+            LS.upsert_entry(ctx.root, scope, entry)
+        return {"ok": True, "facets": _facet_cards(scope)}
+
+    @app.delete("/api/stories/character/{key}/facets/{entry_id}")
+    def character_delete_facet(key: str, entry_id: str):
+        from ..server.services import lorebook_store as LS
+        LS.delete_entry(ctx.root, _char_scope(key), entry_id)
+        return {"ok": True, "facets": _facet_cards(_char_scope(key))}
+
+    @app.post("/api/stories/improv")
+    def character_improv(body: dict):
+        """Put 2-3 characters in a scene and let them bounce off each other (reveals
+        idiosyncrasy through behaviour). Returns the transcript — nothing is committed.
+        Body: { characters: [key], situation: str, rounds?: int }"""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import facet_digest, run_improv
+
+        body = body or {}
+        keys = [k for k in (body.get("characters") or []) if k]
+        if len(keys) < 2:
+            return JSONResponse({"error": "pick at least two characters"}, status_code=400)
+        cast = []
+        for k in keys:
+            ch = ctx.base_settings.characters.get(k)
+            if ch is None:
+                return JSONResponse({"error": f"no such character: {k}"}, status_code=404)
+            digest = facet_digest(LS.load_lorebook(ctx.root, _char_scope(k)))
+            cast.append({"key": k, "name": ch.name, "persona": ch.system, "digest": digest})
+        provider, _systems = ctx.builder_ctx(body, "character")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+        situation = (body.get("situation") or "").strip() or \
+            f"{cast[0]['name']} and {cast[1]['name']} cross paths and end up talking."
+        try:
+            rounds = int(body.get("rounds") or 2)
+        except (TypeError, ValueError):
+            rounds = 2
+        try:
+            transcript = run_improv(provider, situation=situation, cast=cast, rounds=max(1, min(rounds, 3)))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"improv failed: {exc}"}, status_code=500)
+        return {"ok": True, "situation": situation, "transcript": transcript}
+
+    @app.post("/api/stories/improv/harvest")
+    def character_improv_harvest(body: dict):
+        """Distil an improv transcript into new exemplars, committed per character.
+        Body: { characters: [key], transcript: [{speaker, text}] }"""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import (
+            FACETS_SCHEMA, HARVEST_SYSTEM, facet_to_entry, harvest_prompt)
+
+        body = body or {}
+        keys = [k for k in (body.get("characters") or []) if k]
+        transcript = body.get("transcript") or []
+        if not keys or not transcript:
+            return JSONResponse({"error": "need characters and a transcript"}, status_code=400)
+        provider, _systems = ctx.builder_ctx(body, "character")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+
+        added = {}
+        for k in keys:
+            ch = ctx.base_settings.characters.get(k)
+            if ch is None:
+                continue
+            scope = _char_scope(k)
+            existing = LS.load_lorebook(ctx.root, scope)
+            try:
+                res = provider.generate_text(
+                    system=HARVEST_SYSTEM,
+                    prompt=harvest_prompt(ch.name, transcript, existing), emits=FACETS_SCHEMA)
+            except Exception:  # noqa: BLE001
+                continue
+            ids = []
+            for f in ((res.data or {}).get("facets") or []):
+                e = facet_to_entry(f)
+                if e is not None:
+                    LS.upsert_entry(ctx.root, scope, e)
+                    ids.append(e.id)
+            added[k] = {"added": ids, "facets": _facet_cards(scope)}
+        return {"ok": True, "characters": added}
+
+    @app.post("/api/stories/contrast")
+    def character_contrast(body: dict):
+        """For each character, invent exemplars that make them DISTINCT from the others in the
+        selection (keeps an ensemble from feeling same-y). Body: { characters: [key] }"""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import (
+            CONTRAST_SYSTEM, FACETS_SCHEMA, contrast_prompt, facet_digest, facet_to_entry)
+
+        body = body or {}
+        keys = [k for k in (body.get("characters") or []) if k]
+        if len(keys) < 2:
+            return JSONResponse({"error": "pick at least two characters to contrast"}, status_code=400)
+        provider, _systems = ctx.builder_ctx(body, "character")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+
+        # Pre-load every selected character's persona + established digest.
+        cast = {}
+        for k in keys:
+            ch = ctx.base_settings.characters.get(k)
+            if ch is None:
+                return JSONResponse({"error": f"no such character: {k}"}, status_code=404)
+            entries = LS.load_lorebook(ctx.root, _char_scope(k))
+            cast[k] = {"name": ch.name, "persona": ch.system, "entries": entries,
+                       "digest": facet_digest(entries)}
+
+        out = {}
+        for k in keys:
+            me = cast[k]
+            others = [{"name": cast[o]["name"], "persona": cast[o]["persona"], "digest": cast[o]["digest"]}
+                      for o in keys if o != k]
+            scope = _char_scope(k)
+            try:
+                res = provider.generate_text(
+                    system=CONTRAST_SYSTEM,
+                    prompt=contrast_prompt(me["name"], me["persona"], me["entries"], others),
+                    emits=FACETS_SCHEMA)
+            except Exception:  # noqa: BLE001
+                continue
+            ids = []
+            for f in ((res.data or {}).get("facets") or []):
+                e = facet_to_entry(f)
+                if e is not None:
+                    LS.upsert_entry(ctx.root, scope, e)
+                    ids.append(e.id)
+            out[k] = {"added": ids, "facets": _facet_cards(scope)}
+        return {"ok": True, "characters": out}
+
+    @app.post("/api/stories/arcs/weave")
+    def arcs_weave(body: dict):
+        """Weave THEMED ARCS from a developed cast's exemplars (Phase 2: drama from character,
+        not from a story spine). Returns arcs; nothing is persisted.
+        Body: { characters: [key], premise?: str }"""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.arc_weave import ARCS_SCHEMA, ARCS_SYSTEM, arcs_prompt, digest_for
+
+        body = body or {}
+        keys = [k for k in (body.get("characters") or []) if k]
+        if len(keys) < 1:
+            return JSONResponse({"error": "pick at least one character"}, status_code=400)
+        cast = []
+        for k in keys:
+            ch = ctx.base_settings.characters.get(k)
+            if ch is None:
+                return JSONResponse({"error": f"no such character: {k}"}, status_code=404)
+            cast.append({"key": k, "name": ch.name, "persona": ch.system,
+                         "digest": digest_for(LS.load_lorebook(ctx.root, _char_scope(k)))})
+        # Arc reasoning is heavier than per-facet calls — use the "arc" stage (falls back to the
+        # active author model unless a stage_arc preset pins it elsewhere).
+        provider, _systems = ctx.builder_ctx(body, "arc")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+        try:
+            res = provider.generate_text(system=ARCS_SYSTEM,
+                                         prompt=arcs_prompt(cast, body.get("premise") or ""),
+                                         emits=ARCS_SCHEMA)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"arc weave failed: {exc}"}, status_code=500)
+        arcs = (res.data or {}).get("arcs") or []
+        return {"ok": True, "arcs": arcs, "cast": [c["name"] for c in cast]}
+
+    @app.post("/api/stories/from-cast")
+    def story_from_cast(body: dict):
+        """Persist a character-first build: a Story that REFERENCES the existing developed
+        characters (their exemplar lorebooks light up automatically in play) + the woven themed
+        arcs. No story spine, no NPC duplication. Body: { name, premise?, characters:[key], arcs:[...] }"""
+        from ..config.schema import Arc as ArcModel, Story
+
+        body = body or {}
+        keys = [k for k in (body.get("characters") or []) if k in ctx.base_settings.characters]
+        if not keys:
+            return JSONResponse({"error": "no valid characters"}, status_code=400)
+
+        name = (body.get("name") or ctx.base_settings.characters[keys[0]].name or "Story").strip()
+        existing_names = {st.name for st in ctx.base_settings.stories.values()}
+        if name in existing_names:
+            base_name, n = name, 2
+            while name in existing_names:
+                name, n = f"{base_name} ({n})", n + 1
+        skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
+        skey, i = skey_base, 2
+        while (ctx.story_dir() / f"{skey}.yaml").is_file():
+            skey, i = f"{skey_base}_{i}", i + 1
+
+        cast = [{"character": k, "primary": (idx == 0)} for idx, k in enumerate(keys)]
+        name_to_key = {ctx.base_settings.characters[k].name.lower(): k for k in keys}
+
+        arcs_validated = []
+        for idx, a in enumerate(body.get("arcs") or []):
+            if not isinstance(a, dict):
+                continue
+            spotlight = [name_to_key[str(n).lower()] for n in (a.get("spotlight") or [])
+                         if str(n).lower() in name_to_key]
+            arc = {"id": f"arc-{idx + 1}", "name": a.get("name") or f"Arc {idx + 1}",
+                   "themes": a.get("themes") or [], "premise": a.get("premise") or "",
+                   "dramatic_function": a.get("turn") or "", "cast": spotlight, "order": idx}
+            try:
+                arcs_validated.append(ArcModel(**arc).model_dump())
+            except Exception:  # noqa: BLE001
+                arcs_validated.append(arc)
+
+        locations = []
+        for l in (body.get("locations") or []):
+            if not isinstance(l, dict) or not l.get("id"):
+                continue
+            locations.append({"id": l["id"], "name": l.get("name", l["id"]),
+                              "description": l.get("description", ""),
+                              "background_prompt": l.get("background_prompt", ""),
+                              "background": l.get("background")})
+        loc_ids = {l["id"] for l in locations}
+        start = body.get("start") if body.get("start") in loc_ids else (locations[0]["id"] if locations else None)
+
+        story = {"name": name, "premise": body.get("premise", ""), "cast": cast,
+                 "arcs": arcs_validated, "fields": {"source_character": keys[0]},
+                 "locations": locations, "start": start}
+        try:
+            Story(**story)  # validate (cast ∈ characters)
+            ctx.story_dir().mkdir(parents=True, exist_ok=True)
+            (ctx.story_dir() / f"{skey}.yaml").write_text(
+                yaml.safe_dump(story, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            ctx.reload_settings()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
+        return {"ok": True, "key": skey}
+
     @app.post("/api/stories/builder/prompt")
     def builder_prompt(body: dict):
         """Preview/inspect a builder STAGE's prompt before generating. Returns the
@@ -457,9 +784,11 @@ def register(app, ctx):
         provider, systems = ctx.builder_ctx(body or {}, "locations")
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
-        board = (body or {}).get("board") or {}
+        body = body or {}
+        board = body.get("board") or {}
+        premise = (body.get("premise") or "").strip()
         try:
-            return extract_locations(provider, board=board, systems=systems)
+            return extract_locations(provider, board=board, premise=premise, systems=systems)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
 

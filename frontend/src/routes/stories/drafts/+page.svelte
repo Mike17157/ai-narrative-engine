@@ -35,7 +35,7 @@
       {#each drafts as s (s.id)}
         <StoryProgressCard draft={s}
           onResume={(d) => resumeDraft(d.id, 'step')}
-          onOverview={(d) => resumeDraft(d.id, 'overview')}
+          onOverview={(d) => resumeDraft(d.id, 'step')}
           onDiscard={discardDraft} />
       {/each}
     </div>

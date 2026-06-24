@@ -5,18 +5,28 @@ from __future__ import annotations
 from ._helpers import LOCATIONS_SCHEMA, _call, _slug, _sys
 
 
-def extract_locations(provider, *, board: dict, systems: dict | None = None) -> dict:
-    seen, places = set(), []
-    for b in board.get("beats", []):
-        loc = (b.get("location") or "").strip()
-        if loc and loc.lower() not in seen:
-            seen.add(loc.lower()); places.append(loc)
-    place_lines = "\n".join(f"- {p}" for p in places) or "(infer from the logline)"
-    out = _call(provider, _sys(systems or {}, "locations"),
-                f"LOGLINE: {board.get('logline','')}\nTONE: {board.get('tone','')}\n"
-                f"PLACES THE STORY VISITS:\n{place_lines}\n\n"
-                "Consolidate these into a tight set of KEENLY DISTINCT neutral locations.",
-                LOCATIONS_SCHEMA, "locations")
+def extract_locations(provider, *, board: dict | None = None, premise: str = "",
+                      systems: dict | None = None) -> dict:
+    """Derive distinct neutral locations. Either from a storyboard `board` (consolidate the
+    places its beats visit) OR — in the character-first flow — straight from a `premise`
+    string (infer the places such a story would naturally visit)."""
+    board = board or {}
+    if (premise or "").strip() and not board.get("beats"):
+        prompt = (f"PREMISE:\n{premise.strip()}\n\n"
+                  "From this premise, infer 4-7 KEENLY DISTINCT neutral locations such a story "
+                  "would naturally visit — strongly varied, specific places (not generic). "
+                  "Pick the one it would most naturally OPEN in as `start`.")
+    else:
+        seen, places = set(), []
+        for b in board.get("beats", []):
+            loc = (b.get("location") or "").strip()
+            if loc and loc.lower() not in seen:
+                seen.add(loc.lower()); places.append(loc)
+        place_lines = "\n".join(f"- {p}" for p in places) or "(infer from the logline)"
+        prompt = (f"LOGLINE: {board.get('logline','')}\nTONE: {board.get('tone','')}\n"
+                  f"PLACES THE STORY VISITS:\n{place_lines}\n\n"
+                  "Consolidate these into a tight set of KEENLY DISTINCT neutral locations.")
+    out = _call(provider, _sys(systems or {}, "locations"), prompt, LOCATIONS_SCHEMA, "locations")
 
     locations, id_map = [], {}
     for loc in out.get("locations", []):
