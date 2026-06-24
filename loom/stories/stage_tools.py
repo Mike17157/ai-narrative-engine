@@ -82,15 +82,18 @@ def _provider(ctx, body: dict, stage: str):
     produces="board",
 )
 def _storyboard(ctx, body: dict) -> dict:
-    from .pipeline import parse_storyboard, storyboard_inputs
+    from .pipeline import board_to_graph, parse_storyboard, storyboard_inputs
     ch = _character(ctx, body)
     provider, systems = _provider(ctx, body, "storyboard")
+    base = body.get("spine") or body.get("graph") or {}
     system, prompt = storyboard_inputs(
         name=ch.name, persona=ch.system, extras=ctx.card_extras(ch, body["character"]),
-        systems=systems, premise=(body.get("premise") or "").strip(),
-        spine=body.get("spine") or {})
+        systems=systems, premise=(body.get("premise") or "").strip(), spine=base)
     res = provider.generate_text(system=system, prompt=prompt)
-    return {"board": parse_storyboard(res.text or "")}
+    board = parse_storyboard(res.text or "")
+    # Hand back BOTH: the rich board AND a development-graph projection the canvas can render
+    # (beats → nodes), merged onto the working graph's spine so wound/lie/truth aren't lost.
+    return {"board": board, "graph": board_to_graph(board, base if isinstance(base, dict) else {})}
 
 
 @stage_tool(

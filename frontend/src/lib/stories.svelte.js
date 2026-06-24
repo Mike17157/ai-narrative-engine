@@ -107,7 +107,29 @@ export function cancelWizard() {
 // Reset wizard state without navigating (used when discarding a draft from the library).
 export function resetWizard() { stories.wizard = blankWizard(); }
 
-export function gotoStep(n) { if (n < stories.wizard.step) stories.wizard.step = n; } // only go back
+export function gotoStep(n) { stories.wizard.step = n; } // non-linear: jump to any step
+
+// Derive per-step build status from ARTIFACT PRESENCE (not the raw `step` index, which
+// is only a soft "where gen last left off" hint). Defensive across all three shapes:
+// a wizard draft (board/locations/cast arrays), the live stories.wizard, and a loaded
+// Story (storyboard object, locations array). Never call this on a saved-story LIST
+// summary — those omit spine/beats. status: 'done' | 'active' | 'todo'.
+export function storySteps(s) {
+  if (!s) return [];
+  const board     = s.board || s.storyboard || null;
+  const beats      = board?.beats || [];
+  const spineDone  = !!(s.spine && (s.spine.wound || s.spine.lie || s.spine.truth));
+  const locCount   = typeof s.locations === 'number' ? s.locations : (s.locations?.length || 0);
+  const castCount  = Array.isArray(s.cast) ? s.cast.length : 0;
+  const step       = s.step;   // present only on drafts / live wizard
+  const stat = (done, idx) => done ? 'done' : (step != null && idx === step) ? 'active' : 'todo';
+  return [
+    { key: 'spine',      label: 'Spine',      route: 'spine',      status: stat(spineDone,        1) },
+    { key: 'storyboard', label: 'Storyboard', route: 'storyboard', status: stat(beats.length > 0, 2) },
+    { key: 'scenes',     label: 'Scenes',     route: 'scenes',     status: stat(locCount > 0,     3) },
+    { key: 'cast',       label: 'Cast',       route: 'characters', status: stat(castCount > 0,    4) },
+  ];
+}
 
 // ── Server-side draft persistence ─────────────────────────────────────────── //
 // Auto-saves the full wizard state whenever the character is set, debounced to
@@ -143,9 +165,16 @@ function scheduleDraftSave() {
 }
 
 // Load a draft from the server and restore wizard state so the user can continue.
-export async function resumeDraft(id) {
-  const r = await get(`/stories/draft/${id}`);
-  if (!r?.character) return;
+// `to`: 'overview' → the non-linear build hub (see every step's status); 'step' →
+// continue at the furthest reached step. Network/decode failures surface a message
+// instead of silently doing nothing (a dead backend used to make the buttons no-op).
+export async function resumeDraft(id, to = 'step') {
+  let r = null;
+  try { r = await get(`/stories/draft/${id}`); } catch { r = null; }
+  if (!r?.character) {
+    stories.msg = { err: true, text: 'Could not load that draft — is the backend running?' };
+    return;
+  }
   stories.wizard = {
     ...blankWizard(),
     ...r,
@@ -153,6 +182,7 @@ export async function resumeDraft(id) {
                      // Without this remap, auto-save would write a NEW draft file every resume.
     busy: false, streaming: false, streamText: '', error: null,
   };
+  if (to === 'overview') { goto('/stories/new/overview'); return; }
   const step = r.step ?? 0;
   const stepRoutes = ['setup', 'spine', 'storyboard', 'scenes', 'characters'];
   goto(`/stories/new/${stepRoutes[step] || 'setup'}`);
@@ -257,7 +287,7 @@ export async function genStoryboard(workshopPremise = '') {
   }
 }
 
-export async function regenStoryboard() { stories.wizard.step = 0; await genStoryboard(); }
+export async function regenStoryboard() { await genStoryboard(); }
 
 // Faithful draft: expand the development graph node-by-node into chapters (preserving
 // branches), instead of re-deriving from a premise string. Seeds spine from the graph

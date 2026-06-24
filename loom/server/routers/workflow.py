@@ -217,14 +217,18 @@ def register(app, ctx):
                 recipes = meta.get("recipes", {})
             except Exception:  # noqa: BLE001
                 pass
+        from ...comfy.workflow_check import classify_workflow
+        graph = json.loads(path.read_text(encoding="utf-8"))
+        klass = classify_workflow(graph, path.name)
         return {
             "model": model, "path": str(path),
-            "json": json.loads(path.read_text(encoding="utf-8")),
+            "json": graph,
             "injects": injects,
             "sections": sections,
             "key_nodes": key_nodes,
             "description": description,
             "recipes": recipes,
+            "type": klass["type"], "media": klass["media"], "needs_init": klass["needs_init"],
         }
 
     @app.post("/api/workflow")

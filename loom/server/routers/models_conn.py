@@ -27,13 +27,45 @@ class SaveConnRequest(BaseModel):
 
 
 def register(app, ctx):
+    @app.get("/api/hardware")
+    def hardware() -> dict:
+        """Local GPU sampled at runtime + whether a RunPod cloud target is configured.
+        Drives the local/cloud-only placement labels on image workflows."""
+        rp = ctx.runpod_config
+        return {"gpu": ctx.gpu_info(),
+                "cloud": bool(rp.get("enabled") and rp.get("api_key") and rp.get("serverless_endpoint_id"))}
+
     @app.get("/api/models")
     def models() -> dict:
+        import json as _json
+
+        from ...comfy.hardware import classify_placement
+        from ...comfy.workflow_check import classify_workflow
+
         s = ctx.effective_settings()
         fams = ctx.image_families()
+        bd = ctx.comfy_base_dir()
+        models_dir = (bd / "models") if bd else None
+        vram = ctx.gpu_info().get("vram_gb")
+        flagged = ctx.runpod_models()
+
+        def _describe(k: str) -> dict:
+            """Type/media/needs_init (nodes + filename) + local/cloud placement (probed
+            VRAM vs the workflow's model sizes). Resilient if the graph can't be read."""
+            path = ctx.workflow_path(k)
+            graph = None
+            if path is not None and path.is_file():
+                try:
+                    graph = _json.loads(path.read_text(encoding="utf-8"))
+                except Exception:  # noqa: BLE001
+                    graph = None
+            out = classify_workflow(graph, path.name if path else k)
+            out.update(classify_placement(graph or {}, models_dir, vram, manual_cloud=(k in flagged)))
+            return out
+
         text = [{"key": k, "provider": m.provider, "model": m.options.get("model")}
                 for k, m in s.models.items() if m.kind == "text"]
-        image = [{"key": k, "provider": m.provider, "family": fams.get(k, "unknown")}
+        image = [{"key": k, "provider": m.provider, "family": fams.get(k, "unknown"), **_describe(k)}
                  for k, m in s.models.items() if m.kind == "image"]
         return {"text": text, "image": image}
 

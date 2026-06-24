@@ -5,7 +5,7 @@
 // a horizontal subnav bar (+ dropdowns for nodes with children).
 
 import { chars } from './characters.svelte.js';
-import { stories } from './stories.svelte.js';
+import { stories, storySteps } from './stories.svelte.js';
 import { app } from './app.svelte.js';
 
 export function charactersTree() {
@@ -58,23 +58,25 @@ export function settingsTree() {
 export function storiesTree(path = '') {
   const list = stories.list || [];
 
-  // Mode B — wizard
+  // Mode B — wizard. Step ✓ marks are driven by ARTIFACT PRESENCE (storySteps), not
+  // the raw step index, so back-navigation / re-runs show accurate state. All 5 real
+  // steps appear (Setup · Spine · Storyboard · Scenes · Cast) plus the overview hub.
   if (path.startsWith('/stories/new')) {
-    const step = stories.wizard?.step ?? 0;
+    const st = Object.fromEntries(storySteps(stories.wizard).map((s) => [s.route, s.status]));
     const STEPS = [
-      { id: 'wz-setup',      label: 'Setup',      href: '/stories/new/setup' },
-      { id: 'wz-storyboard', label: 'Storyboard', href: '/stories/new/storyboard' },
-      { id: 'wz-scenes',     label: 'Scenes',     href: '/stories/new/scenes' },
-      { id: 'wz-cast',       label: 'Cast',       href: '/stories/new/characters' },
+      { id: 'wz-setup',      label: 'Setup',      href: '/stories/new/setup',      route: null },
+      { id: 'wz-spine',      label: 'Spine',      href: '/stories/new/spine',      route: 'spine' },
+      { id: 'wz-storyboard', label: 'Storyboard', href: '/stories/new/storyboard', route: 'storyboard' },
+      { id: 'wz-scenes',     label: 'Scenes',     href: '/stories/new/scenes',     route: 'scenes' },
+      { id: 'wz-cast',       label: 'Cast',       href: '/stories/new/characters', route: 'characters' },
     ];
     return [
       { id: 'wz-back', label: '← Library', href: '/stories', match: 'exact' },
-      ...STEPS.map((s, i) => ({
-        ...s,
-        done: i < step,
-        dimmed: i > step,
-        label: i < step ? s.label + ' ✓' : s.label
-      }))
+      { id: 'wz-overview', label: 'Overview', href: '/stories/new/overview' },
+      ...STEPS.map((s) => {
+        const done = s.route ? st[s.route] === 'done' : false;
+        return { id: s.id, label: done ? s.label + ' ✓' : s.label, href: s.href, done };
+      }),
     ];
   }
 
@@ -93,9 +95,11 @@ export function storiesTree(path = '') {
     ];
   }
 
-  // Mode A — library (no story links — the library page is now the management view)
+  // Mode A — library: Finished gallery + a separate In progress tab for wizard drafts.
+  const draftCount = list.filter((s) => s.draft).length;
   return [
     { id: 'library', label: 'Library', href: '/stories', match: 'exact' },
+    { id: 'drafts', label: `In progress${draftCount ? ` (${draftCount})` : ''}`, href: '/stories/drafts' },
   ];
 }
 

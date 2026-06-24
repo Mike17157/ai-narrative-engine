@@ -129,3 +129,36 @@ def parse_storyboard(text: str) -> dict:
                               "characters": [c for c in chars if c]})
     return {"heart": heart, "logline": logline, "premise": premise,
             "tone": tone, "themes": themes, "beats": beats}
+
+
+def board_to_graph(board: dict, base: dict | None = None) -> dict:
+    """Convert a storyboard BOARD into a development GRAPH the canvas renders.
+
+    The board's beats become graph nodes connected in sequence (each node.next points at the
+    next). Beat fields map onto the node schema: summary→what_happened, emotional_core→
+    inflection, plus title/location. The spine fields (wound/lie/truth) are NOT in a board, so
+    we preserve whatever the working graph already had (don't clobber the writer's spine); the
+    board's logline updates the graph's logline.
+    """
+    base = dict(base or {})
+    beats = [b for b in (board.get("beats") or []) if isinstance(b, dict)]
+    nodes: list[dict] = []
+    for i, b in enumerate(beats):
+        nodes.append({
+            "id": f"sb{i + 1}",
+            "title": (b.get("title") or f"Beat {i + 1}").strip(),
+            "inflection": (b.get("emotional_core") or "").strip(),
+            "what_happened": (b.get("summary") or "").strip(),
+            "location": (b.get("location") or "").strip(),
+            "start": "", "end": "", "next": [],
+        })
+    for i in range(len(nodes) - 1):
+        nodes[i]["next"] = [nodes[i + 1]["id"]]
+
+    graph = dict(base)
+    graph["nodes"] = nodes
+    if board.get("logline"):
+        graph["logline"] = board["logline"]
+    for f in ("wound", "lie", "truth"):
+        graph.setdefault(f, base.get(f, ""))
+    return graph

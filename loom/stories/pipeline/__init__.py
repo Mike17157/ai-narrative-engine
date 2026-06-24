@@ -19,7 +19,7 @@ from ._helpers import (
     _APPEARANCE_RULE, _OUTFIT_RULE, _TAG_RULE,
     _arr, _call, _card_context, _slug, _str_arr, _sys,
 )
-from .storyboard import parse_storyboard, storyboard_inputs
+from .storyboard import board_to_graph, parse_storyboard, storyboard_inputs
 from .locations import extract_locations
 from .characters import (
     extract_characters, extract_protagonist, revise_character,
@@ -41,7 +41,7 @@ __all__ = [
     "_APPEARANCE_RULE", "_OUTFIT_RULE", "_TAG_RULE",
     "_arr", "_call", "_card_context", "_slug", "_str_arr", "_sys",
     # storyboard
-    "storyboard_inputs", "parse_storyboard",
+    "storyboard_inputs", "parse_storyboard", "board_to_graph",
     # locations
     "extract_locations",
     # characters

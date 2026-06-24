@@ -118,6 +118,12 @@ class AppContext:
             "template_id": rp.template_id if rp else None,
         }
 
+    def gpu_info(self, refresh: bool = False) -> dict:
+        """The local GPU sampled once at runtime (name/vram_gb/compute_cap). Drives
+        local-vs-cloud workflow placement; pass refresh=True to re-probe."""
+        from ..comfy.hardware import probe_gpu
+        return probe_gpu(refresh=refresh)
+
     def set_runpod_enabled(self, enabled: bool) -> None:
         """Toggle RunPod routing on/off and persist to user.yaml."""
         self.runpod_config["enabled"] = enabled
@@ -286,9 +292,25 @@ class AppContext:
         # Where does this workflow run? Explicit override wins; otherwise the per-workflow
         # global default (runpod_models.json). 'cloud' needs the serverless endpoint + key.
         rp = self.runpod_config
+        cloud_ready = bool(rp.get("api_key") and rp.get("serverless_endpoint_id"))
         want_cloud = (provider_override == "cloud") or \
             (provider_override in (None, "") and model_id in self.runpod_models())
-        if want_cloud and rp.get("api_key") and rp.get("serverless_endpoint_id"):
+        # Hardware fallback: if the caller didn't force a target and this workflow's models
+        # aren't installed locally, it literally can't run on this machine — prefer cloud
+        # rather than failing on a missing-model error. Probe is cached; guarded so any
+        # hiccup falls back to the prior (local) behaviour.
+        if not want_cloud and provider_override in (None, "") and cloud_ready:
+            try:
+                from ..comfy.hardware import estimate_vram_need
+                wf_path = self.workflow_path(model_id)
+                bd = self.comfy_base_dir()
+                if wf_path and wf_path.is_file() and bd:
+                    graph = json.loads(wf_path.read_text(encoding="utf-8"))
+                    if estimate_vram_need(graph, bd / "models")["missing"]:
+                        want_cloud = True
+            except Exception:  # noqa: BLE001
+                pass
+        if want_cloud and cloud_ready:
             from ..providers.runpod_serverless_provider import RunPodServerlessProvider
             ropts = dict(opts)
             ropts["endpoint_id"] = rp["serverless_endpoint_id"]

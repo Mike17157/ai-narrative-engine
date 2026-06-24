@@ -6,23 +6,23 @@
   let { children } = $props();
   let wz = $derived(stories.wizard);
 
-  // Wizard steps are now folder-tree leaves (under "New story"); the in-page step
-  // strip is gone. Keep the progress guard: deep-linking past your draft's progress
-  // bounces to the furthest reached step.
+  // Wizard steps are folder-tree leaves (under "New story"). The wizard is NON-LINEAR:
+  // a step is reachable if its own INPUT exists (so you can jump back and re-run any
+  // step). The overview hub and the always-available setup/spine steps are exempt; a
+  // step whose prerequisite is genuinely absent falls back to setup.
   const reach = $derived({
+    overview: true,
     setup: true,
-    storyboard: !!wz.board || wz.streaming,
-    scenes: !!wz.locations,
-    characters: wz.cast !== null && wz.cast !== undefined
+    spine: true,                                       // generates from just a character
+    storyboard: !!wz.board || !!wz.spine || wz.streaming,
+    scenes: !!wz.locations || !!wz.board,              // can re-extract from the board
+    characters: (wz.cast !== null && wz.cast !== undefined) || !!wz.board
   });
   let step = $derived($page.url.pathname.split('/')[3] || 'setup');  // /stories/new/<step>
 
   $effect(() => {
     if (!step) return;
-    if (!reach[step]) {
-      const furthest = reach.characters ? 'characters' : reach.scenes ? 'scenes' : reach.storyboard ? 'storyboard' : 'setup';
-      goto(`/stories/new/${furthest}`, { replaceState: true });
-    }
+    if (reach[step] === false) goto('/stories/new/setup', { replaceState: true });
   });
 </script>
 

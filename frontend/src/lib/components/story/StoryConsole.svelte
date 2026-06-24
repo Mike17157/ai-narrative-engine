@@ -105,8 +105,11 @@
       try {
         const r = await post('/stories/run-stage', { stage, character, spine: workingGraph || undefined });
         if (!r.data?.ok) { fnMsg = r.data?.error || `${stage} failed`; continue; }
-        if (r.data.spine && typeof r.data.spine === 'object') { setGraph(r.data.spine, true); fnMsg = `✓ ran ${stage}`; }
-        else if (r.data.board) { fnMsg = `✓ ran ${stage} → ${(r.data.board.beats || []).length} beats`; onBoard?.(r.data.board); }
+        // Both storyboard (board→graph projection) and spine return a graph-shaped doc → swap
+        // the canvas to it so "storyboard this" visibly populates the development graph.
+        const graph = r.data.graph || (r.data.spine && typeof r.data.spine === 'object' ? r.data.spine : null);
+        if (graph) setGraph(graph, true);
+        if (r.data.board) { onBoard?.(r.data.board); fnMsg = `✓ ran ${stage} → ${(r.data.board.beats || []).length} beats`; }
         else fnMsg = `✓ ran ${stage}`;
       } catch { fnMsg = `${stage} failed`; }
     }

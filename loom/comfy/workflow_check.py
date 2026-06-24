@@ -213,6 +213,66 @@ def suggest_io(graph: dict) -> dict:
     }
 
 
+def classify_workflow(graph: dict | None, filename: str | None = None) -> dict:
+    """Classify an image workflow by combining node-class TEXT MATCHING (what the graph
+    actually contains) with FILENAME matching (the author's stated intent). Returns
+    ``{type, media, needs_init}``:
+
+      * ``media``     — the file the graph emits: ``video`` (a VHS/Wan clip) or ``image``.
+      * ``needs_init``— True when it has a LoadImage node (img2img / a post-process).
+      * ``type``      — the functional class: ``txt2img | img2img | video | upscale |
+                        detailer | rembg``.
+
+    Filename intent wins for the post-process roles, because a full generation pipeline
+    can *contain* a detailer or background-remover without *being* one (e.g. anima_character
+    bakes both in but is a txt2img). Node evidence drives media + the txt2img/img2img split.
+    """
+    graph = graph or {}
+    cts = [str(n.get("class_type", "")).lower()
+           for n in graph.values() if isinstance(n, dict)]
+
+    def any_ct(*subs: str) -> bool:
+        return any(any(s in ct for s in subs) for ct in cts)
+
+    has_video   = any_ct("videocombine", "animatediff", "svd_img2vid") or any(ct.startswith("wanvideo") for ct in cts)
+    has_loadimg = any(ct == "loadimage" for ct in cts)
+    has_sampler = any_ct("sampler")
+    has_upscale = any_ct("ultimatesdupscale", "upscalemodelloader", "upscale")
+    has_detail  = any_ct("detailer")
+    has_rembg   = any_ct("rembg", "removebg", "remove_bg", "inspyrenet")
+
+    stem = Path(filename).stem.lower() if filename else ""
+
+    def fn(*subs: str) -> bool:
+        return any(s in stem for s in subs)
+
+    # 'filetype' the workflow emits — a clip vs a still.
+    media = "video" if (has_video or fn("i2v", "t2v", "video", "vid2vid")) else "image"
+
+    if media == "video":
+        wf_type = "video"
+    elif fn("upscale"):
+        wf_type = "upscale"
+    elif fn("detailer", "adetailer"):
+        wf_type = "detailer"
+    elif fn("rembg", "removebg", "cutout"):
+        wf_type = "rembg"
+    elif fn("img2img", "i2i"):
+        wf_type = "img2img"
+    elif fn("txt2img", "t2i"):
+        wf_type = "txt2img"
+    elif has_loadimg and not has_sampler:
+        # a pure post-process graph (load → op → save), no generation
+        wf_type = ("upscale" if has_upscale else "detailer" if has_detail
+                   else "rembg" if has_rembg else "img2img")
+    elif has_loadimg:
+        wf_type = "img2img"
+    else:
+        wf_type = "txt2img"
+
+    return {"type": wf_type, "media": media, "needs_init": has_loadimg}
+
+
 def check_workflow(graph: dict, models_dir: str | Path, catalog_entries: list[dict]) -> dict:
     """Dedupe refs, flag which are installed, and match missing ones to the catalog."""
     models_dir = Path(models_dir)
