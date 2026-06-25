@@ -650,6 +650,38 @@ _SPINE_TOOLS_ENTRIES = [
          "psychological beats from lie to truth).", "spine"),
 ]
 
+# Premise interview — a DETERMINISTIC question script. The premise builder feeds these
+# questions to the user IN ORDER (priority DESC), one per turn, growing a running premise
+# from the answers. Each entry's `content` IS the question asked. Reorder/edit/add freely
+# in the Lorebook manager — the flow reads whatever is enabled here, so the question set is
+# fully data-driven (no code change to re-script the interview).
+_PREMISE_INTERVIEW_ENTRIES = [
+    {"id": "protagonist", "title": "Who they are", "facet": "q", "priority": 60,
+     "keywords": ["who", "protagonist", "want", "desire", "goal"],
+     "content": "Don't summarize them — drop me into a specific moment that shows who they are right "
+                "now. What are they doing, and what do they ache for underneath it?"},
+    {"id": "lie", "title": "The lie they live by", "facet": "q", "priority": 55,
+     "keywords": ["lie", "misbelief", "flaw", "believe", "wound"],
+     "content": "What do they believe — about themselves, or how the world works — that quietly isn't "
+                "true? What honest thing are they protecting themselves from?"},
+    {"id": "inciting", "title": "What breaks the calm", "facet": "q", "priority": 50,
+     "keywords": ["change", "inciting", "begins", "where", "when", "situation"],
+     "content": "What cracks that open? Name the specific event — and where and when we first see it "
+                "land on them."},
+    {"id": "opposition", "title": "Who pushes back", "facet": "q", "priority": 45,
+     "keywords": ["opposition", "antagonist", "obstacle", "enemy", "conflict"],
+     "content": "Who or what pushes back hardest — and why is it personal, not just an obstacle in "
+                "the way?"},
+    {"id": "stakes", "title": "What's at stake", "facet": "q", "priority": 40,
+     "keywords": ["stakes", "lose", "fail", "cost", "risk"],
+     "content": "If they fail, what's lost out loud — and what quieter, more private thing is really "
+                "on the line?"},
+    {"id": "texture", "title": "Tone & image", "facet": "q", "priority": 35,
+     "keywords": ["tone", "genre", "mood", "image", "feel"],
+     "content": "What should this feel like — genre, tone, the weather of it — and is there one image "
+                "you already can't shake?"},
+]
+
 
 _STARTER_BOOKS = [
     ("_graph_fns", {"name": "Graph Functions", "category": "function", "rating": "sfw",
@@ -672,6 +704,11 @@ _STARTER_BOOKS = [
     ("_spine_tools", {"name": "Spine Agent Tools", "category": "function", "rating": "sfw",
                       "description": "Pipeline STAGES the Spine Agent can run (the spine architect)."},
      _SPINE_TOOLS_ENTRIES),
+    ("_premise_interview", {"name": "Premise Interview", "category": "craft", "rating": "sfw",
+                            "description": "Deterministic question script the premise builder asks IN "
+                                           "ORDER (priority DESC) to draw a story out of you — from "
+                                           "scratch or from a reference card. Edit/reorder the questions."},
+     _PREMISE_INTERVIEW_ENTRIES),
     ("rpg-sim", {"name": "RPG Simulation", "category": "rpg", "rating": "sfw",
                  "description": "Turn the chat into a lightweight tabletop RPG: skill checks, "
                                 "combat turns, inventory, and consequences."}, [
