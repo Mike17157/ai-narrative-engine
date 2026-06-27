@@ -93,13 +93,89 @@ export function toggleTts() {
 }
 export function toggleHandsFree() { voice.handsFree = !voice.handsFree; }
 
+// ── Local Whisper STT (backend /api/stt) — preferred when installed; else browser Web Speech ──
+// Web Speech gives live interim text but is Chromium-only + cloud; Whisper is local + works anywhere,
+// at the cost of record-then-transcribe (no live partial). We endpoint with an energy VAD below so
+// it auto-stops on silence, matching the hands-free loop.
+let _whisper = null;          // null=unknown, true/false (cached)
+async function whisperReady() {
+  if (_whisper !== null) return _whisper;
+  try { const r = await fetch('/api/stt/status'); _whisper = !!(await r.json()).available; }
+  catch { _whisper = false; }
+  if (_whisper) voice.supported = true;   // we can do STT even without browser Web Speech
+  return _whisper;
+}
+if (typeof window !== 'undefined') whisperReady();   // probe early so the mic reflects it
+
+let _rec = null, _stream = null, _actx = null, _vadRAF = 0, _silenceT = 0;
+
+function startWhisper(onFinal) {
+  navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
+    _stream = stream;
+    const chunks = [];
+    const rec = new MediaRecorder(stream);
+    _rec = rec;
+    rec.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+    rec.onstop = async () => {
+      stopVad();
+      try { _stream?.getTracks().forEach((t) => t.stop()); } catch { /* noop */ }
+      _stream = null; _rec = null;
+      const blob = new Blob(chunks, { type: rec.mimeType || 'audio/webm' });
+      let text = '';
+      if (blob.size) {
+        try {
+          const r = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
+          if (r.ok) text = ((await r.json()).text || '').trim();
+        } catch { /* noop */ }
+      }
+      voice.state = 'idle';          // MUST be idle before onFinal (submit() ignores 'thinking')
+      if (text) onFinal(text);
+    };
+    rec.start();
+    voice.state = 'listening'; voice.partial = '';
+    startVad(stream);
+  }).catch(() => { voice.state = 'idle'; });
+}
+
+// Energy-based endpointing: once speech is heard, auto-stop ~1.2s after it tapers to silence.
+function startVad(stream) {
+  try {
+    _actx = new (window.AudioContext || window.webkitAudioContext)();
+    const src = _actx.createMediaStreamSource(stream);
+    const an = _actx.createAnalyser(); an.fftSize = 512;
+    src.connect(an);
+    const buf = new Uint8Array(an.fftSize);
+    let spoke = false;
+    const SIL_MS = 1200, SPEECH_RMS = 0.015;
+    const tick = () => {
+      an.getByteTimeDomainData(buf);
+      let sum = 0; for (let i = 0; i < buf.length; i++) { const v = (buf[i] - 128) / 128; sum += v * v; }
+      const rms = Math.sqrt(sum / buf.length);
+      if (rms > SPEECH_RMS) {
+        spoke = true; stopSpeaking();                       // barge-in
+        if (_silenceT) { clearTimeout(_silenceT); _silenceT = 0; }
+      } else if (spoke && !_silenceT) {
+        _silenceT = setTimeout(stopListening, SIL_MS);
+      }
+      _vadRAF = requestAnimationFrame(tick);
+    };
+    _vadRAF = requestAnimationFrame(tick);
+  } catch { /* no VAD → user taps the mic to stop */ }
+}
+function stopVad() {
+  if (_vadRAF) { cancelAnimationFrame(_vadRAF); _vadRAF = 0; }
+  if (_silenceT) { clearTimeout(_silenceT); _silenceT = 0; }
+  try { _actx?.close(); } catch { /* noop */ } _actx = null;
+}
+
 let rec = null;
 
 // Start listening; calls onFinal(text) once with the final transcript, then returns to idle.
 // Returns false if speech recognition isn't available (caller shows the text-input fallback).
 export function startListening(onFinal) {
-  if (!SR) { voice.supported = false; return false; }
   stopSpeaking();                       // barge-in: talking cuts off the agent's voice
+  if (_whisper) { startWhisper(onFinal); return true; }   // local Whisper path (preferred)
+  if (!SR) { voice.supported = false; return false; }
   rec = new SR();
   rec.lang = 'en-US';
   rec.interimResults = true;
@@ -124,6 +200,7 @@ export function startListening(onFinal) {
 }
 
 export function stopListening() {
+  if (_rec && _rec.state !== 'inactive') { try { _rec.stop(); } catch { /* noop */ } return; }  // whisper: onstop transcribes
   try { rec?.stop(); } catch { /* already stopped */ }
   voice.state = 'idle';
 }

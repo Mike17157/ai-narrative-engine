@@ -36,6 +36,7 @@ from .routers import (
     presets,
     runpod,
     server,
+    stt,
     tags,
     trainer,
     tts,
@@ -97,6 +98,7 @@ _ROUTERS = (
     presets,
     image_presets,
     tts,
+    stt,
 )
 
 

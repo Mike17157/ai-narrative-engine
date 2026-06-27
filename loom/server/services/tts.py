@@ -31,11 +31,24 @@ def available() -> bool:
     return _available
 
 
+def _bind_espeak() -> None:
+    """Point phonemizer at the bundled espeak-ng (no system install needed). misaki uses espeak as the
+    G2P fallback for out-of-dictionary words — character names etc. — without it those words crash."""
+    try:
+        import espeakng_loader as _L
+        from phonemizer.backend.espeak.wrapper import EspeakWrapper
+        EspeakWrapper.set_library(_L.get_library_path())
+        EspeakWrapper.set_data_path(_L.get_data_path())
+    except Exception:  # noqa: BLE001 — dictionary words still work; only OOV fallback is lost
+        pass
+
+
 def _get_pipeline():
     global _pipeline
     if _pipeline is None:
         with _lock:
             if _pipeline is None:
+                _bind_espeak()
                 from kokoro import KPipeline
                 _pipeline = KPipeline(lang_code="a")     # 'a' = American English
     return _pipeline
