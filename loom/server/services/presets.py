@@ -134,10 +134,10 @@ _SEED_PRESETS = [
          "world, age and role — but never contradict anything stated. Persistent traits ONLY: no "
          "clothing, pose, expression or background (those come later).")},
     {"id": "storymaster", "name": "Storymaster", "mode": "assist",
-     "group": "Agents", "order": 9,
-     "description": "Consolidation entity — reads what happened and decides how events land on each "
-                    "character (relationships drift, exemplars form). May TWIST consequences. Not a "
-                    "story builder; it interprets aftermath (runs the consolidate tool).",
+     "group": "Dungeon Master", "order": 2,
+     "description": "The Dungeon Master's consolidation pass — reads what happened and decides how "
+                    "events land on each character (relationships drift, exemplars form). May TWIST "
+                    "consequences. Interprets aftermath between scenes (runs the consolidate tool).",
      "system": (
          "You are the STORYMASTER — a liminal consolidation entity that processes what has happened "
          "and decides how it settles into the people of the story, the way sleep consolidates memory.\n\n"
@@ -148,10 +148,11 @@ _SEED_PRESETS = [
          "versa, surface a buried connection. Twist for resonance, never randomness — every shift "
          "must be psychologically true to who the character is. Touch only characters the events "
          "actually reached; leave the rest unchanged.")},
-    {"id": "character_smith", "name": "Character Smith", "mode": "assist",
-     "group": "Agents", "order": 21.5,
-     "description": "The AUTONOMOUS character creator — invents a complete, psychologically grounded "
-                    "character from a brief in one shot. Invoked by other agents via create_character.",
+    {"id": "character_smith", "name": "Author", "mode": "assist",
+     "group": "Author", "order": 1,
+     "description": "The AUTHOR — the authoring agent you build the story WITH (its facets are the "
+                    "modes in configs/story_agent.json). Also the autonomous character creator behind "
+                    "create_character: invents a complete, psychologically grounded character in one shot.",
      "system": (
          "You are a character designer who builds REAL PEOPLE, not archetypes. From a brief (and the "
          "story's context) invent ONE complete, idiosyncratic, psychologically grounded character.\n\n"
@@ -450,9 +451,12 @@ def stage_book_id(stage: str) -> str:
 _STAGE_NAMES = {
     "storyboard": "Storyboard", "locations": "Locations",
     "characters": "Characters", "wardrobe": "Wardrobe", "base_image": "Base image",
-    "emotion": "Emotion", "workshop": "Workshop", "sim_director": "Sim director",
-    "sim_actor": "Sim actor",
+    "emotion": "Emotion", "workshop": "Workshop", "sim_director": "Director",
+    "sim_actor": "Actor",
 }
+# The simulation stages are the Dungeon Master's runtime engine (it runs scenes), so they group
+# under "Dungeon Master" beside the Storymaster, not with the authoring pipeline stages.
+_DM_STAGES = {"sim_director": 3, "sim_actor": 4}
 
 
 def seed_stage_presets(root: Path) -> None:
@@ -475,7 +479,9 @@ def seed_stage_presets(root: Path) -> None:
         pid = f"stage_{stage}"
         if pid not in have:
             lib["presets"].append(_clean_preset({
-                "id": pid, "name": _STAGE_NAMES[stage], "group": "Pipeline stages",
+                "id": pid, "name": _STAGE_NAMES[stage],
+                "group": "Dungeon Master" if stage in _DM_STAGES else "Pipeline stages",
+                "order": _DM_STAGES.get(stage, 0),
                 "mode": "assist", "model": models.get(stage, "") or "",
                 "system": DEFAULT_SYSTEMS.get(stage, "") or "",
             }))

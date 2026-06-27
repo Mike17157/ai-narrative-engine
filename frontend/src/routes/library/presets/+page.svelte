@@ -86,7 +86,7 @@
   // PRIMARY presets are the ones you actually pick to talk to: Free Chat, the Agents (story
   // partners that can call their scripts) and Default. Everything else — image-prompt utilities
   // and the headless pipeline stages — is engine internals, tucked under an advanced section.
-  const _isPrimary = (g) => g === 'Chat' || g === 'Agents' || g === 'Other';
+  const _isPrimary = (g) => g === 'Chat' || g === 'Agents' || g === 'Author' || g === 'Dungeon Master' || g === 'Other';
   let chatGroups = $derived(groupedPresets.filter((g) => _isPrimary(g.group)));
   let pipelineGroups = $derived(groupedPresets.filter((g) => !_isPrimary(g.group)));
   let showPipeline = $state(false);
