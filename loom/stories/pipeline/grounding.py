@@ -197,33 +197,28 @@ def declichify_titles(provider, board: dict) -> dict:
     return board
 
 
-# Per-PART anchor craft (by entry id): the principles bound to each authoring stage — the theory
-# that actually governs THAT part, fed deterministically (bypasses retrieve()'s fuzzy ranking +
-# one-per-facet collapsing) so it always lands. Each part gets its own lens, not a blunt dump:
-#   premise    → the organic seed + the moral argument the whole thing will prove
-#   character  → the INNER life (weakness/need, wound, lie, flawed theory) — not opponent design
-#   antagonist → the opponent built to attack the hero's weakness over the same moral question
-#   arc        → the CHANGE spine (arc shapes, moral argument, Truby's 7 steps)
-#   storyboard → STRUCTURE/causality (7 steps, promise→payoff, escalation, try-fail)
-#   chapters   → an arc's beats: escalate via causality, LAND the climax as self-revelation
-#   ending     → the climax itself: self-revelation + world-bound stakes, surprising-yet-inevitable
-_SECTION_ANCHORS = {
-    "premise":    ["designing-principle", "moral-argument"],
-    "character":  ["want-vs-need", "the-ghost", "lie-the-character-believes", "sacred-flaw"],
-    "antagonist": ["opponent-attacks-weakness", "four-corner-opposition", "antagonist-mirror"],
-    "arc":        ["arc-types", "growth-cycles", "moral-argument", "seven-key-steps"],
-    "storyboard": ["seven-key-steps", "promise-progress-payoff", "escalation-causality"],
-    "chapters":   ["self-revelation", "world-bound-climax", "escalation-causality", "try-fail-cycles"],
-    "ending":     ["self-revelation", "world-bound-climax", "inevitable-surprising-ending"],
-}
+# Per-PART anchor craft: which _craft entry ids are bound to each authoring stage, fed
+# deterministically (bypasses retrieve()'s fuzzy ranking) so the governing theory always lands.
+# The map lives in configs/story_agent.json (agent_config.section_anchors) — single source, shared
+# with the chat agent. premise→seed+moral-argument, character→inner life, antagonist→attacks-weakness,
+# arc→change spine, storyboard→structure/causality, chapters→beats land the climax, ending→the climax.
 _CRAFT_HEADER = "CRAFT NOTES — modern storytelling principles to apply here:"
 
 
 def craft_notes(root, query: str, k: int = 6, section: str = "") -> str:
     """Modern story-craft principles (the _craft lorebook) for an authoring prompt. When `section`
     is given, its ANCHOR entries are guaranteed first (deterministic — not subject to retrieval
-    ranking), then query-retrieval fills in for breadth. Without a section it's pure retrieval."""
-    anchors = _SECTION_ANCHORS.get(section, [])
+    ranking), then query-retrieval fills in for breadth. Without a section it's pure retrieval.
+
+    Section→anchor bindings come from configs/story_agent.json (single source, shared with the chat
+    agent via agent_config.section_anchors)."""
+    anchors = []
+    if section:
+        try:
+            from ..agent_config import section_anchors as _sa
+            anchors = _sa(root).get(section) or []
+        except Exception:  # noqa: BLE001
+            anchors = []
     if not anchors:
         return _retrieve_block(root, query, "_craft", k, _CRAFT_HEADER)
     try:

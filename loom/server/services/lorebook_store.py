@@ -270,16 +270,6 @@ def _seed_books(root: Path, con) -> None:
         except Exception:  # noqa: BLE001 — grounding optional; seeding must not break init
             pass
 
-    # Per-book BEHAVIOURS: the driving prompt the chat agent adopts when the book triggers. One
-    # `_behavior` entry per function book, seeded once (user edits preserved — only insert if absent).
-    for bid, (title, kws, content) in _BEHAVIORS.items():
-        if not con.execute("SELECT 1 FROM books WHERE id=?", (bid,)).fetchone():
-            continue
-        if con.execute("SELECT 1 FROM lore WHERE scope=? AND entry_id='_behavior'", (bid,)).fetchone():
-            continue
-        _insert(con, bid, LoreEntry(id="_behavior", title=title, keywords=kws, content=content,
-                                    facet="behavior", priority=5))
-
     # Keep the managed `_refusal` floor entry current: convert the original one-phrase-per-
     # entry format to the trigger→action model AND refresh the phrase set when it changes
     # (e.g. the high-precision retune). Only the floor entry + legacy input rows are touched;
@@ -830,48 +820,9 @@ _PREMISE_INTERVIEW_ENTRIES = [
 ]
 
 
-# Per-book BEHAVIOURS — the driving prompt the unified chat agent ADOPTS when this book's triggers
-# fire. Stored as a `facet="behavior"` lorebook entry per function book, so behaviour (not just
-# scripts) is lorebook-fetched: the one agent shifts persona by what the writer mentions. Distilled
-# from the retired specialist agents' systems. (entry_id "_behavior", one per book.)
-_BEHAVIORS = {
-    # ONE "Characters" mode — creating, editing AND their relationships are all working on the cast.
-    "_smith_tools": ("Behaviour — characters",
-        ["character", "persona", "cast member", "villain", "protagonist", "npc", "create a character",
-         "add a character", "new character", "someone new", "make a person",
-         "edit character", "change character", "rename character", "update character", "appearance",
-         "looks like", "describe", "their backstory", "their personality",
-         "relationship", "bond", "feels about", "feel toward", "rival", "lover", "ally", "enemy",
-         "friend", "resent", "trust", "dynamic between", "how they feel", "strained", "hostile",
-         "warm", "devoted", "distant", "closer", "reconcile", "drift apart"],
-        "Work on the CAST. NEW people: build REAL, idiosyncratic characters — never archetypes (a "
-        "specific wound, the lie it bred, a want vs a deeper need, a contradiction, a distinct voice), "
-        "with the rich create_character tool; never a bare add. EDITS: keep an existing character "
-        "internally consistent — change only what's asked, concrete over adjectives. RELATIONSHIPS: "
-        "prose in 2-3 words (the dynamic) + a coarse stance for colour, never numbers; bonds are "
-        "asymmetric and specific — how they actually act around each other."),
-    "_location_fns": ("Behaviour — locations",
-        ["location", "place", "setting", "room", "city", "map", "where it happens"],
-        "Build neutral, concrete places — physical look, materials, light, atmosphere; no people or "
-        "events baked in. Stay consistent with the world's tone and era."),
-    "_scene_fns": ("Behaviour — scenes & places",
-        ["scene", "connect scenes", "connect", "link", "navigate", "move to", "area", "sub-scene", "path between"],
-        "Wire scenes and places into a navigable map; anchor character sub-scenes to their places. "
-        "Keep transitions concrete."),
-    "_wardrobe_fns": ("Behaviour — wardrobe",
-        ["outfit", "wardrobe", "clothes", "dress", "costume", "attire", "what they wear"],
-        "Design outfits that express personality, role, status and world — a small coherent set with "
-        "image-ready garment descriptors. Ground every choice in the setting; no generic filler."),
-    "_story_tools": ("Behaviour — shaping the story",
-        ["storyboard", "title", "rename the story", "call the story", "name the story", "premise",
-         "theme", "arc", "plot", "beats", "cover", "outline", "ending"],
-        "Work as a developmental editor: find the truest story latent in the cast — wound, want vs "
-        "need, human inevitable conflict, every beat costs something. Treat the premise as a "
-        "FOUNDATION to build outward from and surprise, not a spec. Concrete over abstract; no "
-        "theme-word salad."),
-    # NOTE: no storymaster mode — the storymaster is a separate consolidation ROLE (runs on
-    # sleep/death), not a Builder mode you'd pick while authoring. Its tools still exist.
-}
+# Per-book BEHAVIOURS (personas + triggers) now live in configs/story_agent.json — see
+# agent_config.py. They were once `facet="behavior"` lorebook rows seeded here; that copy was the
+# "second system" that made modes feel unsettled, so it was removed. Config = control plane.
 
 
 _STARTER_BOOKS = [

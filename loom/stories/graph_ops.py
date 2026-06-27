@@ -84,6 +84,34 @@ def parse_functions(entries: list) -> list[GraphFunction]:
     return out
 
 
+def resolve_functions(names: list[str]) -> list[GraphFunction]:
+    """Resolve registered function NAMES straight to callable GraphFunctions — the direct path for
+    the chat agent, whose modes list their functions in story_agent.json instead of going through a
+    lorebook (the code registry in scripts.py / stage_tools.py is canonical). Unknown/dup names are
+    skipped. Books are still used by the pipeline + for preset/model binding, just not for this."""
+    from . import scripts as _S
+    from . import stage_tools as _ST
+
+    out: list[GraphFunction] = []
+    seen: set = set()
+    for raw in names or []:
+        name = str(raw).strip()
+        if not name or name in seen:
+            continue
+        reg = _S.get(name)
+        if reg is not None:
+            out.append(GraphFunction(name=name, describe=reg.describe, params=reg.params,
+                                     keywords=reg.keywords, writes=reg.writes, impl=reg.impl, kind="doc"))
+            seen.add(name)
+            continue
+        act = _ST.get(name)
+        if act is not None:
+            out.append(GraphFunction(name=name, describe=act.describe, params=act.params,
+                                     keywords=act.keywords, impl=act.run, kind="action"))
+            seen.add(name)
+    return out
+
+
 def is_function_entry(entry) -> bool:
     """True if this lore entry is a FUNCTION (a graph-op function OR a pipeline-stage
     function), vs a plain data entry. Used to keep function specs OUT of the data-lore
@@ -170,49 +198,6 @@ def offered(functions: list[GraphFunction], transcript: str, cap: int = 12) -> l
             re.search(rf"\b{re.escape(k.lower())}\b", text) for k in fn.keywords if k)
         (matched if hit else rest).append(fn)
     return (matched + rest)[:cap]
-
-
-def adopted_behaviors(root, book_ids: list, transcript: str) -> list[tuple[str, str]]:
-    """The driving-prompt BEHAVIOURS the chat agent adopts this turn — `(book_id, content)` for each
-    `facet="behavior"` entry whose trigger keywords fire. Behaviour is lorebook-fetched, so the one
-    agent shifts persona by what the writer mentions (its scripts come from the same books). The
-    book_ids form the behaviour SIGNATURE the caller uses to detect a persona switch."""
-    from ..server.services import lorebook_store as _LS
-    text = (transcript or "").lower()
-    out: list[tuple[str, str]] = []
-    for bid in book_ids or []:
-        for e in _LS.load_lorebook(root, bid):
-            if getattr(e, "facet", "") != "behavior" or not e.content:
-                continue
-            if (not e.keywords) or any(
-                    re.search(rf"\b{re.escape(k.lower())}\b", text) for k in e.keywords if k):
-                out.append((bid, e.content))
-    return out
-
-
-def behavior_of(root, book_id: str) -> str:
-    """The behaviour prompt of a specific book (its `facet="behavior"` entry), regardless of
-    keywords — used when the writer EXPLICITLY picks a mode instead of relying on trigger detection."""
-    from ..server.services import lorebook_store as _LS
-    for e in _LS.load_lorebook(root, book_id):
-        if getattr(e, "facet", "") == "behavior" and e.content:
-            return e.content
-    return ""
-
-
-def list_modes(root) -> list[dict]:
-    """Every selectable MODE — the function books that carry a behaviour entry. Each {id, label}
-    lets a UI offer an explicit persona switch (more reliable than keyword auto-detection)."""
-    from ..server.services import lorebook_store as _LS
-    out: list[dict] = []
-    for b in _LS.list_books(root):
-        if b.get("category") != "function":
-            continue
-        beh = next((e for e in _LS.load_lorebook(root, b["id"])
-                    if getattr(e, "facet", "") == "behavior" and e.content), None)
-        if beh is not None:
-            out.append({"id": b["id"], "label": (beh.title or b.get("name") or b["id"]).replace("Behaviour — ", "")})
-    return out
 
 
 def tools_spec(functions: list[GraphFunction]) -> list[dict]:
