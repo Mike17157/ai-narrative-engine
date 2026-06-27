@@ -86,7 +86,7 @@
   // PRIMARY presets are the ones you actually pick to talk to: Free Chat, the Agents (story
   // partners that can call their scripts) and Default. Everything else — image-prompt utilities
   // and the headless pipeline stages — is engine internals, tucked under an advanced section.
-  const _isPrimary = (g) => g === 'Chat' || g === 'Agents' || g === 'Author' || g === 'Dungeon Master' || g === 'Other';
+  const _isPrimary = (g) => g === 'Author' || g === 'Narrative' || g === 'Dungeon Master' || g === 'Agents';
   let chatGroups = $derived(groupedPresets.filter((g) => _isPrimary(g.group)));
   let pipelineGroups = $derived(groupedPresets.filter((g) => !_isPrimary(g.group)));
   let showPipeline = $state(false);
@@ -150,7 +150,7 @@
     if (r.data?.presets) { presets = r.data.presets; snap = JSON.stringify(sel); }
   }
   async function newPreset() {
-    const r = await post('/presets', { name: 'New agent', mode: '' });
+    const r = await post('/presets', { name: 'New agent', mode: '', group: 'Agents' });
     if (r.data?.presets) { presets = r.data.presets; selId = r.data.id; snap = JSON.stringify(presets.find((p) => p.id === selId)); }
   }
   async function deletePreset() {
@@ -161,19 +161,19 @@
   }
   function pick(p) { selId = p.id; snap = JSON.stringify(p); }
 
-  // The three runtime ROLES the agent system divides into — shown at the top so the structure is
-  // legible. Builder + Storymaster map to real presets (click to edit); the Narrator is the in-play
-  // director (no preset — it uses the active chat model). Presets below are the model-config layer.
+  // The three AGENTS the system divides into — shown at the top so the structure is legible. Each
+  // backs a real preset (click to edit it below). Author = author-time; Narrative + Dungeon Master =
+  // play-time. They map 1:1 to the agent groups in the list.
   const ROLES = [
-    { icon: '🛠', name: 'Builder', preset: null,
-      desc: 'One chat that authors the story — every tool available; it adopts a behaviour and its scripts from the lorebooks, by what you say or an explicit Mode.',
-      backs: 'this chat · lorebook-driven' },
-    { icon: '🎭', name: 'Narrator', preset: null,
+    { icon: '🛠', name: 'Author', preset: 'character_smith',
+      desc: 'Authors the story with you — every tool available; adopts a mode by what you say (its facets live in the story agent config).',
+      backs: 'Author agent' },
+    { icon: '🎭', name: 'Narrative', preset: 'free_chat',
       desc: 'Plays the story out: narrates each turn, embodies the cast from their per-character lorebooks, tracks who is in the scene.',
-      backs: 'active chat model (in play)' },
-    { icon: '🌙', name: 'Storymaster', preset: 'storymaster',
-      desc: 'Consolidates the aftermath when the player sleeps or dies — twists how events land on each character.',
-      backs: 'Storymaster agent' },
+      backs: 'Narrative agent' },
+    { icon: '🌙', name: 'Dungeon Master', preset: 'stage_sim_director',
+      desc: 'Runs play: directs scenes and embodies actors (the simulation), and consolidates the aftermath when the player sleeps or dies (Storymaster).',
+      backs: 'Director · Actor · Storymaster' },
   ];
   function gotoRole(r) { const p = r.preset && presets.find((x) => x.id === r.preset); if (p) pick(p); }
   const paramCount = (p) => Object.values(p?.params || {}).filter((v) => v !== '' && v != null).length;

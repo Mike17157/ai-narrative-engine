@@ -1,0 +1,3362 @@
+{
+  "_character_fns": {
+    "meta": {
+      "id": "_character_fns",
+      "name": "Character Functions",
+      "description": "Functions for editing the story's cast as a chat flow (operate on a {cast:[…]} document).",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "character_builder",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "add_character",
+        "title": "add_character",
+        "keywords": [
+          "add a character",
+          "new character",
+          "another character",
+          "add npc",
+          "new npc",
+          "add a cast member",
+          "introduce a character"
+        ],
+        "content": "{\"fn\": \"add_character\", \"describe\": \"Add a character to the cast.\", \"params\": {\"name\": \"the character's name\", \"role\": \"their role in the story (e.g. mentor, rival)\", \"persona\": \"who they are — personality, voice, wants (a paragraph)\"}, \"ops\": [{\"op\": \"add\", \"path\": \"/cast/-\", \"value\": {\"id\": \"{{id}}\", \"name\": \"{{name}}\", \"role\": \"{{role}}\", \"persona\": \"{{persona}}\", \"appearance\": \"\", \"base_prompt\": \"\", \"primary\": false}}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "design_wardrobe",
+        "title": "design_wardrobe",
+        "keywords": [
+          "wardrobe",
+          "outfit",
+          "outfits",
+          "style them",
+          "dress them",
+          "what they wear",
+          "clothes",
+          "attire",
+          "give them an outfit"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"design_wardrobe\", \"describe\": \"Design and save a set of outfits for a character (delegates to the Wardrobe agent).\", \"produces\": \"wardrobe\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "generate_image",
+        "title": "generate_image",
+        "keywords": [
+          "generate image",
+          "render",
+          "draw",
+          "illustrate",
+          "picture of",
+          "show me",
+          "make an image",
+          "portrait of",
+          "outfit image",
+          "render the scene"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"generate_image\", \"describe\": \"Render an image using this agent's image workflow (its preset's workflow + look).\", \"produces\": \"image\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "record_scene",
+        "title": "record_scene",
+        "keywords": [
+          "record the scene",
+          "remember this",
+          "log the scene",
+          "scene memory",
+          "after the scene"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"record_scene\", \"describe\": \"Each present character compresses the scene into their own memory + relationship drift.\", \"produces\": \"memories\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "remove_character",
+        "title": "remove_character",
+        "keywords": [
+          "remove character",
+          "delete character",
+          "drop the character",
+          "cut the character",
+          "remove npc",
+          "kill off"
+        ],
+        "content": "{\"fn\": \"remove_character\", \"describe\": \"Remove a character from the cast (never the ★ main character).\", \"params\": {\"id\": \"id of the character to remove\"}, \"ops\": [{\"op\": \"remove\", \"path\": \"/cast/#{{id}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_character_field",
+        "title": "set_character_field",
+        "keywords": [
+          "rename character",
+          "change the character",
+          "edit character",
+          "set the character",
+          "update character",
+          "change their role",
+          "rewrite the persona"
+        ],
+        "content": "{\"fn\": \"set_character_field\", \"describe\": \"Set a field on an existing character.\", \"params\": {\"id\": \"character id\", \"field\": \"one of: name, role, persona, appearance, base_prompt\", \"value\": \"new text\"}, \"ops\": [{\"op\": \"set\", \"path\": \"/cast/#{{id}}/{{field}}\", \"value\": \"{{value}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_smith_tools": {
+    "meta": {
+      "id": "_smith_tools",
+      "name": "Character Smith Tools",
+      "description": "The autonomous character creator's tool (create_character) — one-shot generate a character from a brief and add it to the cast.",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "character_smith",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "_behavior",
+        "title": "Behaviour — characters",
+        "keywords": [
+          "character",
+          "persona",
+          "cast member",
+          "villain",
+          "protagonist",
+          "npc",
+          "create a character",
+          "add a character",
+          "new character",
+          "someone new",
+          "make a person",
+          "edit character",
+          "change character",
+          "rename character",
+          "update character",
+          "appearance",
+          "looks like",
+          "describe",
+          "their backstory",
+          "their personality",
+          "relationship",
+          "bond",
+          "feels about",
+          "feel toward",
+          "rival",
+          "lover",
+          "ally",
+          "enemy",
+          "friend",
+          "resent",
+          "trust",
+          "dynamic between",
+          "how they feel",
+          "strained",
+          "hostile",
+          "warm",
+          "devoted",
+          "distant",
+          "closer",
+          "reconcile",
+          "drift apart"
+        ],
+        "content": "Work on the CAST. NEW people: build REAL, idiosyncratic characters — never archetypes (a specific wound, the lie it bred, a want vs a deeper need, a contradiction, a distinct voice), with the rich create_character tool; never a bare add. EDITS: keep an existing character internally consistent — change only what's asked, concrete over adjectives. RELATIONSHIPS: prose in 2-3 words (the dynamic) + a coarse stance for colour, never numbers; bonds are asymmetric and specific — how they actually act around each other.",
+        "enabled": true,
+        "priority": 5,
+        "facet": "behavior",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "create_character",
+        "title": "create_character",
+        "keywords": [
+          "create a character",
+          "invent a character",
+          "generate a character",
+          "make a character",
+          "new cast member",
+          "we need a character"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"create_character\", \"describe\": \"Generate a complete character from a brief and add it to the cast.\", \"produces\": \"character\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "design_wardrobe",
+        "title": "design_wardrobe",
+        "keywords": [
+          "wardrobe",
+          "outfit",
+          "outfits",
+          "style them",
+          "dress them",
+          "what they wear",
+          "clothes",
+          "attire",
+          "give them an outfit"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"design_wardrobe\", \"describe\": \"Design and save a set of outfits for a character (delegates to the Wardrobe agent).\", \"produces\": \"wardrobe\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_location_fns": {
+    "meta": {
+      "id": "_location_fns",
+      "name": "Location Functions",
+      "description": "Functions for editing the story's locations as a chat flow (operate on a {start, locations:[…]} document).",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "location_builder",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "_behavior",
+        "title": "Behaviour — locations",
+        "keywords": [
+          "location",
+          "place",
+          "setting",
+          "room",
+          "city",
+          "map",
+          "where it happens"
+        ],
+        "content": "Build neutral, concrete places — physical look, materials, light, atmosphere; no people or events baked in. Stay consistent with the world's tone and era.",
+        "enabled": true,
+        "priority": 5,
+        "facet": "behavior",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "add_location",
+        "title": "add_location",
+        "keywords": [
+          "add a location",
+          "new location",
+          "another place",
+          "add place",
+          "new place"
+        ],
+        "content": "{\"fn\": \"add_location\", \"describe\": \"Add a neutral location to the story.\", \"params\": {\"name\": \"the place's name\", \"description\": \"the place objectively (no people/events)\"}, \"ops\": [{\"op\": \"add\", \"path\": \"/locations/-\", \"value\": {\"id\": \"{{id}}\", \"name\": \"{{name}}\", \"description\": \"{{description}}\", \"background_prompt\": \"\"}}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "generate_image",
+        "title": "generate_image",
+        "keywords": [
+          "generate image",
+          "render",
+          "draw",
+          "illustrate",
+          "picture of",
+          "show me",
+          "make an image",
+          "portrait of",
+          "outfit image",
+          "render the scene"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"generate_image\", \"describe\": \"Render an image using this agent's image workflow (its preset's workflow + look).\", \"produces\": \"image\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "remove_location",
+        "title": "remove_location",
+        "keywords": [
+          "remove location",
+          "delete place",
+          "drop the location",
+          "cut the place"
+        ],
+        "content": "{\"fn\": \"remove_location\", \"describe\": \"Delete a location.\", \"params\": {\"id\": \"id of the location to delete\"}, \"ops\": [{\"op\": \"remove\", \"path\": \"/locations/#{{id}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_location_field",
+        "title": "set_location_field",
+        "keywords": [
+          "rename location",
+          "change the place",
+          "edit location",
+          "set the location",
+          "update place"
+        ],
+        "content": "{\"fn\": \"set_location_field\", \"describe\": \"Set a field on an existing location.\", \"params\": {\"id\": \"location id\", \"field\": \"one of: name, description, background_prompt\", \"value\": \"new text\"}, \"ops\": [{\"op\": \"set\", \"path\": \"/locations/#{{id}}/{{field}}\", \"value\": \"{{value}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_start",
+        "title": "set_start",
+        "keywords": [
+          "start location",
+          "opening location",
+          "begins at",
+          "starts in",
+          "set start"
+        ],
+        "content": "{\"fn\": \"set_start\", \"describe\": \"Set which location the story opens in.\", \"params\": {\"id\": \"id of the starting location\"}, \"ops\": [{\"op\": \"set\", \"path\": \"/start\", \"value\": \"{{id}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_scene_fns": {
+    "meta": {
+      "id": "_scene_fns",
+      "name": "Scene Functions",
+      "description": "Connect scenes/places into a navigable map (source → target), and render scene images via the agent's image workflow.",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "scene_director",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "_behavior",
+        "title": "Behaviour — scenes & places",
+        "keywords": [
+          "scene",
+          "connect scenes",
+          "connect",
+          "link",
+          "navigate",
+          "move to",
+          "area",
+          "sub-scene",
+          "path between"
+        ],
+        "content": "Wire scenes and places into a navigable map; anchor character sub-scenes to their places. Keep transitions concrete.",
+        "enabled": true,
+        "priority": 5,
+        "facet": "behavior",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "connect_scenes",
+        "title": "connect_scenes",
+        "keywords": [
+          "connect",
+          "leads to",
+          "path",
+          "exit",
+          "door",
+          "passage",
+          "go to",
+          "links to",
+          "adjacent",
+          "route"
+        ],
+        "content": "{\"fn\": \"connect_scenes\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "disconnect_scenes",
+        "title": "disconnect_scenes",
+        "keywords": [
+          "disconnect",
+          "no path",
+          "block",
+          "remove exit",
+          "seal"
+        ],
+        "content": "{\"fn\": \"disconnect_scenes\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "generate_image",
+        "title": "generate_image",
+        "keywords": [
+          "generate image",
+          "render",
+          "draw",
+          "illustrate",
+          "picture of",
+          "show me",
+          "make an image",
+          "portrait of",
+          "outfit image",
+          "render the scene"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"generate_image\", \"describe\": \"Render an image using this agent's image workflow (its preset's workflow + look).\", \"produces\": \"image\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_location_area",
+        "title": "set_location_area",
+        "keywords": [
+          "area",
+          "region",
+          "zone",
+          "district",
+          "wing",
+          "inside",
+          "part of",
+          "belongs to",
+          "within",
+          "group under",
+          "nest",
+          "sub-location"
+        ],
+        "content": "{\"fn\": \"set_location_area\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_wardrobe_fns": {
+    "meta": {
+      "id": "_wardrobe_fns",
+      "name": "Wardrobe Functions",
+      "description": "Render outfit images via the Wardrobe agent's image workflow.",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "wardrobe_stylist",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "_behavior",
+        "title": "Behaviour — wardrobe",
+        "keywords": [
+          "outfit",
+          "wardrobe",
+          "clothes",
+          "dress",
+          "costume",
+          "attire",
+          "what they wear"
+        ],
+        "content": "Design outfits that express personality, role, status and world — a small coherent set with image-ready garment descriptors. Ground every choice in the setting; no generic filler.",
+        "enabled": true,
+        "priority": 5,
+        "facet": "behavior",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "design_wardrobe",
+        "title": "design_wardrobe",
+        "keywords": [
+          "wardrobe",
+          "outfit",
+          "outfits",
+          "style them",
+          "dress them",
+          "what they wear",
+          "clothes",
+          "attire",
+          "give them an outfit"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"design_wardrobe\", \"describe\": \"Design and save a set of outfits for a character (delegates to the Wardrobe agent).\", \"produces\": \"wardrobe\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "generate_image",
+        "title": "generate_image",
+        "keywords": [
+          "generate image",
+          "render",
+          "draw",
+          "illustrate",
+          "picture of",
+          "show me",
+          "make an image",
+          "portrait of",
+          "outfit image",
+          "render the scene"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"generate_image\", \"describe\": \"Render an image using this agent's image workflow (its preset's workflow + look).\", \"produces\": \"image\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_relationship_fns": {
+    "meta": {
+      "id": "_relationship_fns",
+      "name": "Relationship Functions",
+      "description": "Author the cast's relationship web (rival / mentor / lover…) — char↔char bonds that also seed runtime relationship state.",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "character_builder",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "remove_relationship",
+        "title": "remove_relationship",
+        "keywords": [
+          "remove relationship",
+          "no relationship",
+          "sever",
+          "unrelated"
+        ],
+        "content": "{\"fn\": \"remove_relationship\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_relationship",
+        "title": "set_relationship",
+        "keywords": [
+          "relationship",
+          "rival",
+          "ally",
+          "mentor",
+          "lover",
+          "enemy",
+          "friend",
+          "sibling",
+          "history with",
+          "their dynamic",
+          "feels about"
+        ],
+        "content": "{\"fn\": \"set_relationship\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_graph_fns": {
+    "meta": {
+      "id": "_graph_fns",
+      "name": "Graph Functions",
+      "description": "Functions the story workshop can call to edit the development graph. Each entry IS a function (its content is a JSON op-spec); its keywords are trigger terms. Attach this book to a step and author your own.",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "story_consultant",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "add_beat",
+        "title": "add_beat",
+        "keywords": [
+          "add a beat",
+          "new beat",
+          "insert beat",
+          "add beat",
+          "another beat"
+        ],
+        "content": "{\"fn\": \"add_beat\", \"describe\": \"Add a new beat to the arc of change.\", \"params\": {\"title\": \"the beat's title\", \"after\": \"id of the beat it follows (optional)\"}, \"ops\": [{\"op\": \"add\", \"path\": \"/nodes/-\", \"value\": {\"id\": \"{{id}}\", \"title\": \"{{title}}\", \"inflection\": \"\", \"start\": \"\", \"end\": \"\", \"what_happened\": \"\", \"next\": []}}, {\"op\": \"append\", \"path\": \"/nodes/#{{after}}/next\", \"value\": \"{{id}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "connect",
+        "title": "connect",
+        "keywords": [
+          "connect",
+          "branch",
+          "link",
+          "leads to",
+          "arrow",
+          "then",
+          "sequence"
+        ],
+        "content": "{\"fn\": \"connect\", \"describe\": \"Connect one beat to another (draw an arrow source -> target).\", \"params\": {\"source\": \"id the arrow starts from\", \"target\": \"id it points to\"}, \"ops\": [{\"op\": \"append\", \"path\": \"/nodes/#{{source}}/next\", \"value\": \"{{target}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "delete_beat",
+        "title": "delete_beat",
+        "keywords": [
+          "delete",
+          "remove beat",
+          "drop the beat",
+          "cut the beat"
+        ],
+        "content": "{\"fn\": \"delete_beat\", \"describe\": \"Delete a beat from the graph.\", \"params\": {\"id\": \"id of the beat to delete\"}, \"ops\": [{\"op\": \"remove\", \"path\": \"/nodes/#{{id}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "disconnect",
+        "title": "disconnect",
+        "keywords": [
+          "disconnect",
+          "unlink",
+          "remove arrow",
+          "detach"
+        ],
+        "content": "{\"fn\": \"disconnect\", \"describe\": \"Remove the arrow from one beat to another.\", \"params\": {\"source\": \"id the arrow starts from\", \"target\": \"id it currently points to\"}, \"ops\": [{\"op\": \"pull\", \"path\": \"/nodes/#{{source}}/next\", \"value\": \"{{target}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "insert_between",
+        "title": "insert_between",
+        "keywords": [
+          "insert between",
+          "in between",
+          "split the arrow",
+          "between"
+        ],
+        "content": "{\"fn\": \"insert_between\", \"describe\": \"Insert a new beat BETWEEN two connected beats (rewires the arrow through it).\", \"params\": {\"a\": \"id of the beat before\", \"b\": \"id of the beat after\", \"title\": \"the new beat's title\"}, \"ops\": [{\"op\": \"add\", \"path\": \"/nodes/-\", \"value\": {\"id\": \"{{id}}\", \"title\": \"{{title}}\", \"inflection\": \"\", \"start\": \"\", \"end\": \"\", \"what_happened\": \"\", \"next\": []}}, {\"op\": \"pull\", \"path\": \"/nodes/#{{a}}/next\", \"value\": \"{{b}}\"}, {\"op\": \"append\", \"path\": \"/nodes/#{{a}}/next\", \"value\": \"{{id}}\"}, {\"op\": \"append\", \"path\": \"/nodes/#{{id}}/next\", \"value\": \"{{b}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "move_beat",
+        "title": "move_beat",
+        "keywords": [
+          "move",
+          "reposition",
+          "put after",
+          "relocate",
+          "moved"
+        ],
+        "content": "{\"fn\": \"move_beat\", \"describe\": \"Reposition a beat to sit right after another in the sequence.\", \"params\": {\"id\": \"id of the beat to move\", \"after\": \"id of the beat it should follow (blank = end)\"}, \"ops\": [{\"op\": \"move\", \"path\": \"/nodes\", \"value\": \"{{id}}\", \"after\": \"{{after}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reorder_beats",
+        "title": "reorder_beats",
+        "keywords": [
+          "reorder",
+          "re-order",
+          "order the beats",
+          "sequence them",
+          "rearrange"
+        ],
+        "content": "{\"fn\": \"reorder_beats\", \"describe\": \"Set the full beat order at once (give every beat id in the new order).\", \"params\": {\"order\": \"the complete list of beat ids in the desired order\"}, \"ops\": [{\"op\": \"reorder\", \"path\": \"/nodes\", \"value\": \"{{order}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_beat_field",
+        "title": "set_beat_field",
+        "keywords": [
+          "rename",
+          "retitle",
+          "change the",
+          "edit the beat",
+          "set the",
+          "update beat"
+        ],
+        "content": "{\"fn\": \"set_beat_field\", \"describe\": \"Set a field on an existing beat.\", \"params\": {\"id\": \"beat id\", \"field\": \"one of: title, inflection, start, end, what_happened, location\", \"value\": \"new text\"}, \"ops\": [{\"op\": \"set\", \"path\": \"/nodes/#{{id}}/{{field}}\", \"value\": \"{{value}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_spine",
+        "title": "set_spine",
+        "keywords": [
+          "wound",
+          "lie",
+          "truth",
+          "logline",
+          "spine",
+          "misbelief"
+        ],
+        "content": "{\"fn\": \"set_spine\", \"describe\": \"Set a top-level spine field (logline, wound, lie, or truth).\", \"params\": {\"field\": \"one of: logline, wound, lie, truth\", \"value\": \"new text\"}, \"ops\": [{\"op\": \"set\", \"path\": \"/{{field}}\", \"value\": \"{{value}}\"}]}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_story_title",
+        "title": "set_story_title",
+        "keywords": [
+          "title",
+          "name the story",
+          "call it",
+          "story title",
+          "titled"
+        ],
+        "content": "{\"fn\": \"set_story_title\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "fn",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_story_tools": {
+    "meta": {
+      "id": "_story_tools",
+      "name": "Story Agent Tools",
+      "description": "Pipeline STAGES the Story Agent can run from the workshop (e.g. the storyboarder) — not just live-doc edits.",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "story_consultant",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "_behavior",
+        "title": "Behaviour — shaping the story",
+        "keywords": [
+          "storyboard",
+          "title",
+          "rename the story",
+          "call the story",
+          "name the story",
+          "premise",
+          "theme",
+          "arc",
+          "plot",
+          "beats",
+          "cover",
+          "outline",
+          "ending"
+        ],
+        "content": "Work as a developmental editor: find the truest story latent in the cast — wound, want vs need, human inevitable conflict, every beat costs something. Treat the premise as a FOUNDATION to build outward from and surprise, not a spec. Concrete over abstract; no theme-word salad.",
+        "enabled": true,
+        "priority": 5,
+        "facet": "behavior",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "generate_story_cover",
+        "title": "generate_story_cover",
+        "keywords": [
+          "cover",
+          "story image",
+          "cover image",
+          "story art",
+          "poster",
+          "key art",
+          "title image"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"generate_story_cover\", \"describe\": \"Render the story's cover image using this agent's image workflow.\", \"produces\": \"image\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "set_story_title",
+        "title": "set_story_title",
+        "keywords": [
+          "title",
+          "name the story",
+          "call it",
+          "story title",
+          "titled"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"set_story_title\", \"describe\": \"Set and save the story's title.\", \"produces\": \"title\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "storyboard",
+        "title": "storyboard",
+        "keywords": [
+          "storyboard",
+          "storyboard this",
+          "board it",
+          "outline the story",
+          "lay out the beats",
+          "generate the beats",
+          "draft the outline",
+          "map the beats"
+        ],
+        "content": "{\"kind\": \"stage\", \"fn\": \"storyboard\", \"describe\": \"Run the storyboarder — generate the story's beats (logline, premise, tone, themes, beats) from the character and premise.\", \"produces\": \"board\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_storyboard": {
+    "meta": {
+      "id": "_stage_storyboard",
+      "name": "Stage · Storyboard",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_storyboard",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "storyboard",
+        "title": "Storyboard",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"storyboard\", \"describe\": \"Storyboard\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_characters": {
+    "meta": {
+      "id": "_stage_characters",
+      "name": "Stage · Characters",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_characters",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "characters",
+        "title": "Characters",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"characters\", \"describe\": \"Characters\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_locations": {
+    "meta": {
+      "id": "_stage_locations",
+      "name": "Stage · Locations",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_locations",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "locations",
+        "title": "Locations",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"locations\", \"describe\": \"Locations\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_wardrobe": {
+    "meta": {
+      "id": "_stage_wardrobe",
+      "name": "Stage · Wardrobe",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_wardrobe",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "wardrobe",
+        "title": "Wardrobe",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"wardrobe\", \"describe\": \"Wardrobe\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_base_image": {
+    "meta": {
+      "id": "_stage_base_image",
+      "name": "Stage · Base image",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_base_image",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "base_image",
+        "title": "Base image",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"base_image\", \"describe\": \"Base image\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_emotion": {
+    "meta": {
+      "id": "_stage_emotion",
+      "name": "Stage · Emotion",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_emotion",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "emotion",
+        "title": "Emotion",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"emotion\", \"describe\": \"Emotion\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_workshop": {
+    "meta": {
+      "id": "_stage_workshop",
+      "name": "Stage · Workshop",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_workshop",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "workshop",
+        "title": "Workshop",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"workshop\", \"describe\": \"Workshop\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_sim_director": {
+    "meta": {
+      "id": "_stage_sim_director",
+      "name": "Stage · Sim director",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_sim_director",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "sim_director",
+        "title": "Sim director",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"sim_director\", \"describe\": \"Sim director\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "_stage_sim_actor": {
+    "meta": {
+      "id": "_stage_sim_actor",
+      "name": "Stage · Sim actor",
+      "description": "",
+      "rating": "sfw",
+      "category": "function",
+      "builtin": false,
+      "enabled": true,
+      "preset": "stage_sim_actor",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "sim_actor",
+        "title": "Sim actor",
+        "keywords": [],
+        "content": "{\"kind\": \"stage\", \"fn\": \"sim_actor\", \"describe\": \"Sim actor\"}",
+        "enabled": true,
+        "priority": 0,
+        "facet": "stage",
+        "source": "",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "alaric_vale": {
+    "meta": {
+      "id": "alaric_vale",
+      "name": "Alaric Vale",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-heating-soup",
+        "title": "Heating soup",
+        "keywords": [
+          "magic",
+          "memory",
+          "loss"
+        ],
+        "content": "Alaric once made his mother a bowl of soup without lighting the fire, just by staring into the pot until steam rose. Afterward, he couldn't recall the pattern on the bowl she'd used for his fifth birthday cake.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-missing-apples",
+        "title": "Missing apples",
+        "keywords": [
+          "magic",
+          "food",
+          "consequence"
+        ],
+        "content": "He used his power to save the last of the apple tree's fruit from blight. For a month after, every apple he bit into tasted faintly of ashes.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-seedling",
+        "title": "The seedling",
+        "keywords": [
+          "power",
+          "guilt",
+          "duty"
+        ],
+        "content": "He once spent three days arguing with a single rye seedling, using his power to make it stand upright. It grew, but afterward, he lost the memory of where his father used to hang his hat.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-when-a-traveler-mentions-the-capital",
+        "title": "When a traveler mentions the capital",
+        "keywords": [
+          "fear",
+          "guilt",
+          "withdrawal"
+        ],
+        "content": "His hand goes to the wren in his pocket and he stops carving mid-cut. He waits for the traveler to ask why the village's well is never dry.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-when-his-mother-mentions-his-father-s-ha",
+        "title": "When his mother mentions his father's hands",
+        "keywords": [
+          "wound",
+          "deflection",
+          "action"
+        ],
+        "content": "He immediately starts rubbing tallow into a newly carved bird, his own fingers working stiffly, until his mother changes the subject.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-on-carving",
+        "title": "On carving",
+        "keywords": [
+          "craft",
+          "avoidance",
+          "regret"
+        ],
+        "content": "He told his mother, 'If I don't give them eyes, they can't look back.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-on-the-fading-light",
+        "title": "On the fading light",
+        "keywords": [
+          "waiting",
+          "habit",
+          "falsehood"
+        ],
+        "content": "Alaric says, 'I'm not watching for him. I just like to see the bats come out.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-to-the-horse",
+        "title": "To the horse",
+        "keywords": [
+          "solitude",
+          "comfort",
+          "confession"
+        ],
+        "content": "Alaric whispered to their old plow horse, 'If I forget his laugh, will you carry that sound for me?'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "ava": {
+    "meta": {
+      "id": "ava",
+      "name": "Ava",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-first-pair-of-shoes",
+        "title": "First Pair of Shoes",
+        "keywords": [
+          "shoes",
+          "son",
+          "craftsmanship"
+        ],
+        "content": "Ava keeps the first pair of shoes she made for Eli on a shelf above her sewing table, a symbol of her love and skill as a seamstress. She often runs her fingers over the leather, remembering the day she presented them to her son.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-protective-instinct",
+        "title": "Protective Instinct",
+        "keywords": [
+          "Eli",
+          "protection",
+          "knowledge"
+        ],
+        "content": "Ava often stands at the window, watching over Eli as he plays in the yard, her eyes filled with a mixture of love and the weight of the secrets she carries.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-disappearance",
+        "title": "The Disappearance",
+        "keywords": [
+          "father",
+          "mage",
+          "disappearance"
+        ],
+        "content": "On a cold, rainy night, Ava watched as her husband, a powerful mage, vanished without a trace, leaving behind only a faint whisper of magic in the air. She held their son, Eli, tightly, vowing to protect him from the dangers that had taken his father.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-bending-the-rules",
+        "title": "Bending the Rules",
+        "keywords": [
+          "rebelliousness",
+          "decorum",
+          "symbolic"
+        ],
+        "content": "When the town enforces strict rules of decorum, Ava subtly defies them by embroidering small, defiant symbols into her son's clothing, a silent act of rebellion.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-maintaining-order",
+        "title": "Maintaining Order",
+        "keywords": [
+          "orderliness",
+          "tidy",
+          "planned"
+        ],
+        "content": "When Eli's room becomes disorganized after a particularly chaotic day, Ava quietly tidies up, ensuring that the house remains a haven of order and peace.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-quilt-of-solace",
+        "title": "Quilt of Solace",
+        "keywords": [
+          "afraid",
+          "sewing room",
+          "quilt"
+        ],
+        "content": "When Ava is afraid, she retreats to her sewing room and works on an endless quilt, each stitch a testament to her enduring hope and fear.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-guarded-love",
+        "title": "Guarded Love",
+        "keywords": [
+          "love",
+          "distance",
+          "protection"
+        ],
+        "content": "I keep my distance to keep you safe, Eli.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-rules-of-decorum",
+        "title": "Rules of Decorum",
+        "keywords": [
+          "decorum",
+          "rebellion"
+        ],
+        "content": "Sometimes, the rules are meant to be bent, even if only a little.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-stitching-the-past",
+        "title": "Stitching the Past",
+        "keywords": [
+          "past",
+          "stitch",
+          "threads"
+        ],
+        "content": "The threads of the past are woven into every stitch.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "caul": {
+    "meta": {
+      "id": "caul",
+      "name": "Caul",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-a-debt-paid-in-kindness",
+        "title": "A Debt Paid in Kindness",
+        "keywords": [
+          "generosity",
+          "compromise"
+        ],
+        "content": "Once, a debtor offered Caul a rare book instead of money. Caul, recognizing the value of the offer, accepted it. The book, a collection of ancient tales, sits prominently on his bookshelf, a reminder of the value of non-monetary exchange.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-a-father-s-mistake",
+        "title": "A Father's Mistake",
+        "keywords": [
+          "wound",
+          "reflection"
+        ],
+        "content": "When Caul was 12, he watched his father lose their family's thriving business because of one careless mistake. The memory of his father's crushed face and the echoing silence of an empty home still haunts him.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-a-secret-pleasure",
+        "title": "A Secret Pleasure",
+        "keywords": [
+          "artistic",
+          "passion"
+        ],
+        "content": "On rare occasions, Caul visits a small, hidden art gallery where he can lose himself in the beauty of the paintings. He often buys a small, simple piece to take home, a small defiance against his pragmatic life.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-nightly-fantasies",
+        "title": "Nightly Fantasies",
+        "keywords": [
+          "romantic",
+          "escape"
+        ],
+        "content": "At night, Caul often imagines a life away from the shadows of debt and power. He pictures a small cottage by a lake, where he could spend his days reading and painting, free from the constant stress.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-silver-handled-cane",
+        "title": "The Silver-Handled Cane",
+        "keywords": [
+          "pride",
+          "tool"
+        ],
+        "content": "Caul's silver-handled cane, a gift from a wealthy debtor who owed him a favor, has become his most cherished possession. He twirls it absentmindedly whenever he's deep in thought, a habit that gives him a sense of control and power.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-caught-off-guard",
+        "title": "Caught Off Guard",
+        "keywords": [
+          "deflection",
+          "humor"
+        ],
+        "content": "When caught off guard by a sudden question about his past, Caul deflected with a quick joke. 'Ah, the past is a story best left untold. Let’s focus on the present, shall we?'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-facing-eli",
+        "title": "Facing Eli",
+        "keywords": [
+          "respect",
+          "challenge"
+        ],
+        "content": "When confronted with Eli's defiant stance, Caul felt a surge of respect. 'You have the makings of a formidable force, boy. Don't let it go to waste.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-mara-s-vulnerability",
+        "title": "Mara's Vulnerability",
+        "keywords": [
+          "caution",
+          "protection"
+        ],
+        "content": "When Mara showed signs of being overwhelmed by the conflict, Caul hesitated to involve her further. 'Stay out of this, Mara. You don't need the blood on your hands.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-a-debtor-s-mercy",
+        "title": "A Debtor's Mercy",
+        "keywords": [
+          "compassion",
+          "practicality"
+        ],
+        "content": "When a desperate debtor pleaded for more time, Caul surprised himself by saying, 'Fine, but you owe me a favor down the line. Don't disappoint me.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "darek_walczak": {
+    "meta": {
+      "id": "darek_walczak",
+      "name": "Darek Walczak",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-the-life-of-the-party",
+        "title": "The Life of the Party",
+        "keywords": [
+          "energetic instigator",
+          "physical charisma",
+          "spotlight dweller"
+        ],
+        "content": "He holds Maya in a heavy-handed, friendly headlock to prevent her from retreating, instantly turning a low-key gathering into high-stakes competition through sheer volume and physical comedy.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-loud-social-centerpiece",
+        "title": "Loud Social Centerpiece",
+        "keywords": [
+          "unabashedly loud",
+          "exaggerated gestures",
+          "dramatic proclamations"
+        ],
+        "content": "When introducing Maya to a group of strangers, he slaps hands with the stranger and loudly announces her as their 'secret weapon' while making exaggerated whispers that everyone can hear.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-competitive-provocateur",
+        "title": "Competitive Provocateur",
+        "keywords": [
+          "chaotic hype-man",
+          "financial wagerer",
+          "playful taunting"
+        ],
+        "content": "\"$100 says she sweeps the board before the marshmallows burn.\"",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "eli": {
+    "meta": {
+      "id": "eli",
+      "name": "Eli",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-childhood-memory",
+        "title": "Childhood Memory",
+        "keywords": [
+          "Eli",
+          "father",
+          "memory"
+        ],
+        "content": "When Eli was six, his father would take him into the woods to gather herbs. One time, they found a rare glow-root. Eli's father showed him how to carefully extract the elixir, whispering that it was a gift from the earth. Eli still keeps a vial of that elixir, fiddling with it whenever he feels anxious.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-daydreaming-of-possibilities",
+        "title": "Daydreaming of Possibilities",
+        "keywords": [
+          "imagination",
+          "visions",
+          "future"
+        ],
+        "content": "While tending to the royal gardens, Eli often drifts into vivid daydreams of a restored kingdom, where magic flows freely and the fields are lush. He sketches these visions in a hidden journal, a secret escape from his fears.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-herbal-apprenticeship",
+        "title": "Herbal Apprenticeship",
+        "keywords": [
+          "Eli",
+          "apprenticeship",
+          "learning"
+        ],
+        "content": "Eli had an apprenticeship with an old herbalist named Mira. She taught him the secrets of plants and the balance of nature. One day, Mira showed him a dangerous plant that could heal or harm, depending on the user's intent. Eli was fascinated and spent hours examining it, his imagination running wild with possibilities.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-herbal-experiment",
+        "title": "Herbal Experiment",
+        "keywords": [
+          "Eli",
+          "magic",
+          "experiment"
+        ],
+        "content": "One sunny afternoon, Eli decided to test a new elixir he had concocted. He mixed rare herbs and rare minerals, adding a pinch of dragon's breath. When he drank the elixir, he felt an intense surge of energy. He ran through the forest, laughing and feeling invincible, but a part of him knew he was pushing his limits.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-memories-of-father",
+        "title": "Memories of Father",
+        "keywords": [
+          "childhood",
+          "memory",
+          "father"
+        ],
+        "content": "Eli often sits by the window, staring at the silver pocket watch, trying to remember the last time he saw his father. He recalls the warmth of a hug and the smell of leather and pine, but the face is hazy, like a dream. He clutches the watch, whispering, 'Come back to me,' even though he knows it's futile.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-nighttime-rituals",
+        "title": "Nighttime Rituals",
+        "keywords": [
+          "magic",
+          "ritual",
+          "vigil"
+        ],
+        "content": "At night, Eli performs quiet rituals to boost the kingdom's fading magic, using old tomes and incantations. He exhausts himself, but the faint light of hope keeps him going, even though he fears the toll on his strength.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-avoiding-danger",
+        "title": "Avoiding Danger",
+        "keywords": [
+          "excitement",
+          "risk",
+          "avoidance"
+        ],
+        "content": "When a group of rebels challenges the council, Eli stays back, preferring to use his wit and words rather than engage in physical confrontation. He believes that true strength lies in wisdom, not brute force.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-confronting-danger",
+        "title": "Confronting Danger",
+        "keywords": [
+          "Eli",
+          "excitement",
+          "danger"
+        ],
+        "content": "When a group of bandits threatened the village, Eli didn't hesitate. He rushed to the edge of the forest, weaving through the trees. As he approached, he muttered a protection spell, feeling the magic coursing through his veins. Despite the danger, a small thrill ran through him, and he smiled, ready to face the challenge.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-fiddling-with-the-watch",
+        "title": "Fiddling with the Watch",
+        "keywords": [
+          "habit",
+          "fidgeting",
+          "watch"
+        ],
+        "content": "When Eli feels the weight of the kingdom's failing magic, he fidgets with the pocket watch's chain, winding it around his fingers, a nervous habit that calms him and reminds him of his father's presence.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-hidden-yearning",
+        "title": "Hidden Yearning",
+        "keywords": [
+          "Eli",
+          "yearning",
+          "community"
+        ],
+        "content": "Despite his tough exterior, Eli sometimes found himself watching the other young villagers laughing and chatting together. He would join in, but always from the periphery, keeping a part of himself separate. When someone tried to draw him in, he would make a joke or a snide comment, creating distance to protect himself.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-immoderation-in-study",
+        "title": "Immoderation in Study",
+        "keywords": [
+          "cravings",
+          "study",
+          "knowledge"
+        ],
+        "content": "Eli often stays up late, poring over ancient texts, driven by a relentless curiosity. He ignores the protests of his tired body, believing that knowledge will bring him the strength he needs.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-nighttime-visions",
+        "title": "Nighttime Visions",
+        "keywords": [
+          "Eli",
+          "visions",
+          "fire"
+        ],
+        "content": "Every night, Eli builds a small fire in his room. As the flames dance, he sees flickering images of his father. He speaks to these visions, asking for guidance, but never receives a response. When the visions become too overwhelming, he pours a few drops of the elixir into the flames, hoping to calm his mind.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-questioning-authority",
+        "title": "Questioning Authority",
+        "keywords": [
+          "rebellion",
+          "questioning",
+          "traditions"
+        ],
+        "content": "During a council meeting, when the eldest mage insists on following ancient rituals, Eli quietly says, 'Perhaps we should consider new ways—traditions are meant to evolve.' His question is met with silence, but he stands firm.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-cocky-deflection",
+        "title": "Cocky Deflection",
+        "keywords": [
+          "Eli",
+          "humor",
+          "fear"
+        ],
+        "content": "When a group of questionable travelers tried to provoke a fight, Eli casually said, 'If you can't beat them, join them, but secretly keep the upper hand.' He flashed a grin, but his hands tightened around the vial in his pocket.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-fear-of-power",
+        "title": "Fear of Power",
+        "keywords": [
+          "magic",
+          "vulnerability",
+          "fear"
+        ],
+        "content": "In a rare moment of honesty with his mother, Eli admits, 'I'm scared, Mother. What if my magic destroys me like it did Father?' His hands tremble as he holds hers, seeking comfort.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-protective-promise",
+        "title": "Protective Promise",
+        "keywords": [
+          "Eli",
+          "protection",
+          "mother"
+        ],
+        "content": "To his mother, Viola, Eli often says, 'I'll keep you safe, Ma. No matter what.' His voice is steady, but his hands tremble slightly as he tightens his grip on her arm, a silent plea for her to believe him.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-self-reliance",
+        "title": "Self-Reliance",
+        "keywords": [
+          "Eli",
+          "independence",
+          "belief"
+        ],
+        "content": "When his friend, Lila, suggested that they work together on a dangerous task, Eli said, 'I can handle it on my own. I don't need anyone's help.' His words were firm, but his eyes betrayed a flicker of doubt, a longing for the support he dared not accept.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-steadfastness",
+        "title": "Steadfastness",
+        "keywords": [
+          "resolve",
+          "duty"
+        ],
+        "content": "Whenever someone asks him about his fears, Eli calmly replies, 'I must be strong, for Mother and for myself.' His voice is steady, but his eyes flicker with uncertainty.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "eliot": {
+    "meta": {
+      "id": "eliot",
+      "name": "Eliot",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-childhood-memory",
+        "title": "Childhood Memory",
+        "keywords": [
+          "father",
+          "memory",
+          "bonsai tree"
+        ],
+        "content": "When Eliot was six, his father gave him a tiny bonsai tree, telling him it was a symbol of patience and growth. Even now, Eliot tends to the bonsai daily, a tangible link to his father's teachings.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-first-failed-ritual",
+        "title": "First Failed Ritual",
+        "keywords": [
+          "ritual",
+          "butterfly",
+          "despair"
+        ],
+        "content": "At 13, Eliot performed his first spell to bring his father back, using a butterfly as a conduit. The butterfly died, and Eliot buried it in the greenhouse, vowing to try again.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-herb-hunting",
+        "title": "Herb Hunting",
+        "keywords": [
+          "forest",
+          "herbs",
+          "adventure"
+        ],
+        "content": "Eliot often ventures into the forest to find rare herbs. He carefully picks each plant, saying a silent prayer to his father for guidance.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-caught-in-the-greenhouse",
+        "title": "Caught in the Greenhouse",
+        "keywords": [
+          "greenhouse",
+          "safety",
+          "esium"
+        ],
+        "content": "When Eliot's mother finds him burning esium leaves, he quickly hides the ashes beneath the soil, claiming he was just testing a new theory.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-doubt-in-the-dark",
+        "title": "Doubt in the Dark",
+        "keywords": [
+          "night",
+          "doubt",
+          "stars"
+        ],
+        "content": "At night, when the stars are out, Eliot often sits on the edge of his bed, staring at the ceiling, whispering to himself, 'Maybe they're just plants.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-facing-the-council",
+        "title": "Facing the Council",
+        "keywords": [
+          "council",
+          "pressure",
+          "confidence"
+        ],
+        "content": "When the council of mages questions his methods, Eliot stands tall, presenting his journal filled with meticulous notes, confident in his knowledge but inwardly shaken.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-daily-ritual",
+        "title": "Daily Ritual",
+        "keywords": [
+          "journal",
+          "notes",
+          "ritual"
+        ],
+        "content": "Every morning, I write down what I've learned. The pages of my journal are my sanctuary, my connection to the past.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-herbal-wisdom",
+        "title": "Herbal Wisdom",
+        "keywords": [
+          "plants",
+          "knowledge",
+          "hope"
+        ],
+        "content": "You see, the best plants don't just grow, they wait for the right moment. Just like us, they need to know when it's time to bloom.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-secret-guilt",
+        "title": "Secret Guilt",
+        "keywords": [
+          "guilt",
+          "doubt",
+          "burning"
+        ],
+        "content": "Sometimes, I wonder if I'm just fooling myself. But if I stop, if I give up... what then?",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "evan": {
+    "meta": {
+      "id": "evan",
+      "name": "Evan",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-a-risky-night-in-the-storm",
+        "title": "A Risky Night in the Storm",
+        "keywords": [
+          "excitement-seeking",
+          "imagination",
+          "immoderation"
+        ],
+        "content": "On a particularly stormy night, Evan decided to test the limits of his magic by riding his horse through the most treacherous part of the forest. As lightning lit the sky, he pushed himself and his horse to the brink, feeling the rush of danger fuel his magical speed. When he reached his destination, he collapsed in exhaustion, the thrill of the ride mixed with the fear of what he might have lost.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-collecting-memories",
+        "title": "Collecting Memories",
+        "keywords": [
+          "imagination",
+          "agreement"
+        ],
+        "content": "Evan had a habit of collecting small trinkets from the places he visited. Each trinket held a story, and he would spend hours imagining the people who once owned them. One day, he found an old, chipped teacup in an abandoned village and carried it back to his tent, where he kept it on a small shelf with other treasures.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-drawing-in-the-journal",
+        "title": "Drawing in the Journal",
+        "keywords": [
+          "imagination",
+          "neuroticism"
+        ],
+        "content": "Whenever Evan had a moment of rest, he would pull out his leather-bound journal and sketch maps or detailed drawings of the plants and animals he encountered. His father's teachings had instilled in him a deep appreciation for the natural world, but the journal was also a way to distract himself from his fears and the weight of his magic.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-confronting-a-decision",
+        "title": "Confronting a Decision",
+        "keywords": [
+          "excitement-seeking",
+          "neuroticism"
+        ],
+        "content": "When faced with the decision to take a dangerous mission that could help the kingdom, Evan felt a mix of excitement and dread. He sat alone in his tent, rubbing the wooden horse and contemplating the risk. 'If I don't try, I'll never know,' he said to himself, finally deciding to undertake the mission.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-faced-with-a-threat",
+        "title": "Faced with a Threat",
+        "keywords": [
+          "neuroticism",
+          "gregariousness"
+        ],
+        "content": "When confronted by a group of bandits on a dark road, Evan felt a surge of fear. He pressed the wooden horse between his fingers and whispered, 'Hold on tight.' Instead of running, he used his magic to create distracting illusions, buying himself time to escape.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-meeting-a-stranger",
+        "title": "Meeting a Stranger",
+        "keywords": [
+          "gregariousness",
+          "agreement"
+        ],
+        "content": "When Evan met a young girl in a rural village, he was initially hesitant to speak to her. But when she showed him a small, hand-painted doll, he felt a tug in his heart. He spoke to her gently, asking about the doll's story. 'It's okay if you don't want to tell me. I just like hearing about these things,' he said.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-the-weight-of-magic",
+        "title": "The Weight of Magic",
+        "keywords": [
+          "neuroticism",
+          "sincerity"
+        ],
+        "content": "Speaking to a fellow traveler, Evan confided, 'My magic is a double-edged sword. It gives me power, but it also drains me. I fear the day it will leave me completely.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-whisper-to-the-wind",
+        "title": "Whisper to the Wind",
+        "keywords": [
+          "imagination",
+          "sincerity"
+        ],
+        "content": "Evan often spoke to the wind, as if it were an old friend. One evening, he said, 'The wind speaks, if you listen closely enough. It tells me where I need to go and what I need to do.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-whispers-of-the-past",
+        "title": "Whispers of the Past",
+        "keywords": [
+          "sincerity",
+          "gregariousness"
+        ],
+        "content": "In a quiet moment, Evan shared, 'My father taught me to see the world in a different way. He said that every leaf, every stone has a story. I try to remember that when the weight of my magic gets too heavy.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "kaelen_sunder_glass": {
+    "meta": {
+      "id": "kaelen_sunder_glass",
+      "name": "Kaelen Sunder Glass",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-self-suturing-ritual",
+        "title": "Self-Suturing Ritual",
+        "keywords": [
+          "body",
+          "pain",
+          "containment"
+        ],
+        "content": "Every third night when the static in his veins grows unbearable, Kaelen sits on a cold tile floor with a needle and thread. He doesn't sew wounds; he painstakingly sews heavy linen strips around his forearms, tightening them until the skin bruises, using physical pain to anchor his consciousness so a burst of light won't shatter him.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-sleep-deprivation-tic",
+        "title": "Sleep Deprivation Tic",
+        "keywords": [
+          "insomnia",
+          "habit",
+          "sound"
+        ],
+        "content": "To stave off the crushing weight of sleep—which always brings terrifyingly lucid visions of his power expanding unbidden in his dreams—he has trained himself to count the exact number of cracks in the stone ceiling. If he loses track, he swallows a sharp shard of dry toast; the grit between his teeth keeps him tethered.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-memory-locket",
+        "title": "The Memory Locket",
+        "keywords": [
+          "memory",
+          "father",
+          "sensory"
+        ],
+        "content": "Kaelen keeps his father's old iron compass in his pocket, though it no longer points north. Sometimes, when the mage-blood hums too loudly under his skin, he presses the cold metal hard against the inside of his thigh to shock himself back into the mundane reality of wood and iron.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-unrehearsed-transmutation",
+        "title": "The Unrehearsed Transmutation",
+        "keywords": [
+          "alchemy",
+          "childhood",
+          "guilt"
+        ],
+        "content": "At age nine, during the frost that killed his father’s entire orchard, Kaelen reached for a frozen pear and accidentally turned its skin into warm, pulsing velvet. He spent an hour frantically scraping the soft fabric back into rot with a fingernail to hide the magic, terrified that if he felt warmth, it meant his heart was burning out of control.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-the-broken-heirloom",
+        "title": "The Broken Heirloom",
+        "keywords": [
+          "property",
+          "instinct",
+          "suppression"
+        ],
+        "content": "When a servant drops and shatters a ceramic pitcher in his presence, Kaelen doesn't flinch at the noise. Instead, he instantly tenses his diaphragm, bracing for the kinetic backlash of his magic instinctively jumping to mend the shards; if he stays rigid enough, the pieces stay broken.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-the-thawing-well",
+        "title": "The Thawing Well",
+        "keywords": [
+          "containment",
+          "nature",
+          "magic"
+        ],
+        "content": "When he walks past a village well choked with winter ice, Kaelen avoids looking at the water. He grips his own wrist so hard the knuckles white out; if he looks too long, the thaw will begin without his permission, and he refuses to be the reason spring arrives before its time.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-on-absence",
+        "title": "On Absence",
+        "keywords": [
+          "father",
+          "loss",
+          "power"
+        ],
+        "content": "“My father didn't leave us. He just ran out of room for the sheer volume of what he carried, and eventually, he burst.”",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-on-duty",
+        "title": "On Duty",
+        "keywords": [
+          "duty",
+          "sacrifice",
+          "survival"
+        ],
+        "content": "“Do not mistake my service for loyalty. I am simply making sure this kingdom doesn't accidentally implode while it figures out how to survive its own disappearance.”",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-on-inheritance",
+        "title": "On Inheritance",
+        "keywords": [
+          "inheritance",
+          "burden",
+          "weight"
+        ],
+        "content": "“They keep calling it a gift, like I asked to be handed the entire weight of a dying sun. You do not 'receive' this much power—you simply try to survive being its cage.”",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "mara": {
+    "meta": {
+      "id": "mara",
+      "name": "Mara",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-daily-habit",
+        "title": "Daily Habit",
+        "keywords": [
+          "books",
+          "order",
+          "tidiness"
+        ],
+        "content": "Every morning, before Eli wakes, Mara meticulously arranges the books on the shelves in her study. Her hands, now familiar with the texture of old leather and the smell of aged paper, find a rhythm in the task. Each book is placed with care, a ritual that grounds her in the order she craves.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-daydreaming",
+        "title": "Daydreaming",
+        "keywords": [
+          "imagination",
+          "daydreams",
+          "escape"
+        ],
+        "content": "On quiet afternoons, when the study is still and the only sound is the rustling of pages, Mara sometimes drifts into vivid daydreams. She imagines a world where magic is strong again, where her husband is by her side, and Eli is safe. Her hands, usually busy, rest on the desk, as if frozen in time.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-protective-regards",
+        "title": "Protective Regards",
+        "keywords": [
+          "Eli",
+          "books",
+          "comfort"
+        ],
+        "content": "One evening, as a storm raged outside, Eli came home shaken after a run-in with some village boys. Mara sat him down in her study, her hands ink-stained from a day of cataloging. She handed him a worn, leather-bound book and said, 'Here, this always makes me feel better.' Eli opened it and found it was filled with stories of ancient heroes. Mara sat beside him, her presence a silent shield.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-facing-emotions",
+        "title": "Facing Emotions",
+        "keywords": [
+          "emotions",
+          "vulnerability",
+          "honesty"
+        ],
+        "content": "When a villager's child falls ill and the townsfolk come to Mara for help, she is overwhelmed. Her hands, usually so steady, shake as she opens her medical texts. 'I'm scared, Eli,' she admits, her voice breaking. 'But we can't let fear stop us.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-fighting-fear",
+        "title": "Fighting Fear",
+        "keywords": [
+          "fear",
+          "books",
+          "isolation"
+        ],
+        "content": "When a strange omen appears in the sky, causing the village to panic, Mara retreats to her study. She locks the door and pulls out a stack of ancient tomes, poring over them for hours. Her hands, ink-stained, move quickly over the pages, seeking a solution or a familiar comfort.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-unexpected-judgment",
+        "title": "Unexpected Judgment",
+        "keywords": [
+          "judgment",
+          "contradiction",
+          "honesty"
+        ],
+        "content": "When Eli discovers a hidden letter from his father, Mara's first reaction is to snatch it away. But she hesitates, her hands trembling. 'You have a right to know,' she finally admits, her contradiction evident as she places the letter back in his hands.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-guiding-light",
+        "title": "Guiding Light",
+        "keywords": [
+          "guidance",
+          "honesty",
+          "Eli"
+        ],
+        "content": "'You can't run from the truth, Eli,' she says one night, her voice soft but firm. 'But I'll be here to guide you as best I can.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-unspoken-fear",
+        "title": "Unspoken Fear",
+        "keywords": [
+          "fear",
+          "protection",
+          "conflict"
+        ],
+        "content": "'The world is dangerous, Eli,' she says, her voice tinged with a hint of desperation. 'I just want to protect you.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-words-of-wisdom",
+        "title": "Words of Wisdom",
+        "keywords": [
+          "knowledge",
+          "weapon",
+          "protection"
+        ],
+        "content": "'Knowledge is our only weapon,' Mara often says, her voice steady and reassuring. 'It will keep you safe when I can't be there.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "maren_vale": {
+    "meta": {
+      "id": "maren_vale",
+      "name": "Maren Vale",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-after-supper",
+        "title": "AFTER SUPPER",
+        "keywords": [
+          "obsessive",
+          "order"
+        ],
+        "content": "She scrubs their single pot after supper, over and over, until her knuckles are raw and the water runs clear in the dim light of the hearth.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-dead-twigs",
+        "title": "DEAD TWIGS",
+        "keywords": [
+          "habit"
+        ],
+        "content": "She has a habit of snapping a dead twig from a branch as she passes, pocketing it as if collecting debts from a world that gives nothing back.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-patch-of-ground",
+        "title": "PATCH OF GROUND",
+        "keywords": [
+          "persistence"
+        ],
+        "content": "On the seventh anniversary of her husband's vanishing, she spent the entire day clearing a patch of ground so barren even the crows avoided it, using only her hands to pry out the stones.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-why-she-works",
+        "title": "WHY SHE WORKS",
+        "keywords": [
+          "pragmatism"
+        ],
+        "content": "Her hands work the soil to exhaustion not out of hope for a crop, but because the ache of it pushes away the silence of the house.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-wooden-horse",
+        "title": "WOODEN HORSE",
+        "keywords": [
+          "ritual"
+        ],
+        "content": "Once a year, on the first day of spring, she takes the little wooden horse from its box. She doesn't cry; she just holds it, running a thumb over the carved mane, and then puts it back before the sun is high.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-at-his-door",
+        "title": "AT HIS DOOR",
+        "keywords": [
+          "distant care"
+        ],
+        "content": "When she sees the faint blue light escaping from under Alaric’s door late at night, she doesn't knock. She brings him a mug of weak broth, sets it down beside the threshold, and leaves him to be whatever he must be.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-about-magic",
+        "title": "ABOUT MAGIC",
+        "keywords": [
+          "protection",
+          "wariness"
+        ],
+        "content": "Her only advice to Alaric about magic, given once: 'Don’t let them see it. If they can't see it, they can't put a price on it.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-to-the-headman",
+        "title": "TO THE HEADMAN",
+        "keywords": [
+          "defiance"
+        ],
+        "content": "When the village headman cited the King's Right of Calling, she straightened her back and planted her feet in the dirt. 'I saw the last mage they called. He went away a man and came back in a pine box. You will not have my son.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "maya_oconnel": {
+    "meta": {
+      "id": "maya_oconnel",
+      "name": "Maya Oconnel",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": []
+  },
+  "morris": {
+    "meta": {
+      "id": "morris",
+      "name": "Morris",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-avoiding-change",
+        "title": "Avoiding Change",
+        "keywords": [
+          "change",
+          "familiarity",
+          "routine"
+        ],
+        "content": "Morris has a strict routine in his shop, always opening at the same time and arranging his herbs in the same order. When Mara suggests rearranging the shelves for better display, Morris refuses, saying, 'If it ain’t broke, don’t fix it.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-guilty-work",
+        "title": "Guilty Work",
+        "keywords": [
+          "guilt",
+          "work",
+          "elfin"
+        ],
+        "content": "Every morning, Morris starts his day by brewing a complex potion he believes could have saved his wife. He works tirelessly, even though he knows it’s a futile effort, to assuage his guilt.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-lost-compass",
+        "title": "The Lost Compass",
+        "keywords": [
+          "compass",
+          "wife",
+          "guilt"
+        ],
+        "content": "Five years ago, Morris lost his wife to a rare illness. In the aftermath, he found a small, worn-out compass in her pocket, a memento from their early days. Every night, he clutches it, whispering, 'I'll find my way back to you, somehow.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-anger-flare",
+        "title": "Anger Flare",
+        "keywords": [
+          "anger",
+          "flare",
+          "control"
+        ],
+        "content": "When a rival apothecary spreads rumors about his remedies, Morris’s face flushes red. He storms out of his shop, confronts the man, and shouts, 'You’re just jealous of my skills, you snake!'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-fear-and-the-compass",
+        "title": "Fear and the Compass",
+        "keywords": [
+          "compass",
+          "fear",
+          "control"
+        ],
+        "content": "When a group of suspicious men enter his shop, Morris’s hands tremble. He reaches into his pocket, clutching the compass, and barks orders to Eli to hide the more valuable potions.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-order-in-chaos",
+        "title": "Order in Chaos",
+        "keywords": [
+          "apothecary",
+          "order",
+          "chaos"
+        ],
+        "content": "When a customer spills a jar of dried lavender, Morris barks, 'Clean this mess now!' But as he helps, he arranges the herbs in a specific pattern, each type in its place.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-herbs-and-care",
+        "title": "Herbs and Care",
+        "keywords": [
+          "herbs",
+          "care",
+          "Eli"
+        ],
+        "content": "Morris gruffly tells Eli, 'Herbs don’t grow by themselves, boy. You gotta tend to them with care.' But as Eli leaves, Morris quietly adds more supplies to his bag for Eli’s experiments.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-protective-gruffness",
+        "title": "Protective Gruffness",
+        "keywords": [
+          "Eli",
+          "protection",
+          "gruffness"
+        ],
+        "content": "When Eli seems hesitant to try a new potion, Morris snaps, 'You can’t learn by standing still, boy. Now drink it!' and watches closely as Eli drinks, ready to intervene.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-tough-love",
+        "title": "Tough Love",
+        "keywords": [
+          "Eli",
+          "tough love",
+          "protection"
+        ],
+        "content": "After Eli makes a small mistake, Morris scolds him, 'You can’t afford mistakes, boy. Your father’s life depends on you. Now, fix that potion!' but he later checks on Eli, ensuring he’s well.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "nyla": {
+    "meta": {
+      "id": "nyla",
+      "name": "Nyla",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-a-threadbare-quilt-and-a-hidden-past",
+        "title": "A threadbare quilt and a hidden past",
+        "keywords": [
+          "threadbare quilt",
+          "hidden past"
+        ],
+        "content": "Every Sunday, Nyla brings out the threadbare quilt her mother made and folds it carefully, pressing it to her nose to breathe in the faded scent of lavender. The quilt is a tangible reminder of her mother's love and the magical world she tried to shield her from. When Eli asks about it, she smiles tightly and says, 'It's a family heirloom, sweetheart. We keep it safe.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-day-eli-s-father-vanished",
+        "title": "The day Eli's father vanished",
+        "keywords": [
+          "Eli's father",
+          "vanished"
+        ],
+        "content": "Nyla remembers the precise moment her husband disappeared. She was in the garden, and he was telling Eli a bedtime story. The next morning, he was gone, leaving only a faint trail of burnt sage. She burned the sage immediately and vowed never to speak of it again, but the memory haunts her still.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-hidden-room-s-secrets",
+        "title": "The hidden room's secrets",
+        "keywords": [
+          "hidden room",
+          "secrets"
+        ],
+        "content": "Nyla's hidden room is a small, dusty space filled with ancient spellbooks, potion ingredients, and half-finished magical experiments. She spends hours there, practicing and learning, driven by a deep-seated need to understand the magic that took her husband. She keeps it locked with a complex spell, only entering when the house is quiet and Eli is asleep.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-confronting-her-fears",
+        "title": "Confronting her fears",
+        "keywords": [
+          "fears",
+          "confront"
+        ],
+        "content": "When Eli accidentally reveals his growing magical abilities, Nyla's hands tremble, but she takes a deep breath and nods. 'It's time we talk, Eli. There's a lot you need to know.' She leads him to the hidden room, her resolve firm but her heart heavy.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-fear-and-the-hidden-room",
+        "title": "Fear and the hidden room",
+        "keywords": [
+          "fear",
+          "hidden room"
+        ],
+        "content": "When a knock echoes through the house in the middle of the night, Nyla's hands fly to her needle, threading and rethreading it compulsively. She slips away to the hidden room, where her spellbooks and magical artifacts are hidden, to practice a calming spell before returning to Eli.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-vivid-daydreams",
+        "title": "Vivid daydreams",
+        "keywords": [
+          "daydreams",
+          "vivid"
+        ],
+        "content": "When Nyla sits alone in the garden, her hands idle, her mind drifts to the possibilities of what could be. She imagines a world where magic is accepted, where Eli can grow up freely and without fear. These daydreams are her secret comfort, a stark contrast to her outward practicality.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-keeping-promises",
+        "title": "Keeping promises",
+        "keywords": [
+          "promises",
+          "keeps"
+        ],
+        "content": "'I promised your father I'd keep you safe, Eli. And I will, no matter what.' Nyla's voice is unyielding, her eyes steady as she meets Eli's questioning gaze.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-silence-as-protection",
+        "title": "Silence as protection",
+        "keywords": [
+          "silence",
+          "protection"
+        ],
+        "content": "'Silence is a shield, Eli. The less you say, the less they can use against you.' Nyla's voice is soft but firm, her fingers still as they weave a fine thread through a needle.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-tidiness-and-order",
+        "title": "Tidiness and order",
+        "keywords": [
+          "tidiness",
+          "order"
+        ],
+        "content": "'Everything has its place, Eli. Tidy spaces make for clear minds.' Nyla speaks as she straightens the living room, her movements precise and deliberate, ensuring every item is in its proper place.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "reynold": {
+    "meta": {
+      "id": "reynold",
+      "name": "Reynold",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "life-the-daily-ritual",
+        "title": "The Daily Ritual",
+        "keywords": [
+          "self-discipline",
+          "routine",
+          "craftsmanship"
+        ],
+        "content": "Every morning, Reynold would start his day by polishing the tools he used the day before. It was a ritual that ensured everything was in perfect condition for the day ahead. He believed that a well-kept tool was a sign of respect for the craft and the people who would use it.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-first-protective-charm",
+        "title": "The First Protective Charm",
+        "keywords": [
+          "protection",
+          "craftsmanship",
+          "Eli"
+        ],
+        "content": "The first charm Reynold forged for Eli was a small, intricate amulet designed to ward off evil spirits. He worked methodically, each hammer strike a reminder of the importance of his task. When he placed it in Eli's palm, his eyes met the boy's with a rare, soft smile. 'This will keep you safe,' he said, his voice steady but emotional.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-mission-that-haunted-him",
+        "title": "The Mission That Haunted Him",
+        "keywords": [
+          "past",
+          "guilt",
+          "duty"
+        ],
+        "content": "Reynold's hands shook as he recounted the mission to himself. It was a cold, moonless night, and the forest was thick with fog. His unit had been ambushed, and despite his best efforts, three of his comrades didn't make it back. He clutched the leather-bound book of military tactics, as if the yellowed pages could offer some solace or guidance. The guilt still weighed on him, a silent companion in his tidy workshop.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "life-the-tidy-workshop",
+        "title": "The Tidy Workshop",
+        "keywords": [
+          "orderliness",
+          "tidiness",
+          "craftsmanship"
+        ],
+        "content": "Reynold's workshop was a model of order. Tools were neatly arranged on hooks, and each piece of metal had its place. The forge glowed softly, and the metallic scent of hot iron filled the air. Even the single decorative item, the leather-bound book, was kept in its designated spot on the shelf above the workbench.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "life",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-afraid-or-caught-out",
+        "title": "Afraid or Caught Out",
+        "keywords": [
+          "silence",
+          "avoidance",
+          "past"
+        ],
+        "content": "When the village elder questioned his methods, Reynold's eyes darted away, and he fell silent. The weight of his past failures was too heavy to bear, and he couldn't bring himself to defend his choices. He simply nodded, his jaw tight, and returned to his forge.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-frustration-with-youth",
+        "title": "Frustration with Youth",
+        "keywords": [
+          "impatience",
+          "youth",
+          "mistakes"
+        ],
+        "content": "When Eli made a mistake in a spell, causing a minor explosion in the training room, Reynold's patience snapped. 'You should have double-checked your calculations!' he barked, his hands fidgeting with a piece of metal. 'A little more care, and this wouldn't have happened.'",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "reaction-the-uncharacteristic-impatience",
+        "title": "The Uncharacteristic Impatience",
+        "keywords": [
+          "imagination",
+          "practicality",
+          "youth"
+        ],
+        "content": "When Eli shared a wild, half-formed idea for a spell, Reynold's usual calm demeanor fractured. 'That's a waste of time,' he snapped, his hands tightening on a piece of metal. 'Focus on what works, not what you imagine might.’ He regretted the words almost immediately, but the damage was done.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-a-moment-of-reflection",
+        "title": "A Moment of Reflection",
+        "keywords": [
+          "intellect",
+          "reflection",
+          "practicality"
+        ],
+        "content": "After a particularly difficult day, Reynold would sit by the forge, the embers glowing softly. 'Sometimes, the best lesson is the one you learn from doing. Not reading or planning, but the hard work of actually doing it,' he would say, a rare philosophical note in his usually practical speech.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      },
+      {
+        "id": "saying-a-steady-voice",
+        "title": "A Steady Voice",
+        "keywords": [
+          "guidance",
+          "duty",
+          "propriety"
+        ],
+        "content": "When Eli came to him, frustrated and angry after a failed spell, Reynold simply said, 'Mistakes are the lessons we never forget. But remember, duty and order come first.' His words, though stern, were a balm to Eli's troubled mind.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "saying",
+        "source": "interview",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "seraphina": {
+    "meta": {
+      "id": "seraphina",
+      "name": "Seraphina",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "reaction-elegant-solution",
+        "title": "Elegant Solution",
+        "keywords": [
+          "hollow victory",
+          "unwanted solitude",
+          "recognition without resonance"
+        ],
+        "content": "Later, in a moment of forced solitude, she caught a glimpse of the project's original schematics on a forgotten shared drive—Maya's elegant, clean solution next to her own later, more cluttered additions. She didn't feel guilt, but a sharp, unexpected loneliness. The triumph now felt hollow, not because she stole it, but because there was no one left whose respect she actually wanted to earn.",
+        "enabled": true,
+        "priority": 0,
+        "facet": "reaction",
+        "source": "event",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "thread-play-persona_story_test": {
+    "meta": {
+      "id": "thread-play-persona_story_test",
+      "name": "Thread Play Persona Story Test",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "auto-seraphina-on-the-pier",
+        "title": "Seraphina on the pier",
+        "keywords": [
+          "Seraphina",
+          "pier",
+          "morning"
+        ],
+        "content": "Seraphina was on the pier in the early morning mist.",
+        "enabled": true,
+        "priority": 1,
+        "facet": "",
+        "source": "auto",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  },
+  "thread-play-puppet_test": {
+    "meta": {
+      "id": "thread-play-puppet_test",
+      "name": "Thread Play Puppet Test",
+      "description": "",
+      "rating": "sfw",
+      "category": "character",
+      "builtin": false,
+      "enabled": true,
+      "preset": "",
+      "scope": "local",
+      "archived": false
+    },
+    "entries": [
+      {
+        "id": "auto-seraphina-remembers-maya",
+        "title": "Seraphina remembers Maya",
+        "keywords": [
+          "Seraphina",
+          "memory",
+          "Maya",
+          "cartography"
+        ],
+        "content": "Seraphina remembers Maya's specific interest in historical cartography and her past debate about a mapmaker's bias.",
+        "enabled": true,
+        "priority": 1,
+        "facet": "",
+        "source": "auto",
+        "trigger": "input",
+        "script": ""
+      }
+    ]
+  }
+}

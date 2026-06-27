@@ -82,8 +82,10 @@ def _default_preset() -> dict:
 # organizing axis — roleplay presets speak in-character, assist presets do craft work.
 _SEED_PRESETS = [
     # ══ Chat ══
-    {"id": "free_chat", "name": "Free Chat", "mode": "roleplay", "group": "Chat", "order": 0,
-     "description": "In-character roleplay — the standalone chat surface speaks AS the character.",
+    {"id": "free_chat", "name": "Narrative", "mode": "roleplay", "group": "Narrative", "order": 0,
+     "description": "The NARRATIVE agent — plays the story out in-character: narrates each turn and "
+                    "embodies the cast from their per-character lorebooks. Backs free chat and in-play "
+                    "narration (the active chat model when you play).",
      # Roleplay: the character's own persona governs voice; keep the base light.
      "system": ""},
 

@@ -81,7 +81,8 @@ def run_turn(ctx, body: dict) -> dict:
         if not names:                         # general chat: offer every function any mode declares
             names = list(dict.fromkeys(n for m in modes.values() for n in (m.get("functions") or [])))
         fns = GO.resolve_functions(names)
-        preset_books = [b["id"] for b in _LS.list_books(root) if b.get("category") == "function"]
+        preset_books = []   # the unified chat's model is the builder/workshop model — NOT resolved
+                            # from function-book bindings (the chat no longer routes through books).
     else:
         book_ids = [re.sub(r"[^\w\-]+", "_", str(b)) for b in (body.get("lorebooks") or [])]
         preset_books = book_ids

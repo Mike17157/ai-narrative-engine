@@ -290,36 +290,18 @@ def _seed_books(root: Path, con) -> None:
                         "AND (entry_id='refusal-floor' OR trig IS NULL OR trig='input')")
             _insert(con, "_refusal", LoreEntry(**canon))
 
-    # Ensure new built-in function entries land in EXISTING DBs (insert by id only when
-    # missing, so user edits/deletions of the others are never clobbered or resurrected).
-    for bid, entries in (("_graph_fns", _GRAPH_FNS_ENTRIES), ("_location_fns", _LOCATION_FNS_ENTRIES),
-                         ("_character_fns", _CHARACTER_FNS_ENTRIES),
-                         ("_relationship_fns", _RELATIONSHIP_FNS_ENTRIES), ("_scene_fns", _SCENE_FNS_ENTRIES),
-                         ("_wardrobe_fns", _WARDROBE_FNS_ENTRIES), ("_story_tools", _STORY_TOOLS_ENTRIES),
-                         ("_smith_tools", _SMITH_TOOLS_ENTRIES),
-                         ("_storymaster_tools", _STORYMASTER_TOOLS_ENTRIES)):
+    # Ensure new built-in function entries land in EXISTING DBs (insert by id only when missing).
+    # Only _storymaster_tools remains a function book; the rest were removed (chat resolves tools by
+    # name from the code registry).
+    for bid, entries in (("_storymaster_tools", _STORYMASTER_TOOLS_ENTRIES),):
         if con.execute("SELECT 1 FROM books WHERE id=?", (bid,)).fetchone():
             have = {r[0] for r in con.execute("SELECT entry_id FROM lore WHERE scope=?", (bid,)).fetchall()}
             for e in entries:
                 if e["id"] not in have:
                     _insert(con, bid, LoreEntry(**e))
-
-    # Bind each built-in function book to its OWN model PRESET (Function→Lorebook→Preset), so
-    # every flow uses the right job preset. Set when unset; also migrate the early builds that
-    # were all bound to 'story_consultant' to their proper per-function preset.
-    for bid, pid in (("_graph_fns", "story_consultant"), ("_location_fns", "location_builder"),
-                     ("_character_fns", "character_builder"),
-                     ("_relationship_fns", "character_builder"), ("_scene_fns", "scene_director"),
-                     ("_wardrobe_fns", "wardrobe_stylist")):
-        row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
-        if row is not None and (not (row[0] or "") or row[0] == "story_consultant"):
-            con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
-    # Stage-tool books → their Agent (set only when unbound, so user edits are kept).
-    for bid, pid in (("_story_tools", "story_consultant"), ("_smith_tools", "character_smith"),
-                     ("_storymaster_tools", "storymaster")):
         row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
         if row is not None and not (row[0] or ""):
-            con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
+            con.execute("UPDATE books SET preset='storymaster' WHERE id=?", (bid,))
     con.commit()
 
 
@@ -826,42 +808,14 @@ _PREMISE_INTERVIEW_ENTRIES = [
 
 
 _STARTER_BOOKS = [
-    ("_graph_fns", {"name": "Graph Functions", "category": "function", "rating": "sfw",
-                    "description": "Functions the story workshop can call to edit the development graph. "
-                                   "Each entry IS a function (its content is a JSON op-spec); its keywords "
-                                   "are trigger terms. Attach this book to a step and author your own."},
-     _GRAPH_FNS_ENTRIES),
-    ("_location_fns", {"name": "Location Functions", "category": "function", "rating": "sfw",
-                       "description": "Functions for editing the story's locations as a chat flow "
-                                      "(operate on a {start, locations:[…]} document)."},
-     _LOCATION_FNS_ENTRIES),
-    ("_character_fns", {"name": "Character Functions", "category": "function", "rating": "sfw",
-                        "description": "Functions for editing the story's cast as a chat flow "
-                                       "(operate on a {cast:[…]} document)."},
-     _CHARACTER_FNS_ENTRIES),
-    ("_relationship_fns", {"name": "Relationship Functions", "category": "function", "rating": "sfw",
-                           "description": "Author the cast's relationship web (rival / mentor / lover…) — "
-                                          "char↔char bonds that also seed runtime relationship state."},
-     _RELATIONSHIP_FNS_ENTRIES),
-    ("_scene_fns", {"name": "Scene Functions", "category": "function", "rating": "sfw",
-                    "description": "Connect scenes/places into a navigable map (source → target), "
-                                   "and render scene images via the agent's image workflow."},
-     _SCENE_FNS_ENTRIES),
-    ("_wardrobe_fns", {"name": "Wardrobe Functions", "category": "function", "rating": "sfw",
-                       "description": "Render outfit images via the Wardrobe agent's image workflow."},
-     _WARDROBE_FNS_ENTRIES),
-    ("_story_tools", {"name": "Story Agent Tools", "category": "function", "rating": "sfw",
-                      "description": "Pipeline STAGES the Story Agent can run from the workshop "
-                                     "(e.g. the storyboarder) — not just live-doc edits."},
-     _STORY_TOOLS_ENTRIES),
+    # NOTE: the per-domain/character/stage FUNCTION books (_graph_fns, _location_fns, _character_fns,
+    # _relationship_fns, _scene_fns, _wardrobe_fns, _story_tools, _smith_tools) were removed — the chat
+    # agent resolves its tools by NAME from the code registry (see agent.resolve_functions), so the
+    # book wiring was vestigial. Only _storymaster_tools remains (the DM's consolidate wiring).
     ("_storymaster_tools", {"name": "Storymaster Tools", "category": "function", "rating": "sfw",
                             "description": "The storymaster's consolidation tool — turns events into "
                                            "per-character impacts (relationship drift + new exemplars)."},
      _STORYMASTER_TOOLS_ENTRIES),
-    ("_smith_tools", {"name": "Character Smith Tools", "category": "function", "rating": "sfw",
-                      "description": "The autonomous character creator's tool (create_character) — "
-                                     "one-shot generate a character from a brief and add it to the cast."},
-     _SMITH_TOOLS_ENTRIES),
     ("_premise_interview", {"name": "Premise Interview", "category": "craft", "rating": "sfw",
                             "description": "Deterministic question script the premise builder asks IN "
                                            "ORDER (priority DESC) to draw a story out of you — from "

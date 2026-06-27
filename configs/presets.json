@@ -276,9 +276,9 @@
     },
     {
       "id": "free_chat",
-      "name": "Free Chat",
-      "description": "In-character roleplay — the standalone chat surface speaks AS the character.",
-      "group": "Chat",
+      "name": "Narrative",
+      "description": "The NARRATIVE agent — plays the story out in-character: narrates each turn and embodies the cast from their per-character lorebooks. Backs free chat and in-play narration.",
+      "group": "Narrative",
       "order": 0,
       "connection": "ollama-local",
       "model": "meromero:latest",

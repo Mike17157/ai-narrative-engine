@@ -1,5 +1,5 @@
 {
-  "_comment": "The AUTHOR agent's BRAIN, as data — the authoring half of the system (the other half is the Dungeon Master: the play-time runtime = simulation director/actor + storymaster consolidation). All the Author's authored instructions live here — base system prompt, per-mode personas, grounding rules, tool policy. Its MODES below (characters/locations/scenes/wardrobe/shaping) are the Author's facets. The code (loom/stories/agent.py) is the fixed STRUCTURE that reads this; lorebooks stay the retrieved KNOWLEDGE (_craft, _psyche) and the registry stays the TOOLS. Edit prompts here, no code change.",
+  "_comment": "The AUTHOR agent's BRAIN, as data — the authoring agent of three: Author (author-time, this file), Narrative (the in-play narrator/roleplay voice), and Dungeon Master (the play runtime = simulation director/actor + storymaster consolidation). All the Author's authored instructions live here — base system prompt, per-mode personas, grounding rules, tool policy. Its MODES below (characters/locations/scenes/wardrobe/shaping) are the Author's facets. The code (loom/stories/agent.py) is the fixed STRUCTURE that reads this; lorebooks stay the retrieved KNOWLEDGE (_craft, _psyche) and the registry stays the TOOLS. Edit prompts here, no code change.",
 
   "name": "Author",
   "role": "author",
