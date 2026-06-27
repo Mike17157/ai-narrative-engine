@@ -105,12 +105,26 @@ def plan_wardrobe(provider, *, char_name: str, persona: str, appearance: str, st
     nl = (char_name or "").lower()
     arc = [b for b in beats if any(nl in (c or "").lower() for c in b.get("characters", []))] or beats
     beat_lines = "\n".join(f"- {b.get('summary', '')}" for b in arc[:24])
+    # Outfits must suit WHERE the character goes AND the story's REGISTER (genre/tone).
+    locs = [l for l in (story.get("locations") or []) if isinstance(l, dict) and l.get("name")]
+    loc_lines = "\n".join(f"- {l['name']}: {(l.get('description') or '')[:140]}" for l in locs[:20])
+    themes = ", ".join(str(t) for t in (story.get("themes") or []) if t)
     ctx_text = (
-        f"STORY: {story.get('premise', '')}\nTONE: {story.get('tone', '')}\n\n"
+        f"STORY: {story.get('premise', '')}\nTONE: {story.get('tone', '')}\n"
+        + (f"THEMES: {themes}\n" if themes else "")
+        + "\n"
         f"CHARACTER: {char_name}\nPERSONA:\n{persona or '(none)'}\n"
         f"APPEARANCE: {appearance or '(infer)'}\n\n"
-        f"THIS CHARACTER'S CHAPTERS:\n{beat_lines or '(use the story overall)'}\n\n"
-        f"Plan {char_name}'s outfits across the story."
+        + (f"LOCATIONS this story takes place in (dress appropriately for these settings — "
+           f"climate, formality, activity):\n{loc_lines}\n\n" if loc_lines else "")
+        + f"THIS CHARACTER'S CHAPTERS:\n{beat_lines or '(use the story overall)'}\n\n"
+        "REGISTER: match the outfits to the story's TONE and genre, not just the place. A "
+        "grounded/serious story wants realistic, practical, setting-accurate clothing; a stylized, "
+        "genre, comedic, or anime/fanservice tone invites genre conventions — bold silhouettes, "
+        "genre staples, playful or revealing pieces where the tone clearly calls for it (e.g. a "
+        "light anime desert arc might give a bikini + scarf where a grim one gives layered robes). "
+        "Let the TONE decide how grounded vs stylized, and the LOCATIONS decide the specifics.\n\n"
+        f"Plan {char_name}'s outfits across the story — each fitting both the setting and the register."
     )
     if on_event:
         on_event({"type": "phase", "label": f"Planning {char_name}'s wardrobe"})

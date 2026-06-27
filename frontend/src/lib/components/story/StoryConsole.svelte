@@ -20,8 +20,10 @@
     autostart = true,       // auto-send the opening turn on mount
     openingMessage = '',    // first user turn (defaults to the endpoint's character read)
     sessionId = '',         // server-side checkpoint id; '' = no persistence
+    storyKey = '',          // the SAVED story key (if any) — lets story tools persist title/cover
     onGraphChange = null,   // (graph) => void — fires on model AND user edits
     onBoard = null,         // (board) => void — fires when an agent runs the storyboarder stage tool
+    onImage = null,         // (dataUri, prompt) => void — fires when an agent renders via generate_image
     // The host's action buttons. Aliased to `hostActions` so it doesn't collide with the
     // `{#snippet actions()}` we pass down to LlmConsole — that shadowing made
     // `{@render actions(...)}` recurse into the local snippet (invalid_snippet_arguments
@@ -85,34 +87,15 @@
     _saveTimer = setTimeout(saveSession, 1000);
   });
 
-  // The agent may end a reply with a stage-tool sentinel like `[[run: storyboard]]` (injected
-  // tool protocol). Strip it from what the writer sees — runStageTools() acts on it after the turn.
-  const RUN_SENTINEL = () => /\[\[run:\s*([a-z_]+)\s*\]\]/gi;
+  // The agent may end a reply with a stage-tool sentinel like `[[run: storyboard]]` or, for a
+  // tool that takes input, `[[run: generate_image | a girl in a red dress]]` (injected tool
+  // protocol). Strip it from what the writer sees — runStageTools() acts on it after the turn.
+  const RUN_SENTINEL = () => /\[\[run:\s*([a-z_]+)\s*(?:\|\s*([^\]]*?))?\s*\]\]/gi;
   function visibleProse(raw) {
     return raw.split(SPINE_MARKER)[0]
       .replace(RUN_SENTINEL(), '')
       .replace(/\s*<{1,3}S?P?I?N?E?>{0,3}\s*$/i, '')
       .trimEnd();
-  }
-
-  // Execute any stage tools the agent requested this turn (Story/Spine Agent → storyboarder /
-  // spine architect). A spine result IS graph-shaped → swap the canvas to it; a storyboard board
-  // is a different shape, so we report it rather than force it onto the graph.
-  async function runStageTools(raw) {
-    const stages = [...new Set([...raw.matchAll(RUN_SENTINEL())].map((m) => m[1].toLowerCase()))];
-    for (const stage of stages) {
-      fnMsg = `running ${stage}…`;
-      try {
-        const r = await post('/stories/run-stage', { stage, character, spine: workingGraph || undefined });
-        if (!r.data?.ok) { fnMsg = r.data?.error || `${stage} failed`; continue; }
-        // Both storyboard (board→graph projection) and spine return a graph-shaped doc → swap
-        // the canvas to it so "storyboard this" visibly populates the development graph.
-        const graph = r.data.graph || (r.data.spine && typeof r.data.spine === 'object' ? r.data.spine : null);
-        if (graph) setGraph(graph, true);
-        if (r.data.board) { onBoard?.(r.data.board); fnMsg = `✓ ran ${stage} → ${(r.data.board.beats || []).length} beats`; }
-        else fnMsg = `✓ ran ${stage}`;
-      } catch { fnMsg = `${stage} failed`; }
-    }
   }
 
   async function callWorkshop(msgs) {
@@ -166,9 +149,8 @@
       messages = messages.slice(0, idx);
     } finally {
       busy = false;
-      if (RUN_SENTINEL().test(raw)) void runStageTools(raw);   // agent requested a pipeline stage
       saveSession();   // checkpoint the turn (conversation + graph) server-side
-      if (autoFns) void runGraphOps();   // apply graph functions as part of the turn
+      if (autoFns) void runGraphOps();   // apply tools (graph edits, renders…) as part of the turn
     }
   }
 
@@ -187,11 +169,18 @@
     fnBusy = true; fnMsg = null;
     const r = await post('/stories/graph-ops', {
       character, graph: workingGraph || {}, lorebooks, artifact_label: 'DEVELOPMENT GRAPH',
+      story: storyKey || undefined,   // lets story tools (title/cover) persist to the saved story
       messages: messages.filter((m) => m.content),
     });
     fnBusy = false;
     if (r.data?.ok) {
       if (r.data.graph) setGraph(r.data.graph, true);
+      // Action tools (image render, storyboard…) come back as artifacts — show them.
+      for (const a of (r.data.artifacts || [])) {
+        if (a.image) { messages = [...messages, { role: 'assistant', content: '', image: a.image, imageAlt: a.prompt }]; onImage?.(a.image, a.prompt); }
+        else if (a.board) onBoard?.(a.board);
+        else if (a.graph) setGraph(a.graph, true);
+      }
       const ok = (r.data.applied || []).filter((a) => a.ok);
       fnMsg = ok.length ? `✓ ${ok.map((a) => a.fn).join(', ')}`
         : ((r.data.offered || []).length ? 'no changes called for' : 'attach a function book first');

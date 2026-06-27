@@ -13,7 +13,7 @@
   let view = $state('card'); // 'card' | 'portraits'
 
   // ---------- Card editing ----------
-  let edit = $state({ name: '', system: '', greeting: '', appearance: '' });
+  let edit = $state({ name: '', system: '', greeting: '', appearance: '', playable: false });
   let cardMsg = $state(null);
   let loadedFor = $state(null);
   let cardSnap = $state(null);   // signature of the last loaded/saved card (auto-save baseline)
@@ -26,7 +26,9 @@
         name: active.name || '',
         system: active.system || '',
         greeting: active.greeting || '',
-        appearance: active.fields?.appearance || ''
+        appearance: active.fields?.appearance || '',
+        playable: !!active.playable,
+        homeScenes: (active.home_scenes || []).map((s) => ({ ...s }))
       };
       cardMsg = null;
       refMsg = null;
@@ -40,6 +42,8 @@
       name: edit.name,
       system: edit.system,
       greeting: edit.greeting,
+      playable: edit.playable,
+      home_scenes: edit.homeScenes,
       fields: { appearance: edit.appearance }
     });
     if (r.data?.ok) { cardMsg = { ok: true, text: '✓ Saved' }; await loadChars(); }
@@ -54,6 +58,11 @@
     clearTimeout(cardTimer);
     cardTimer = setTimeout(saveCard, 700);
   });
+
+  // Home scenes (playable personas only) — optional portable "yours" places.
+  const newHomeId = () => `home_${Date.now().toString(36)}`;
+  function addHome() { edit.homeScenes = [...edit.homeScenes, { id: newHomeId(), name: '', backstory: '', background_prompt: '' }]; }
+  function removeHome(i) { edit.homeScenes = edit.homeScenes.filter((_, j) => j !== i); }
 
   // Generate a thorough, labelled background (Identity/History/Personality/…)
   // for this character — uses its attached story as context when present.
@@ -139,6 +148,15 @@
     {#if view === 'card'}
       <div class="dbody">
         <section class="edit">
+          <label class="play-toggle" class:on={edit.playable}>
+            <input type="checkbox" bind:checked={edit.playable} />
+            <span class="pt-mark">🎭</span>
+            <span class="pt-text">
+              <strong>Playable — embody this character</strong>
+              <span class="pt-sub">Makes this a “you” puppet you can play in any story. Their backstory & lorebook flow into the scene; you drive their choices. Portable across stories.</span>
+            </span>
+          </label>
+
           <label>Name</label>
           <input class="fld" bind:value={edit.name} />
 
@@ -154,6 +172,26 @@
 
           <label>First message / greeting</label>
           <textarea class="fld ta" rows="4" bind:value={edit.greeting}></textarea>
+
+          {#if edit.playable}
+            <div class="lblrow">
+              <label>🏠 Home scenes <span class="lo">— optional; places that are “yours”, carried into any story</span></label>
+              <button class="ghost xsm" onclick={addHome}>+ Add home</button>
+            </div>
+            {#each edit.homeScenes as h, i (h.id)}
+              <div class="home">
+                <div class="home-top">
+                  <input class="fld" bind:value={edit.homeScenes[i].name} placeholder="Home name (my apartment, the studio, parents’ house…)" />
+                  <button class="rmhome" onclick={() => removeHome(i)} title="Remove home">✕</button>
+                </div>
+                <textarea class="fld ta" rows="2" bind:value={edit.homeScenes[i].backstory} placeholder="What this place is to you — the vibe, what’s here…"></textarea>
+                <input class="fld" bind:value={edit.homeScenes[i].background_prompt} placeholder="Background plate — booru tags, no people (optional)" />
+              </div>
+            {/each}
+            {#if !edit.homeScenes.length}
+              <p class="lo nohome">No home scenes — you’ll use whatever “home” the story provides.</p>
+            {/if}
+          {/if}
 
           <div class="prow">
             <span class:ok={cardMsg?.ok} class:err={cardMsg?.err} class="pm">{cardMsg?.text || 'Auto-saves as you edit'}</span>
@@ -294,6 +332,18 @@
 
   /* card editor */
   .edit label { display: block; font-size: 11.5px; color: var(--muted); margin: 14px 0 5px; text-transform: uppercase; letter-spacing: .3px; }
+  .edit label.play-toggle {
+    display: flex; align-items: flex-start; gap: 11px; margin: 0 0 6px; padding: 12px 14px;
+    text-transform: none; letter-spacing: 0; cursor: pointer; border-radius: 11px;
+    background: var(--elev); border: 1px solid var(--border-soft); transition: border-color .12s, background .12s;
+  }
+  .play-toggle:hover { border-color: var(--border); }
+  .play-toggle.on { border-color: color-mix(in srgb, var(--accent) 55%, transparent); background: color-mix(in srgb, var(--accent) 9%, var(--elev)); }
+  .play-toggle input { width: 16px; height: 16px; margin-top: 2px; flex: none; accent-color: var(--accent); }
+  .pt-mark { font-size: 18px; line-height: 1.2; flex: none; }
+  .pt-text { display: flex; flex-direction: column; gap: 3px; }
+  .pt-text strong { font-size: 13px; color: var(--text); font-weight: 650; }
+  .pt-sub { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
   .lblrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .lblrow label { margin-bottom: 0; }
   .xsm { font-size: 11.5px; padding: 4px 10px; border-radius: 7px; }
@@ -305,6 +355,12 @@
   }
   .ta { resize: vertical; line-height: 1.5; font-family: inherit; }
   .fld:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow); outline: none; }
+  .home { border: 1px solid var(--border-soft); border-radius: 10px; padding: 9px 10px; margin-bottom: 8px; background: var(--elev); display: flex; flex-direction: column; gap: 6px; }
+  .home-top { display: flex; gap: 7px; align-items: center; }
+  .home-top .fld { flex: 1; }
+  .rmhome { width: 30px; height: 30px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 8px; background: var(--elev-2); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; }
+  .rmhome:hover { color: var(--bad); border-color: rgba(255,122,122,.5); filter: none; }
+  .nohome { margin: 0 0 8px; }
   .prow { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
   .pm { font-size: 12.5px; }
   .pm.ok { color: var(--good); } .pm.err { color: var(--bad); }

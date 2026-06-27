@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import re
 
-from ._helpers import _card_context, _sys
+from ._helpers import _ANTI_FLUFF, _card_context, _sys
 
 
 def storyboard_inputs(*, name: str, persona: str, extras: dict | None = None,
                       systems: dict | None = None, premise: str = "",
-                      spine: dict | None = None) -> tuple[str, str]:
+                      spine: dict | None = None, craft: str = "") -> tuple[str, str]:
     """(system, prompt) for the storyboard stage. Streamed token-by-token."""
     card = _card_context(name, persona, extras or {})
 
@@ -43,19 +43,30 @@ def storyboard_inputs(*, name: str, persona: str, extras: dict | None = None,
     if spine_block:
         parts.append(spine_block)
     if premise:
-        parts.append(f"USER'S STORY PREMISE: {premise}")
+        parts.append("SEED PREMISE — the user's starting spark. Treat it as a FOUNDATION to build "
+                     "outward from, NOT a specification to satisfy line by line:\n" + premise)
     if spine_block:
         parts.append(
             "Storyboard a story for this character. The emotional spine above is the FIXED inner "
             "journey — derive the outer events to force each beat in order."
         )
     elif premise:
-        parts.append("Storyboard a story for this character, using the premise above as your starting point.")
+        parts.append(
+            "Build the story OUTWARD from the seed: honour its emotional core and any facts it fixes, "
+            "but you are free — encouraged — to reinterpret, deepen, and SURPRISE. Invent turns, "
+            "characters, and texture the premise never mentions; let it go somewhere the one-line spark "
+            "couldn't predict. The premise is the soil, not the plot. Do NOT merely dramatise it "
+            "sentence by sentence."
+        )
     else:
         parts.append("Storyboard a plausible story for this character.")
 
     user_prompt = "\n\n".join(parts)
-    return (_sys(systems or {}, "storyboard"), user_prompt)
+    # Retrieved craft notes (if any) + concreteness targets appended LAST to win on recency.
+    system = _sys(systems or {}, "storyboard")
+    if craft:
+        system += "\n\n" + craft
+    return (system + "\n\n" + _ANTI_FLUFF, user_prompt)
 
 
 _BEAT_RE = re.compile(r"^\s*\d+[.)]\s*(.*\S)\s*$")

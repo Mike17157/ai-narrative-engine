@@ -42,6 +42,7 @@ class AnthropicProvider:
         system: str | None,
         prompt: str,
         emits: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], None] | None = None,
         images: list[str] | None = None,
         cancel: Callable[[], bool] | None = None,
@@ -49,6 +50,25 @@ class AnthropicProvider:
         if images:
             raise NotImplementedError("image captioning routes through an OpenRouter vision model")
         messages = [{"role": "user", "content": prompt}]
+
+        # Native tool-use path: the model decides which tools to call (or none).
+        # We return the calls; the caller applies them (no tool_result round-trip —
+        # graph mutation doesn't need the model to react to results).
+        if tools:
+            resp = self._client.messages.create(
+                model=self.model,
+                max_tokens=self.max_tokens,
+                thinking=self._thinking_param(),
+                output_config={"effort": self.effort},
+                system=system or anthropic.NOT_GIVEN,
+                messages=messages,
+                tools=[{"name": t["name"], "description": t.get("description", ""),
+                        "input_schema": t["parameters"]} for t in tools],
+            )
+            text = next((b.text for b in resp.content if b.type == "text"), "")
+            calls = [{"fn": b.name, "params": b.input or {}}
+                     for b in resp.content if b.type == "tool_use"]
+            return TextResult(text=text, tool_calls=calls)
 
         # Structured path: constrain the response to the caller's JSON Schema so a
         # chat step can return, e.g., {"reply": "...", "wants_image": true,

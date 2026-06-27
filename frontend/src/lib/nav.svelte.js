@@ -25,7 +25,7 @@ export function imagesTree() {
   return [
     { id: 'workflows',   label: 'Workflows',  href: '/images/workflows' },
     { id: 'graph',       label: 'Graph',      href: '/images/graph' },
-    { id: 'lora',        label: 'Image Presets', href: '/images/lora/library' },
+    { id: 'lora',        label: 'Preset Lab', href: '/images/lora/library' },
     { id: 'models',      label: 'Models',     href: '/images/models' },
     { id: 'poses',       label: 'Poses',      href: '/images/poses' },
   ];
@@ -53,8 +53,9 @@ export function settingsTree() {
 // Stories subnav — 3 contextual modes:
 //   Mode A (library): Library · story list · Pipeline
 //   Mode B (wizard):  ← Library · Setup · Storyboard · Scenes · Cast  (step indicators)
-//   Mode C (story):   [Story Name ▾ picker] · Story map · Cast · ▶ Play
-//                     (backgrounds + editing now live in the story-map graph)
+//   Mode C (story):   [Story Name ▾ picker] · Overview · Cast · ▶ Play
+//                     (Overview is the main page + edit-in-place editor + the unified graph canvas;
+//                      Iterate/workshop retired — its graph folded into the Overview. See [[overview-is-editor]])
 export function storiesTree(path = '') {
   const list = stories.list || [];
 
@@ -84,9 +85,10 @@ export function storiesTree(path = '') {
 
   if (active) {
     return [
+      { id: 'all', label: '← Stories', href: '/stories', match: 'exact' },
       { id: 'story-picker', label: active.name || active.key, picker: true,
-        children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/workshop` })) },
-      { id: `${key}-workshop`,    label: '⚒ Iterate',  href: `/stories/${key}/workshop` },
+        children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview` })) },
+      { id: `${key}-overview`,    label: 'Overview',    href: `/stories/${key}/overview` },
       { id: `${key}-cast`,        label: 'Cast',        href: `/stories/${key}/cast` },
       { id: `${key}-play`,        label: '▶ Play',      href: `/stories/${key}/play` },
     ];
@@ -106,8 +108,9 @@ export function storiesTree(path = '') {
 // live INSIDE presets and connections are part of a preset, so neither is a tab here.
 export function libraryTree() {
   return [
-    { id: 'lib-presets',   label: 'Presets',   href: '/library/presets' },
+    { id: 'lib-presets',   label: 'Agents',    href: '/library/presets' },
     { id: 'lib-lorebooks', label: 'Lorebooks', href: '/library/lorebooks' },
+    { id: 'lib-tools',     label: 'Tools',     href: '/library/tools' },
     { id: 'lib-image-presets', label: 'Image Presets', href: '/library/image-presets' },
   ];
 }

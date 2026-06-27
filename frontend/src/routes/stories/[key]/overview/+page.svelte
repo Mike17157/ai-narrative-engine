@@ -1,16 +1,101 @@
 <script>
-  import { goto } from '$app/navigation';
-  import { charName } from '$lib/characters.svelte.js';
+  import { charName, chars, loadChars, blurb } from '$lib/characters.svelte.js';
   import { stories, deleteStory, regenStory, expandArc, generateTimelines, loadStory, setStoryMode, persistCurrent } from '$lib/stories.svelte.js';
-  import { patch } from '$lib/api.js';
+  import { patch, put, post } from '$lib/api.js';
+  import { autosize } from '$lib/autosize.js';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
   import ChapterCard from '$lib/components/story/ChapterCard.svelte';
   import SceneModal  from '$lib/components/story/SceneModal.svelte';
   import ArcModal    from '$lib/components/story/ArcModal.svelte';
-  import StorySettingsModal from '$lib/components/story/StorySettingsModal.svelte';
-  import StoryGraph  from '$lib/components/graph/StoryGraph.svelte';
-  import SpineDisplay from '$lib/components/story/SpineDisplay.svelte';
+  import StoryCanvas from '$lib/components/story/StoryCanvas.svelte';
+  import CharacterModal from '$lib/components/story/CharacterModal.svelte';
+  import PlacesEditor from '$lib/components/story/PlacesEditor.svelte';
+  import AgentChat from '$lib/components/story/AgentChat.svelte';
 
   let st = $derived(stories.current);
+
+  // ── Default personas: the playable "you" cards this story suggests ──────────
+  loadChars();
+  let playableCards = $derived((chars.list || []).filter((c) => c.playable));
+  function isDefaultPersona(k) { return (st?.default_personas || []).includes(k); }
+  async function toggleDefaultPersona(k) {
+    const cur = st.default_personas || [];
+    const next = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
+    stories.current.default_personas = next;          // reactive
+    await put(`/stories/${st.key}`, { default_personas: next });
+  }
+
+  // ── Places & scenes: story-authored containers + character-anchored spots ───
+  // Enriched cast: name + role + base image (for the relationship-graph character cards).
+  let castOptions = $derived((st?.cast || []).map((m) => {
+    const ci = chars.list.find((c) => c.key === m.character);
+    return {
+      key: m.character, name: charName(m.character) || m.character, primary: m.primary,
+      role: ci?.fields?.role || '',
+      img: ci?.reference || ci?.avatar || (ci?.images || []).map((im) => im?.url).find(Boolean) || null,
+    };
+  }));
+  let placesTimer = null;
+  function savePlaces(next) {
+    stories.current.places = next;
+    clearTimeout(placesTimer);
+    placesTimer = setTimeout(() => put(`/stories/${st.key}`, { places: next }), 600);
+  }
+
+  // ── Inline editing: the description fields edit in place. Every change mutates
+  //    stories.current and a single debounced persistCurrent() PUTs the whole
+  //    description (title/logline/premise/tone/themes/cast/locations/ending). Same
+  //    mutate-current-then-save pattern the rest of this page already uses. ──────────
+  let saveTimer = null;
+  function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persistCurrent, 600); }
+
+  // Themes ↔ comma-string mirror (re-seed when the story changes; avoids array churn per keystroke).
+  let themesStr = $state(''); let themesSeed = null;
+  $effect(() => { if (st && themesSeed !== st.key) { themesStr = (st.themes || []).join(', '); themesSeed = st.key; } });
+  function commitThemes() { stories.current.themes = themesStr.split(',').map((t) => t.trim()).filter(Boolean); saveSoon(); }
+
+  // Cast roster (story-level): add/remove existing character cards.
+  let addPick = $state('');
+  let castAddItems = $derived((chars.list || [])
+    .filter((c) => !c.story && !(st?.cast || []).some((m) => m.character === c.key))
+    .map((c) => ({ value: c.key, label: c.name || c.key })));
+  function addCastMember() {
+    if (!addPick) return;
+    stories.current.cast = [...(st.cast || []), { character: addPick, primary: false }];
+    addPick = ''; saveSoon();
+  }
+  function removeCastMember(i) { stories.current.cast = (st.cast || []).filter((_, j) => j !== i); saveSoon(); }
+
+  // Locations: inline editor (name/description/background + area grouping + start marker).
+  let locUid = 0;
+  function addLocation() {
+    const id = `loc_${Date.now().toString(36)}_${locUid++}`;
+    stories.current.locations = [...(st.locations || []), { id, name: 'New location', description: '', background_prompt: '', parent: '' }];
+    saveSoon();
+  }
+  function removeLocation(i) {
+    const loc = st.locations?.[i];
+    stories.current.locations = (st.locations || []).filter((_, j) => j !== i);
+    if (loc && st.start === loc.id) stories.current.start = null;
+    saveSoon();
+  }
+  let tagging = $state({});
+  async function tagifyBg(loc) {
+    const text = (loc.background_prompt || '').trim(); if (!text || tagging[loc.id]) return;
+    tagging = { ...tagging, [loc.id]: true };
+    const r = await post('/tagify', { text, kind: 'scene' });
+    tagging = { ...tagging, [loc.id]: false };
+    if (r.ok && r.data?.tags) { loc.background_prompt = r.data.tags; saveSoon(); }
+  }
+
+  // ── Memory window: how many recent turns stay verbatim before older ones compress ──
+  let windowTimer = null;
+  function saveWindow(n) {
+    const v = Math.max(2, Math.min(40, Math.round(+n || 8)));
+    stories.current.recent_window = v;
+    clearTimeout(windowTimer);
+    windowTimer = setTimeout(() => put(`/stories/${st.key}`, { recent_window: v }), 400);
+  }
 
   // Arc expansion state
   let expandingArc  = $state(null);
@@ -68,8 +153,59 @@
       mini_ending: updated.mini_ending, rationale: updated.rationale,
     });
   }
-  // Story-settings modal (title / premise / tone / cast / locations / chapters)
-  let settingsOpen = $state(false);
+  // ── Voice agent (Phase 1): a spoken edit applies via graph-ops; highlight what changed ──────
+  let speaker = $state('');         // the agent's active behaviour → unified canvas zooms to its view
+  let relPulse = $state(null);     // {source,target} edge to pulse after a change
+  let agentMsg = $state('');       // one-line confirmation from the last command
+  let agentMsgTimer = null;
+  // Tools that mean "the agent worked on a character" → pop that character's modal.
+  const CHAR_FN = /character|persona|appearance|backstory|wardrobe|outfit|sprite|\bcast\b/i;
+  async function handleApplied(log, artifacts, warning, before) {
+    const after = stories.current?.relationships || [];
+    const ekey = (r) => `${r.source}→${r.target}`;
+    const sig = (r) => `${r.stance}|${r.dynamic}|${r.nature}`;
+    const prev = new Map((before || []).map((r) => [ekey(r), sig(r)]));
+    // First new-or-changed edge → pulse it.
+    const changed = after.find((r) => !prev.has(ekey(r)) || prev.get(ekey(r)) !== sig(r));
+    if (changed) {
+      relPulse = { source: changed.source, target: changed.target };
+      setTimeout(() => { relPulse = null; }, 1400);
+    }
+    const newChar = (artifacts || []).map((a) => a.name).find(Boolean);
+    agentMsg = warning
+      || (newChar ? `Added ${newChar}`
+        : changed ? `${charName(changed.source)} → ${charName(changed.target)}: ${changed.stance}`
+        : `${(log || []).filter((o) => o.ok).length} change(s) applied`);
+    clearTimeout(agentMsgTimer);
+    agentMsgTimer = setTimeout(() => { agentMsg = ''; }, 6000);
+
+    // The agent modified a character → bring up its modal. New character: reload the roster first
+    // so the card resolves, then open by name. Edit: open the character in focus.
+    if (newChar) {
+      await loadChars();
+      const c = (chars.list || []).find((x) => (x.name || '').toLowerCase() === newChar.toLowerCase());
+      if (c) openCharModal(c.key);
+    } else if ((log || []).some((o) => o.ok && CHAR_FN.test(o.fn || ''))) {
+      openCharModal(selectedCharKey || primaryCharKey);
+    }
+  }
+
+  // Character detail: clicking a relationship node (or the agent touching a character) opens the
+  // modal; selectedCharKey also anchors the relationship-ring focus.
+  let selectedCharKey = $state(null);
+  let modalCharKey = $state(null);
+  function openCharModal(k) { if (!k) return; selectedCharKey = k; modalCharKey = k; }
+  function closeCharModal() { modalCharKey = null; }
+  let modalChar = $derived((chars.list || []).find((c) => c.key === modalCharKey) || null);
+  let modalBonds = $derived(
+    !modalChar ? [] : (st?.relationships || [])
+      .filter((r) => r.source === modalCharKey || r.target === modalCharKey)
+      .map((r) => ({
+        other: charName(r.source === modalCharKey ? r.target : r.source),
+        dir: r.source === modalCharKey ? '→' : '←',
+        nature: r.nature, stance: r.stance || 'neutral', dynamic: r.dynamic || '',
+      }))
+  );
 
   // Click a card on the canvas → open the chapter modal. Flat-beat stories use a
   // synthetic '_board' arc, so route those to the storyboard.beats list instead.
@@ -170,24 +306,25 @@
   }
 </script>
 
-<div class="page"><div class="col">
+<div class="page withchat"><div class="col">
 
   <!-- Actions row -->
   <div class="vacts">
     {#if st.arcs?.length || st.storyboard?.beats?.length}
       <div class="view-toggle">
-        <button class="vt-btn" class:active={mode === 'graph'} onclick={() => setStoryMode(st.key, 'graph')} title="Map view">⊞ Map</button>
+        <button class="vt-btn" class:active={mode === 'graph'} onclick={() => setStoryMode(st.key, 'graph')} title="Unified graph canvas">⊞ Graph</button>
         <button class="vt-btn" class:active={mode === 'list'} onclick={() => setStoryMode(st.key, 'list')} title="List view">☰ List</button>
       </div>
     {/if}
     <span class="sp"></span>
-    <button class="ghost sm" onclick={() => goto(`/stories/${st.key}/workshop`)} title="Talk through changes; revise the story graph">⚒ Iterate</button>
-    <button class="ghost sm" onclick={() => settingsOpen = true}>✎ Edit</button>
     <button class="ghost sm" onclick={() => regenStory(st)}>↻ Regenerate</button>
     <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
   </div>
 
-  <!-- Heart callout -->
+  <!-- Title (edit in place) -->
+  <input class="ip ip-title" bind:value={st.name} oninput={saveSoon} placeholder="Untitled story" />
+
+  <!-- Heart callout (read-only — the storyboard's emotional core) -->
   {#if st.storyboard?.heart}
     <div class="heart-callout">
       <span class="heart-icon">♡</span>
@@ -195,49 +332,123 @@
     </div>
   {/if}
 
-  <!-- Logline -->
-  {#if st.storyboard?.logline}
-    <p class="logline">{st.storyboard.logline}</p>
+  <!-- Logline + premise (edit in place) -->
+  {#if st.storyboard}
+    <input class="ip ip-logline" bind:value={st.storyboard.logline} oninput={saveSoon} placeholder="One-line logline…" />
   {/if}
+  <textarea class="ip ip-prem" use:autosize={st.premise} bind:value={st.premise} oninput={saveSoon}
+            placeholder="Premise — what is this story about?"></textarea>
 
-  <!-- Premise -->
-  {#if st.premise}
-    <p class="prem">{st.premise}</p>
-  {/if}
-
-  <!-- Tone + themes -->
-  <div class="meta-row">
-    {#if st.tone}
-      <span class="chip tone-chip">{st.tone}</span>
-    {/if}
-    {#each (st.themes || []) as t}
-      <span class="chip">{t}</span>
-    {/each}
+  <!-- Tone + themes (edit in place) -->
+  <div class="ip-meta">
+    <input class="ip ip-tone" bind:value={st.tone} oninput={saveSoon} placeholder="tone (e.g. melancholy, hopeful)" />
+    <input class="ip ip-themes" bind:value={themesStr} oninput={commitThemes} placeholder="themes, comma separated" />
   </div>
 
-  <!-- Spine — emotional psychology skeleton -->
-  {#if st.spine?.wound}
-    <details class="spine-details">
-      <summary class="spine-summary">⟳ Emotional Spine</summary>
-      <div style="margin-top:10px">
-        <SpineDisplay spine={st.spine} compact />
-      </div>
-    </details>
-  {/if}
-
-  <!-- Intended ending -->
-  {#if st.intended_ending}
-    <div class="ending-callout">
-      <span class="ec-label">🏁 Intended ending</span>
-      <span class="ec-text">{st.intended_ending}</span>
+  <!-- Default personas — the playable "you" cards this story suggests -->
+  <details class="dp-details">
+    <summary class="dp-summary">🎭 Default personas <span class="dp-count">{(st.default_personas || []).length || ''}</span></summary>
+    <div class="dp-body">
+      <p class="dp-hint">Playable cards this story suggests you embody. They float to the top of the <b>Playing as</b> menu when someone plays — pick the “you” that fits this world.</p>
+      {#if playableCards.length}
+        <div class="dp-chips">
+          {#each playableCards as c (c.key)}
+            <button class="dp-chip" class:on={isDefaultPersona(c.key)} onclick={() => toggleDefaultPersona(c.key)} title={blurb(c)}>
+              {#if c.reference || c.avatar}<img src={c.reference || c.avatar} alt={c.name} />{:else}<span class="dp-ph">🎭</span>{/if}
+              {c.name || c.key}
+              <span class="dp-mark">{isDefaultPersona(c.key) ? '✓' : '+'}</span>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="dp-empty">No playable characters yet — make one in <a href="/characters/personas">Characters ▸ Personas</a>.</p>
+      {/if}
     </div>
-  {/if}
+  </details>
 
-  <!-- ── Whole-story canvas, or per-arc / flat list ───────────────────── -->
-  {#if st.arcs?.length || st.storyboard?.beats?.length}
-    {#if mode === 'graph'}
-      <StoryGraph story={st} storyKey={st.key} onSelectNode={selectGraphNode} onSelectArc={openArcModal} />
-    {:else if st.arcs?.length}
+  <!-- Cast roster — the story's characters -->
+  <details class="dp-details" open>
+    <summary class="dp-summary">🎬 Cast <span class="dp-count">{(st.cast || []).length || ''}</span></summary>
+    <div class="dp-body">
+      <div class="cast-roster">
+        {#each st.cast || [] as m, i (m.character)}
+          <span class="chip cast-chip" class:locked={m.primary} title={m.primary ? 'Protagonist' : ''}>
+            {m.primary ? '★ ' : ''}{charName(m.character) || m.character}
+            {#if !m.primary}<button class="cast-rm" onclick={() => removeCastMember(i)} title="Remove from cast">×</button>{/if}
+          </span>
+        {/each}
+      </div>
+      <div class="addrow">
+        <Combobox items={castAddItems} bind:value={addPick} placeholder="add character…" />
+        <button class="ghost sm" onclick={addCastMember} disabled={!addPick}>＋ Add</button>
+      </div>
+    </div>
+  </details>
+
+  <!-- Locations — bare environments; group under an area to sketch a light map -->
+  <details class="dp-details">
+    <summary class="dp-summary">📍 Locations <span class="dp-count">{(st.locations || []).length || ''}</span></summary>
+    <div class="dp-body">
+      <p class="dp-hint">The world’s bare places (no people/events). Pick an <b>area</b> to nest a location inside a larger region — a light map, no coordinates.</p>
+      {#each st.locations || [] as loc, i (loc.id)}
+        <div class="loc-box" class:start={st.start === loc.id} class:child={loc.parent}>
+          <div class="loc-top">
+            <input class="ip fld title" bind:value={loc.name} oninput={saveSoon} placeholder="location name" />
+            <select class="area" bind:value={loc.parent} onchange={saveSoon} title="Group under an area">
+              <option value="">— top level —</option>
+              {#each (st.locations || []).filter((o) => o.id !== loc.id) as o (o.id)}<option value={o.id}>in {o.name || o.id}</option>{/each}
+            </select>
+            <label class="startsel"><input type="radio" name="estart" checked={st.start === loc.id}
+              onchange={() => { stories.current.start = loc.id; saveSoon(); }} /> start</label>
+            <button class="cast-rm" onclick={() => removeLocation(i)} title="Delete">×</button>
+          </div>
+          <input class="ip fld" bind:value={loc.description} oninput={saveSoon} placeholder="description (objective, no people)" />
+          <div class="bgrow">
+            <input class="ip fld" bind:value={loc.background_prompt} oninput={saveSoon} placeholder="background prompt — pure environment, Danbooru tags" />
+            <button class="ghost xs" onclick={() => tagifyBg(loc)} disabled={tagging[loc.id]} title="convert prose → tags">{tagging[loc.id] ? '…' : '⇥ tagify'}</button>
+          </div>
+        </div>
+      {/each}
+      <button class="add-loc" onclick={addLocation}>+ Add a location</button>
+    </div>
+  </details>
+
+  <!-- Places & scenes — story-authored containers + character-anchored spots -->
+  <details class="dp-details">
+    <summary class="dp-summary">🗺 Places & scenes <span class="dp-count">{(st.places || []).length || ''}</span></summary>
+    <div class="dp-body">
+      <p class="dp-hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
+      <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
+    </div>
+  </details>
+
+  <!-- Memory window — how far the narrative thread keeps turns verbatim -->
+  <details class="dp-details">
+    <summary class="dp-summary">🧠 Memory window <span class="dp-count">{st.recent_window ?? 8} turns</span></summary>
+    <div class="dp-body">
+      <p class="dp-hint">How many of the most recent play turns the story keeps <b>verbatim</b>. Older turns get compressed into each character’s memory when the player sleeps or dies. Smaller = leaner context; larger = more recent detail carried forward.</p>
+      <div class="win-row">
+        <input class="win-slider" type="range" min="2" max="40" step="1"
+          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
+        <input class="win-num" type="number" min="2" max="40"
+          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
+        <span class="win-unit">turns</span>
+      </div>
+    </div>
+  </details>
+
+  <!-- Intended ending (edit in place) — drives arc generation -->
+  <details class="dp-details" open={!!st.intended_ending}>
+    <summary class="dp-summary">🏁 Intended ending</summary>
+    <div class="dp-body">
+      <p class="dp-hint">The agreed book ending. It’s first-class — arc generation reasons backward from it.</p>
+      <textarea class="ip fld" use:autosize={st.intended_ending} bind:value={st.intended_ending} oninput={saveSoon}
+                placeholder="How should this story end?"></textarea>
+    </div>
+  </details>
+
+  <!-- ── Unified graph canvas (Structure · Relationships · Map), or per-arc / flat list ── -->
+  {#if mode === 'list' && st.arcs?.length}
     <div class="arc-sections">
       {#each st.arcs as arc, arcIdx}
         {@const nodes = walkNodes(arc)}
@@ -357,7 +568,7 @@
         </div>
       {/each}
     </div>
-    {:else}
+    {:else if mode === 'list' && st.storyboard?.beats?.length}
     <!-- Flat-beat stories (no arcs): simple chapter list -->
     <h4>Chapters <span class="lo">— {st.storyboard.beats.length} beats</span></h4>
     <ol class="beats">
@@ -372,10 +583,26 @@
         </li>
       {/each}
     </ol>
-    {/if}
+  {:else}
+    <!-- Default: the unified graph canvas (Structure · Relationships · Map) — zooms to the active speaker -->
+    <StoryCanvas story={st} storyKey={st.key} cast={castOptions} {speaker} {relPulse}
+                 focus={selectedCharKey || primaryCharKey}
+                 onSelectNode={selectGraphNode} onSelectArc={openArcModal}
+                 onSelectChar={openCharModal} />
   {/if}
 
 </div></div>
+
+<!-- Voice story agent (Phase 1): speak an edit; it applies via graph-ops + highlights the change -->
+<AgentChat storyKey={st.key} primaryChar={primaryCharKey} onApplied={handleApplied} onSpeaker={(s) => speaker = s} />
+{#if agentMsg}
+  <div class="agent-toast">{agentMsg}</div>
+{/if}
+
+<!-- Character detail modal — opens on a node click or when the agent modifies a character -->
+{#if modalChar}
+  <CharacterModal char={modalChar} bonds={modalBonds} storyKey={st.key} onClose={closeCharModal} />
+{/if}
 
 <!-- SceneModal for chapter editing + per-location background generation -->
 {#if regenModal}
@@ -390,11 +617,6 @@
     onBgPicked={() => loadStory(st.key)}
     onClose={closeRegenModal}
   />
-{/if}
-
-<!-- Story-settings modal (replaces the old Edit tab) -->
-{#if settingsOpen}
-  <StorySettingsModal onClose={() => { settingsOpen = false; }} />
 {/if}
 
 <!-- ArcModal for arc-detail editing + expansion -->
@@ -413,6 +635,8 @@
 <style>
   /* ── Layout ───────────────────────────────────────────────────────────────── */
   .page { padding: 0; }
+  /* Make room for the docked AgentChat sidebar (340px + gutter). */
+  .page.withchat { padding-left: 356px; }
   .col  { display: flex; flex-direction: column; gap: 14px; }
 
   /* ── Actions ──────────────────────────────────────────────────────────────── */
@@ -438,17 +662,39 @@
   .heart-icon { font-size: 14px; color: var(--accent); flex: none; margin-top: 1px; }
   .heart-text  { font-size: 13.5px; color: var(--text); font-style: italic; line-height: 1.55; }
 
-  /* ── Logline / premise ────────────────────────────────────────────────────── */
-  .logline { font-size: 14.5px; color: var(--text); font-style: italic; margin: 0; }
-  .prem    { font-size: 13.5px; color: var(--muted); margin: 0; line-height: 1.6; }
-
-  /* ── Meta row ─────────────────────────────────────────────────────────────── */
-  .meta-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 5px;
-    margin: 0;
+  /* ── Edit-in-place fields — look like text, reveal a border on hover/focus ──── */
+  .ip {
+    width: 100%; box-sizing: border-box; background: transparent; color: var(--text);
+    font: inherit; border: 1px solid transparent; border-radius: 8px; padding: 5px 8px;
+    transition: border-color .12s, background .12s;
   }
+  .ip:hover { border-color: var(--border-soft); }
+  .ip:focus { outline: none; border-color: var(--accent); background: var(--elev); }
+  .ip-title   { font-size: 22px; font-weight: 800; margin: 0 0 2px -8px; }
+  .ip-logline { font-size: 14.5px; font-style: italic; margin-left: -8px; }
+  .ip-prem    { font-size: 13.5px; color: var(--muted); line-height: 1.6; resize: none; margin-left: -8px; }
+  .ip-meta    { display: flex; flex-wrap: wrap; gap: 8px; margin-left: -8px; }
+  .ip-tone    { flex: 0 0 220px; font-size: 12.5px; }
+  .ip-themes  { flex: 1; min-width: 200px; font-size: 12.5px; }
+  textarea.ip { resize: vertical; min-height: 38px; line-height: 1.55; }
+
+  /* ── Cast roster + locations editors ──────────────────────────────────────── */
+  .cast-roster { display: flex; flex-wrap: wrap; gap: 6px; }
+  .addrow { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
+  .loc-box { border: 1px solid var(--border-soft); border-radius: 10px; padding: 9px 10px;
+             background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
+  .loc-box.start { border-color: var(--accent); }
+  .loc-box.child { margin-left: 18px; border-left: 2px solid var(--border); }
+  .loc-top { display: flex; align-items: center; gap: 7px; }
+  .loc-top .title { flex: 1; font-weight: 650; }
+  .area { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border-soft);
+          border-radius: 6px; padding: 4px 6px; max-width: 150px; }
+  .startsel { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
+  .bgrow { display: flex; align-items: center; gap: 7px; }
+  .add-loc { align-self: flex-start; font-size: 12.5px; padding: 6px 12px; border-radius: 8px;
+             background: var(--elev); border: 1px dashed var(--border); color: var(--muted); box-shadow: none; }
+  .add-loc:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .xs { font-size: 11px; padding: 3px 8px; }
 
   /* ── Chips ────────────────────────────────────────────────────────────────── */
   .chip {
@@ -460,12 +706,6 @@
     color: var(--muted);
     white-space: nowrap;
   }
-  .tone-chip {
-    background: rgba(109,140,255,.11);
-    border-color: rgba(109,140,255,.25);
-    color: var(--accent);
-    font-weight: 600;
-  }
   .df {
     background: rgba(109,140,255,.14);
     border-color: rgba(109,140,255,.28);
@@ -475,38 +715,49 @@
   }
   .cast-chip { font-size: 10.5px; }
 
-  /* ── Spine details ─────────────────────────────────────────────────────────── */
-  .spine-details { margin: 8px 0; }
-  .spine-summary {
-    cursor: pointer; user-select: none; list-style: none;
-    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
-    color: var(--faint, #555b78); padding: 4px 0;
+  /* ── Default personas ─────────────────────────────────────────────────────── */
+  .dp-details { margin: 4px 0; }
+  .dp-summary {
+    cursor: pointer; user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 7px;
+    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); padding: 4px 0;
   }
-  .spine-summary::-webkit-details-marker { display: none; }
-  .spine-summary:hover { color: var(--muted, #8a92b0); }
+  .dp-summary::-webkit-details-marker { display: none; }
+  .dp-summary:hover { color: var(--muted); }
+  .dp-count { font-size: 10px; color: var(--accent); }
+  .dp-body { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+  .dp-hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 560px; }
+  .dp-chips { display: flex; flex-wrap: wrap; gap: 7px; }
+  .dp-chip {
+    display: inline-flex; align-items: center; gap: 7px; padding: 4px 9px 4px 5px; border-radius: 999px;
+    background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer;
+    font-size: 12px; box-shadow: none;
+  }
+  .dp-chip:hover { color: var(--text); border-color: var(--border); filter: none; }
+  .dp-chip.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--elev)); }
+  .dp-chip img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex: none; }
+  .dp-ph { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; background: var(--elev-2); flex: none; }
+  .dp-mark { font-size: 11px; color: var(--faint); font-weight: 700; }
+  .dp-chip.on .dp-mark { color: var(--accent); }
+  .dp-empty { font-size: 12px; color: var(--faint); margin: 0; }
+  .dp-empty a { color: var(--accent); }
 
-  /* ── Ending callout ───────────────────────────────────────────────────────── */
-  .ending-callout {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    background: rgba(255,200,80,.07);
-    border: 1px solid rgba(255,200,80,.2);
-    border-radius: 9px;
-    padding: 10px 13px;
+  /* ── Voice agent toast ────────────────────────────────────────────────────── */
+  .agent-toast {
+    position: fixed; left: 20px; bottom: 74px; z-index: 60; max-width: 320px;
+    background: var(--panel); border: 1px solid var(--accent); border-radius: 9px;
+    padding: 8px 12px; font-size: 12.5px; color: var(--text);
+    box-shadow: 0 6px 24px rgba(0,0,0,.3);
   }
-  .ec-label {
-    font-size: 11px;
-    font-weight: 700;
-    color: rgba(220,170,40,.9);
-    text-transform: uppercase;
-    letter-spacing: .4px;
+
+  /* ── Memory window slider ─────────────────────────────────────────────────── */
+  .win-row { display: flex; align-items: center; gap: 12px; max-width: 460px; }
+  .win-slider { flex: 1; accent-color: var(--accent); cursor: pointer; }
+  .win-num {
+    width: 60px; padding: 4px 7px; border-radius: 7px; font-size: 12.5px;
+    background: var(--elev); border: 1px solid var(--border-soft); color: var(--text);
   }
-  .ec-text {
-    font-size: 13.5px;
-    color: var(--text);
-    line-height: 1.6;
-  }
+  .win-num:focus { outline: none; border-color: var(--accent); }
+  .win-unit { font-size: 12px; color: var(--faint); }
 
   /* ── Arc sections ─────────────────────────────────────────────────────────── */
   .arc-sections {

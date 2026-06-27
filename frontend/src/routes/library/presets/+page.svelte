@@ -26,9 +26,15 @@
   let manageConn = $state(false);
 
   // Models available on the selected preset's connection (per-connection, not the global one).
+  // `tools` is the native tool-calling capability (true/false from OpenRouter/Anthropic, null =
+  // unknown, e.g. local Ollama). Agents & pipeline presets call functions as tools, so badge
+  // incapable models and offer a filter — narration presets can still use any model.
   let connModels = $state([]);
+  let toolsOnly = $state(false);
   let modelItems = $derived([{ value: '', label: connModels.length ? 'Connection default' : 'Use connection default' },
-    ...connModels.map((m) => ({ value: m.id, label: m.name || m.id }))]);
+    ...connModels
+      .filter((m) => !toolsOnly || m.tools !== false)
+      .map((m) => ({ value: m.id, label: (m.name || m.id) + (m.tools === false ? ' · no tools' : '') }))]);
   let modelsLoading = $state(false);
 
   // Refresh the model list whenever the chosen connection changes (uses the saved key,
@@ -144,7 +150,7 @@
     if (r.data?.presets) { presets = r.data.presets; snap = JSON.stringify(sel); }
   }
   async function newPreset() {
-    const r = await post('/presets', { name: 'New preset', mode: '' });
+    const r = await post('/presets', { name: 'New agent', mode: '' });
     if (r.data?.presets) { presets = r.data.presets; selId = r.data.id; snap = JSON.stringify(presets.find((p) => p.id === selId)); }
   }
   async function deletePreset() {
@@ -154,6 +160,22 @@
     if (r?.presets) { presets = r.presets; selId = presets[0]?.id || null; snap = sel ? JSON.stringify(sel) : null; }
   }
   function pick(p) { selId = p.id; snap = JSON.stringify(p); }
+
+  // The three runtime ROLES the agent system divides into — shown at the top so the structure is
+  // legible. Builder + Storymaster map to real presets (click to edit); the Narrator is the in-play
+  // director (no preset — it uses the active chat model). Presets below are the model-config layer.
+  const ROLES = [
+    { icon: '🛠', name: 'Builder', preset: null,
+      desc: 'One chat that authors the story — every tool available; it adopts a behaviour and its scripts from the lorebooks, by what you say or an explicit Mode.',
+      backs: 'this chat · lorebook-driven' },
+    { icon: '🎭', name: 'Narrator', preset: null,
+      desc: 'Plays the story out: narrates each turn, embodies the cast from their per-character lorebooks, tracks who is in the scene.',
+      backs: 'active chat model (in play)' },
+    { icon: '🌙', name: 'Storymaster', preset: 'storymaster',
+      desc: 'Consolidates the aftermath when the player sleeps or dies — twists how events land on each character.',
+      backs: 'Storymaster agent' },
+  ];
+  function gotoRole(r) { const p = r.preset && presets.find((x) => x.id === r.preset); if (p) pick(p); }
   const paramCount = (p) => Object.values(p?.params || {}).filter((v) => v !== '' && v != null).length;
 
   // Lorebooks this preset ATTACHES (composition: world info, sprites, functions). Stored on
@@ -231,6 +253,19 @@
   }
 </script>
 
+<div class="roles">
+  <div class="rhead">The three roles <span class="lo">— how the agent system fits together</span></div>
+  <div class="rcards">
+    {#each ROLES as r}
+      <button class="rcard" class:link={r.preset} onclick={() => gotoRole(r)} title={r.preset ? 'Edit this agent' : 'Runtime role (no preset)'}>
+        <div class="rtitle">{r.icon} {r.name}</div>
+        <div class="rdesc">{r.desc}</div>
+        <div class="rback">{r.preset ? '→ ' : ''}{r.backs}</div>
+      </button>
+    {/each}
+  </div>
+</div>
+
 <div class="wrap">
   {#snippet presetRow(p)}
     <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
@@ -247,12 +282,12 @@
   {/snippet}
 
   <div class="list">
-    <div class="lhead">Presets <span class="lo">— a chat model + image workflow + lorebooks + scripts</span></div>
+    <div class="lhead">Agents <span class="lo">— a chat model + image workflow + lorebooks + tools</span></div>
     {#each chatGroups as grp (grp.group)}
       {#if chatGroups.length > 1}<div class="pgroup">{grp.group}</div>{/if}
       {#each grp.items as p (p.id)}{@render presetRow(p)}{/each}
     {/each}
-    <button class="new" onclick={newPreset}>＋ New preset</button>
+    <button class="new" onclick={newPreset}>＋ New agent</button>
 
     {#if pipelineGroups.length}
       <button class="advtoggle" onclick={() => (showPipeline = !showPipeline)}>
@@ -301,6 +336,9 @@
       <div class="erow">
         <label>Model</label>
         <Combobox items={modelItems} value={sel.model} placeholder={modelsLoading ? 'loading…' : 'Connection default'} onpick={(v) => (sel.model = v)} />
+        <label class="toolsf" title="Hide models that don't support native tool-calling. Agents & pipeline presets call functions as tools; narration presets can use any model.">
+          <input type="checkbox" bind:checked={toolsOnly} /> tool-capable
+        </label>
       </div>
 
       <div class="erow">
@@ -439,6 +477,18 @@
 </div>
 
 <style>
+  .roles { max-width: 1100px; margin-bottom: 16px; }
+  .rhead { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 0 2px 8px; }
+  .rcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .rcard { text-align: left; display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border-radius: 11px;
+    background: var(--bg); border: 1px solid var(--border-soft); color: var(--text); box-shadow: none; cursor: default; }
+  .rcard.link { cursor: pointer; }
+  .rcard.link:hover { border-color: var(--accent); background: var(--elev); filter: none; }
+  .rtitle { font-size: 13.5px; font-weight: 700; }
+  .rdesc { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .rback { font-size: 11px; color: var(--accent); margin-top: auto; }
+  @media (max-width: 760px) { .rcards { grid-template-columns: 1fr; } }
+
   .wrap { display: flex; gap: 16px; align-items: flex-start; max-width: 1100px; }
   .list { width: 230px; flex: none; display: flex; flex-direction: column; gap: 4px; }
   .lhead { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 4px 2px 6px; }
@@ -449,6 +499,7 @@
   .row.on { border-color: var(--accent); background: var(--elev-2); }
   .nm { flex: 1; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tags { display: flex; align-items: center; gap: 5px; flex: none; }
+  .toolsf { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--faint); white-space: nowrap; cursor: pointer; }
   .pgroup { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); padding: 10px 4px 3px; }
   .pgroup:first-child { padding-top: 2px; }
   .ordl { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 11px; font-weight: 700;

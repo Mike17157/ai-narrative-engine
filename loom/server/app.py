@@ -38,6 +38,7 @@ from .routers import (
     server,
     tags,
     trainer,
+    tts,
     workflow,
 )
 
@@ -95,6 +96,7 @@ _ROUTERS = (
     lorebooks,
     presets,
     image_presets,
+    tts,
 )
 
 
@@ -216,6 +218,7 @@ def create_app(root: str | Path = ".") -> FastAPI:
     # Startup hooks — each is isolated; a failure never blocks the others or the boot.
     startup.warm_scan_cache(ctx)
     startup.reap_stale_jobs()
+    startup.warm_comfyui(ctx)            # background; launches managed ComfyUI so it's ready
     startup.download_preset_loras(ctx)   # background; refreshes the manifest when done
     startup.regenerate_manifest(ctx)
     startup.validate_lora_stacks(ctx)

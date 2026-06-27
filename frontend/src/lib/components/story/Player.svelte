@@ -1,7 +1,7 @@
 <script>
   import { get, post, put } from '$lib/api.js';
   import { goto } from '$app/navigation';
-  import { app } from '$lib/app.svelte.js';
+  import { app, setActivePlayerChar } from '$lib/app.svelte.js';
   import { openConfigModal } from '$lib/configModal.svelte.js';
   import { formatChat } from '$lib/chat-format.js';
 
@@ -72,6 +72,32 @@
   let input = $state('');
   let err = $state(null);
 
+  // Who YOU are this playthrough. A "puppet" is any character card flagged `playable`;
+  // you embody it (its backstory + lorebook flow into the director's context) and drive
+  // its choices. The binding is per-session, not stored on the story → the puppet ports.
+  let roster = $state([]);                         // all character cards (for the picker)
+  let playable = $derived(roster.filter((c) => c.playable));
+  let puppet = $derived(roster.find((c) => c.key === app.activePlayerChar) || null);
+  let showPuppet = $state(false);
+  function pickPuppet(key) { setActivePlayerChar(key); showPuppet = false; }
+  // Personas this story SUGGESTS (story.default_personas) float to the top of the picker.
+  let suggestedKeys = $derived(story?.default_personas || []);
+  let suggested = $derived(playable.filter((c) => suggestedKeys.includes(c.key)));
+  let others = $derived(playable.filter((c) => !suggestedKeys.includes(c.key)));
+
+  // Places navigation — story-authored containers + their character-anchored scenes. You
+  // can hop to any spot; the director narrates arrival and brings the anchor on-stage. The
+  // current scene (UI-tracked) drives the background (scene → place → flat location).
+  let places = $derived(story?.places || []);
+  // The embodied puppet's OWN portable home scenes — added to the navigator as "Your home".
+  let homeScenes = $derived(puppet?.home_scenes || []);
+  let curScene = $state(null);              // scene id you're currently standing in
+  let showPlaces = $state(false);
+  let activeScene = $derived(
+    [...places.flatMap((p) => (p.scenes || []).map((s) => ({ ...s, _place: p }))), ...homeScenes]
+      .find((s) => s.id === curScene) || null
+  );
+
   async function loadAssets() {
     const sess = await get(`/stories/session/${playSid}`);
     if (Array.isArray(sess?.lorebooks)) lorebooks = sess.lorebooks;
@@ -80,6 +106,7 @@
     for (const l of story.locations) locs[l.id] = { name: l.name, description: l.description, background: l.background };
     scene.location = story.start || story.locations[0]?.id || null;
     const all = await get('/characters');
+    roster = all;
     for (const c of all) {
       names[c.key] = c.name;
       if (c.reference) refs[c.key] = c.reference;
@@ -98,10 +125,15 @@
 
   async function turn(payload) {
     busy = true; err = null;
-    // Send the active persona so the director narrates to a named protagonist
-    // (who *you* are) rather than a generic "Player". Falls back server-side if absent.
-    const persona = app.personas.find((p) => p.id === app.activePersona);
-    if (persona) payload = { ...payload, player: { name: persona.name, description: persona.description || '' } };
+    // Who you are this turn. Prefer an EMBODIED playable character (send its key → the
+    // director pulls its backstory + per-character lorebook server-side). Otherwise fall
+    // back to the legacy thin persona so old playthroughs keep working.
+    if (puppet) {
+      payload = { ...payload, player: { character: puppet.key, name: puppet.name } };
+    } else {
+      const persona = app.personas.find((p) => p.id === app.activePersona);
+      if (persona) payload = { ...payload, player: { name: persona.name, description: persona.description || '' } };
+    }
     if (lorebooks.length) payload = { ...payload, lorebooks };
     const r = await post(`/stories/${storyKey}/play`, payload);
     busy = false;
@@ -122,11 +154,24 @@
   }
   async function moveTo(locId) {
     if (busy) return;
+    curScene = null;                          // back to a flat location → drop the scene bg
     history = [...history, { role: 'user', text: `(Go to ${locs[locId]?.name || locId}.)` }];
     await turn({ history, location: scene.location, choice: locId });
   }
+  async function moveToScene(place, s) {
+    if (busy) return;
+    curScene = s.id;
+    showPlaces = false;
+    const where = (s.name || s.id) + (place ? ` in ${place.name}` : '');
+    history = [...history, { role: 'user', text: `(Go to ${where}.)` }];
+    await turn({ history, location: scene.location, choice: s.id });
+  }
   const spriteOf = (k) => (sprites[k]?.[scene.emotions[k]] || refs[k] || null);
-  let bg = $derived(scene.location && locs[scene.location]?.background ? `${locs[scene.location].background}?b=${bust}` : null);
+  let bg = $derived.by(() => {
+    const sb = activeScene?.background || activeScene?._place?.background;
+    if (sb) return `${sb}?b=${bust}`;
+    return scene.location && locs[scene.location]?.background ? `${locs[scene.location].background}?b=${bust}` : null;
+  });
   let moveOptions = $derived(story ? story.locations.filter((l) => l.id !== scene.location) : []);
   let lastReply = $derived([...history].reverse().find((m) => m.role === 'assistant')?.text || '');
 </script>
@@ -135,6 +180,49 @@
   <div class="topbar">
     <button class="ghost sm" onclick={exitPlay}>← Exit</button>
     <span class="title">{story?.name || 'Story'}</span>
+
+    <!-- Playing as: which playable card you embody this session (the "you" puppet). -->
+    <div class="puppet-wrap">
+      <button class="puppet-btn" class:embodied={!!puppet} onclick={() => (showPuppet = !showPuppet)}
+        title="Who you're playing as">
+        {#if puppet?.reference}
+          <img class="pp-av" src={puppet.reference} alt={puppet.name} />
+        {:else}
+          <span class="pp-av ph">🎭</span>
+        {/if}
+        <span class="pp-name">{puppet ? puppet.name : 'Pick a character'}</span>
+        <span class="pp-caret">▾</span>
+      </button>
+      {#if showPuppet}
+        <div class="puppet-menu">
+          {#snippet pmItem(c)}
+            <button class="pm-item" class:on={c.key === app.activePlayerChar} onclick={() => pickPuppet(c.key)}>
+              {#if c.reference}<img class="pm-av" src={c.reference} alt={c.name} />{:else}<span class="pm-av ph">🎭</span>{/if}
+              <span class="pm-nm">{c.name}</span>
+              {#if c.key === app.activePlayerChar}<span class="pm-dot">●</span>{/if}
+            </button>
+          {/snippet}
+          {#if playable.length}
+            {#if suggested.length}
+              <div class="pm-head">Suggested for this story</div>
+              {#each suggested as c (c.key)}{@render pmItem(c)}{/each}
+              {#if others.length}<div class="pm-head">Other personas</div>{/if}
+            {:else}
+              <div class="pm-head">Play as…</div>
+            {/if}
+            {#each others as c (c.key)}{@render pmItem(c)}{/each}
+          {:else}
+            <div class="pm-empty">No playable characters yet. Make one in Characters ▸ Personas.</div>
+          {/if}
+          {#if puppet}<button class="pm-clear" onclick={() => pickPuppet('')}>Use default persona</button>{/if}
+        </div>
+      {/if}
+    </div>
+
+    {#if places.length || homeScenes.length}
+      <button class="ghost sm" class:on={showPlaces} onclick={() => (showPlaces = !showPlaces)}
+        title="Move to a place / scene">🗺 Places</button>
+    {/if}
     <button class="ghost sm" onclick={() => openConfig('lorebooks')}
       title="Attach lorebooks to this playthrough">📚 {lorebooks.length || ''}</button>
     <button class="ghost sm" class:on={showState} onclick={() => (showState = !showState)}
@@ -144,6 +232,43 @@
   </div>
 
   <div class="stage" style={bg ? `background-image:url('${bg}')` : ''} class:nobg={!bg}>
+    {#if showPlaces}
+      <div class="placespanel">
+        <div class="pphead"><b>🗺 Places</b><button class="x" onclick={() => (showPlaces = false)}>✕</button></div>
+        {#if homeScenes.length}
+          <div class="ppplace">
+            <div class="ppname">🏠 Your home <span class="ppyou">{puppet?.name || ''}</span></div>
+            <div class="ppscenes">
+              {#each homeScenes as s (s.id)}
+                <button class="ppscene" class:on={s.id === curScene} disabled={busy} onclick={() => moveToScene(null, s)}>
+                  {#if s.background}<img class="ppthumb" src={s.background} alt="" />{:else}<span class="ppthumb ph">🏠</span>{/if}
+                  <span class="ppmeta"><span class="ppsname">{s.name || s.id}</span></span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+        {#each places as p (p.id)}
+          <div class="ppplace">
+            <div class="ppname">{p.name}</div>
+            {#if p.description}<div class="ppdesc">{p.description}</div>{/if}
+            <div class="ppscenes">
+              {#each p.scenes || [] as s (s.id)}
+                <button class="ppscene" class:on={s.id === curScene} disabled={busy} onclick={() => moveToScene(p, s)}>
+                  {#if s.background}<img class="ppthumb" src={s.background} alt="" />{:else}<span class="ppthumb ph">{s.role === 'persona_home' ? '🏠' : '○'}</span>{/if}
+                  <span class="ppmeta">
+                    <span class="ppsname">{s.name || s.id}</span>
+                    {#if s.character}<span class="ppanchor">{names[s.character] || s.character}</span>{/if}
+                  </span>
+                </button>
+              {:else}
+                <span class="ppempty">No scenes in this place.</span>
+              {/each}
+            </div>
+          </div>
+        {/each}
+      </div>
+    {/if}
     {#if showState}
       <div class="statepanel">
         <div class="sphead"><b>State</b>{#if stateRev}<span class="sprev" title="State doc revision">r{stateRev}</span>{/if}<button class="reset" onclick={resetState} title="Reset state">↺</button><button class="x" onclick={() => (showState = false)}>✕</button></div>
@@ -219,11 +344,76 @@
   .gear:hover { color: var(--accent); border-color: var(--accent); }
   .fb { color: var(--accent); }
 
+  /* Playing-as puppet picker */
+  .puppet-wrap { position: relative; }
+  .puppet-btn {
+    display: flex; align-items: center; gap: 7px; padding: 3px 9px 3px 4px; height: 30px;
+    border: 1px solid var(--border-soft); border-radius: 999px; background: var(--elev);
+    color: var(--muted); cursor: pointer; box-shadow: none; font-size: 12.5px;
+  }
+  .puppet-btn:hover { color: var(--text); border-color: var(--border); filter: none; }
+  .puppet-btn.embodied { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
+  .pp-av { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: none; }
+  .pp-av.ph { display: grid; place-items: center; font-size: 12px; background: var(--elev-2); }
+  .pp-name { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pp-caret { font-size: 9px; color: var(--faint); }
+
+  .puppet-menu {
+    position: absolute; z-index: 20; top: 36px; left: 0; width: 240px; padding: 6px;
+    background: rgba(14,17,24,.97); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 16px 40px rgba(0,0,0,.5); display: flex; flex-direction: column; gap: 2px;
+  }
+  .pm-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--faint); padding: 4px 8px 6px; }
+  .pm-item {
+    display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 8px;
+    background: none; border: none; box-shadow: none; color: var(--text); font-size: 13px; cursor: pointer; text-align: left;
+  }
+  .pm-item:hover { background: var(--elev); filter: none; }
+  .pm-item.on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .pm-av { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: none; }
+  .pm-av.ph { display: grid; place-items: center; font-size: 14px; background: var(--elev-2); }
+  .pm-nm { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pm-dot { color: var(--accent); font-size: 9px; }
+  .pm-empty { font-size: 12px; color: var(--muted); padding: 8px; line-height: 1.45; }
+  .pm-clear {
+    margin-top: 4px; font-size: 12px; color: var(--muted); background: none; border: none;
+    border-top: 1px solid var(--border-soft); border-radius: 0; padding: 8px 8px 4px; text-align: left; cursor: pointer; box-shadow: none;
+  }
+  .pm-clear:hover { color: var(--text); filter: none; }
+
   .statepanel {
     position: absolute; z-index: 5; top: 10px; right: 10px; width: 290px; max-height: calc(100% - 90px);
     overflow: auto; background: rgba(12,15,22,.92); border: 1px solid var(--border); border-radius: 12px;
     padding: 10px 12px; font-size: 12px; color: #e7ecf5; backdrop-filter: blur(4px);
   }
+
+  /* Places navigator (left side, mirrors the state panel) */
+  .placespanel {
+    position: absolute; z-index: 6; top: 10px; left: 10px; width: 268px; max-height: calc(100% - 90px);
+    overflow: auto; background: rgba(12,15,22,.92); border: 1px solid var(--border); border-radius: 12px;
+    padding: 10px 12px; color: #e7ecf5; backdrop-filter: blur(4px);
+  }
+  .pphead { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .pphead b { flex: 1; font-size: 12.5px; }
+  .pphead .x { width: 22px; height: 22px; padding: 0; border-radius: 6px; background: none; border: 1px solid var(--border); color: var(--muted); box-shadow: none; font-size: 11px; }
+  .ppplace { margin-bottom: 10px; }
+  .ppname { font-size: 12px; font-weight: 700; color: #fff; }
+  .ppyou { font-weight: 400; color: var(--accent); font-size: 11px; }
+  .ppdesc { font-size: 11px; color: #aab2c5; margin: 1px 0 5px; line-height: 1.4; }
+  .ppscenes { display: flex; flex-direction: column; gap: 4px; }
+  .ppscene {
+    display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 8px; text-align: left;
+    background: rgba(255,255,255,.04); border: 1px solid transparent; color: #e7ecf5; cursor: pointer; box-shadow: none;
+  }
+  .ppscene:hover:not(:disabled) { background: rgba(255,255,255,.09); filter: none; }
+  .ppscene.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
+  .ppscene:disabled { opacity: .5; cursor: default; }
+  .ppthumb { width: 40px; height: 30px; flex: none; border-radius: 5px; object-fit: cover; }
+  .ppthumb.ph { display: grid; place-items: center; font-size: 13px; background: rgba(255,255,255,.06); color: #8a92b0; }
+  .ppmeta { display: flex; flex-direction: column; min-width: 0; }
+  .ppsname { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ppanchor { font-size: 10.5px; color: var(--accent); }
+  .ppempty { font-size: 11px; color: #8a92b0; padding: 2px 4px; }
   .sphead { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
   .sphead b { flex: 1; font-size: 12.5px; }
   .sphead .sprev { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }

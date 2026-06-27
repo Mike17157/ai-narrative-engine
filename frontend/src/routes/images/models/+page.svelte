@@ -1,6 +1,7 @@
 <script>
   import { onMount } from 'svelte';
-  import { get } from '$lib/api.js';
+  import { get, del } from '$lib/api.js';
+  import { askConfirm } from '$lib/confirm.svelte.js';
   import WorkflowImport from '$lib/components/image/WorkflowImport.svelte';
 
   // The image-model surface, focused on the active pipeline: Anima + the support
@@ -14,6 +15,7 @@
   // browser filters (family is fixed to Anima + support here)
   let q = $state('');
   let kindFilter = $state('all');
+  let sortBy = $state('name');  // name | size | recent  (no usage tracking — recent = mtime)
 
   // catalog (ComfyUI Manager) — browse + download new models
   let catalog = $state({ entries: [], types: [] });
@@ -69,8 +71,20 @@
     inScope(i) &&
     (kindFilter === 'all' || i.kind === kindFilter) &&
     (!q.trim() || (i.folder + '/' + i.rel + ' ' + i.arch + ' ' + (i.family || '')).toLowerCase().includes(q.toLowerCase()))
+  ).sort((a, b) =>
+    sortBy === 'size' ? (b.size || 0) - (a.size || 0)
+    : sortBy === 'recent' ? (b.mtime || 0) - (a.mtime || 0)
+    : (a.folder + '/' + a.rel).localeCompare(b.folder + '/' + b.rel)
   ));
   function fmtSize(b) { return b > 1e9 ? (b / 1e9).toFixed(1) + ' GB' : b > 1e6 ? Math.round(b / 1e6) + ' MB' : Math.round(b / 1e3) + ' KB'; }
+
+  async function delModel(i) {
+    if (!await askConfirm({ title: `Delete ${i.rel}?`, danger: true, confirmLabel: 'Delete',
+      message: `Permanently removes ${i.folder}/${i.rel} (${fmtSize(i.size)}) from disk.` })) return;
+    const r = await del(`/comfy/models/file?folder=${encodeURIComponent(i.folder)}&rel=${encodeURIComponent(i.rel)}`);
+    if (r?.ok) scan = await get('/comfy/models');
+    else err = r?.error || 'delete failed';
+  }
 </script>
 
 <WorkflowImport onimported={load} />
@@ -88,6 +102,11 @@
       <h3>Library <span class="sub">{Object.entries(scan.counts).map(([k, v]) => `${v} ${k}`).join(' · ')}</span></h3>
       <div class="row">
         <select bind:value={kindFilter}>{#each KINDS as k}<option value={k}>{k}</option>{/each}</select>
+        <select bind:value={sortBy} title="sort order">
+          <option value="name">name</option>
+          <option value="size">largest</option>
+          <option value="recent">newest</option>
+        </select>
         <input class="search" bind:value={q} placeholder="filter…" />
         <button class="ghost sm" onclick={load} disabled={loading}>↻ Re-scan</button>
       </div>
@@ -99,6 +118,7 @@
           <span class="kind">{i.kind}</span>
           <span class="rel" title={i.folder + '/' + i.rel}><code class="top">{i.folder}/</code>{i.rel}</span>
           <span class="size">{fmtSize(i.size)}</span>
+          <button class="del" onclick={() => delModel(i)} title="Delete this file from disk" aria-label="delete">×</button>
         </div>
       {/each}
       {#if !items.length}<div class="center">no models match.</div>{/if}
@@ -152,7 +172,11 @@
   .search { width: 200px; }
 
   .list { display: flex; flex-direction: column; gap: 3px; }
-  .lrow { display: grid; grid-template-columns: 70px 90px 1fr 80px; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  .lrow { display: grid; grid-template-columns: 70px 90px 1fr 80px 24px; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
+  .del { width: 22px; height: 22px; padding: 0; font-size: 15px; line-height: 1; border-radius: 6px; box-shadow: none;
+    background: none; border: 1px solid transparent; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s; }
+  .lrow:hover .del { opacity: 1; }
+  .del:hover { color: var(--bad); border-color: rgba(255,90,90,.4); background: rgba(255,90,90,.1); filter: none; }
   .kind { font-size: 11px; color: var(--muted); }
   .rel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
   .rel .top { color: var(--faint); }

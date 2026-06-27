@@ -90,10 +90,11 @@
           <div class="msg" class:user={msg.role === 'user'} class:assistant={msg.role === 'assistant'}>
             {#if msg.role === 'assistant'}<span class="mname">{assistantLabel}</span>{/if}
             <div class="mbubble">
-              {#if !msg.content && busy && i === messages.length - 1}
+              {#if !msg.content && !msg.image && busy && i === messages.length - 1}
                 <span class="typing"><span></span><span></span><span></span></span>
               {:else}
-                {@html formatChat(msg.content)}
+                {#if msg.content}{@html formatChat(msg.content)}{/if}
+                {#if msg.image}<img class="mimg" src={msg.image} alt={msg.imageAlt || 'rendered image'} />{/if}
               {/if}
             </div>
           </div>
@@ -215,6 +216,7 @@
   .mbubble { font-size: 13px; line-height: 1.6; color: var(--text); padding: 9px 12px; border-radius: 11px; white-space: pre-wrap; word-break: break-word; }
   .msg.user .mbubble { background: rgba(109,140,255,.18); border: 1px solid rgba(109,140,255,.28); }
   .msg.assistant .mbubble { background: var(--elev); border: 1px solid var(--border-soft); }
+  .mimg { display: block; max-width: 100%; max-height: 420px; border-radius: 9px; margin-top: 6px; }
 
   .typing { display: inline-flex; align-items: center; gap: 4px; height: 18px; }
   .typing span { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.1s ease-in-out infinite; }

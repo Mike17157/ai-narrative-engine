@@ -62,7 +62,7 @@
   function tunedGraph() {
     const src = json || img.workflow;
     if (!src) return undefined;
-    const g = JSON.parse(JSON.stringify($state.snapshot(src)));
+    const g = structuredClone($state.snapshot(src));
     for (const n of Object.values(g)) {
       if (!n?.inputs) continue;
       if (negative && n.class_type === 'CLIPTextEncode' && /negative/i.test(n._meta?.title || ''))

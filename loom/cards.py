@@ -103,6 +103,10 @@ def to_character(card: dict[str, Any]) -> dict[str, Any]:
         if not _empty(card.get(meta)):
             fields.setdefault(meta, card[meta])
 
+    # Mark provenance: an imported card is a DIFFERENT kind of thing from a character we
+    # author in the pipeline — it's external reference material (only these seed a premise).
+    fields["imported"] = True
+
     out: dict[str, Any] = {"name": name, "system": system}
     greeting = _clean(data.get("first_mes"))
     if greeting:

@@ -16,12 +16,22 @@ key a lorebook entry references via `{"fn": "<name>"}`:
     def add_beat(doc, *, _id, title="", after=None):
         doc.setdefault("nodes", []).append({"id": _id, "title": title, ...})
 
+Each PARAM is described for the model. The value can be a plain string (the human
+description — typed `string`, required unless it says "optional"), or a dict for a richer
+schema: `{"desc": str, "type": "string"|"array", "enum": [...], "required": bool}`. Use
+`enum` for a fixed set of choices (e.g. which field to set) — then the model literally cannot
+pass an invalid value. `_norm_param` normalizes both forms; the schema is built in
+`graph_ops.tools_spec`.
+
 Conventions for an impl:
   • `doc`  — the artifact/level dict it mutates IN PLACE (the dev graph, a locations doc, …).
   • `_id`  — a freshly-minted unique id, always supplied (use it for CREATE ops).
   • `**params` — the model-provided params (filtered to the declared `params` keys).
-A target id the model chose is just a normal param (e.g. `id` on set_beat_field) — distinct
-from `_id`, so create- and target-ops never collide.
+An impl RAISES `ValueError` with a clear message when the thing it targets doesn't exist
+(e.g. "no beat with id 'b7'"); `graph_ops.apply_calls` catches it and logs it as a failed
+call, so a bad id surfaces instead of silently doing nothing. A target id the model chose is
+just a normal param (e.g. `id` on set_beat_field) — distinct from `_id`, so create- and
+target-ops never collide.
 
 `writes` is the State-doc level the script mutates; built-ins default to "graph" because the
 artifact-agnostic graph-ops endpoint passes whatever artifact (graph/locations/cast) in that
@@ -38,7 +48,7 @@ from typing import Any, Callable
 class ScriptDef:
     name: str
     describe: str
-    params: dict                      # {param_name: human description} — the model schema
+    params: dict                      # {param_name: {desc,type,enum,required}} — normalized
     keywords: list[str]               # default triggers (a lorebook entry may override)
     writes: str                       # State-doc level mutated
     impl: Callable                    # def impl(doc, *, _id, **params) -> None
@@ -47,12 +57,26 @@ class ScriptDef:
 REGISTRY: dict[str, ScriptDef] = {}
 
 
+def _norm_param(v: Any) -> dict:
+    """Normalize a param spec to the rich form {desc,type,enum,required}. A bare string is the
+    description (type `string`, required unless it says "optional"); a dict overrides any field."""
+    if isinstance(v, dict):
+        desc = str(v.get("desc", ""))
+        return {"desc": desc, "type": v.get("type", "string"),
+                "enum": list(v["enum"]) if v.get("enum") else None,
+                "required": bool(v.get("required", "optional" not in desc.lower()))}
+    s = str(v)
+    return {"desc": s, "type": "string", "enum": None, "required": "optional" not in s.lower()}
+
+
 def script(name: str, *, describe: str, params: dict | None = None,
            keywords: list | None = None, writes: str = "graph") -> Callable:
     """Decorator: register `impl` as the script called by `name`."""
     def deco(fn: Callable) -> Callable:
-        REGISTRY[name] = ScriptDef(name=name, describe=describe, params=dict(params or {}),
-                                   keywords=[str(k) for k in (keywords or [])], writes=writes, impl=fn)
+        REGISTRY[name] = ScriptDef(
+            name=name, describe=describe,
+            params={k: _norm_param(v) for k, v in (params or {}).items()},
+            keywords=[str(k) for k in (keywords or [])], writes=writes, impl=fn)
         return fn
     return deco
 
@@ -72,7 +96,8 @@ def invoke(script: "ScriptDef | str", doc: dict, params: dict | None = None,
     ONE place a script executes — `graph_ops.apply_calls` (the model path) and the test
     flow both go through here, so behavior can't drift between them. Params are filtered to
     the script's declared keys (a stray model param can't crash the call) and a fresh `_id`
-    is supplied. Raises KeyError for an unregistered name."""
+    is supplied. Raises KeyError for an unregistered name; an impl may raise ValueError when
+    its target doesn't exist."""
     sd = script if isinstance(script, ScriptDef) else REGISTRY.get(script)
     if sd is None:
         raise KeyError(f"no such script: {script!r}")
@@ -90,6 +115,13 @@ def _by_id(items: Any, _id: Any) -> dict | None:
     return None
 
 
+def _require(item: dict | None, msg: str) -> dict:
+    """Return the found item, or raise ValueError(msg) so a bad id surfaces as a failed call."""
+    if item is None:
+        raise ValueError(msg)
+    return item
+
+
 def _new_node(_id: str, title: str) -> dict:
     return {"id": _id, "title": title, "inflection": "", "start": "",
             "end": "", "what_happened": "", "next": []}
@@ -103,63 +135,60 @@ def _new_node(_id: str, title: str) -> dict:
 def add_beat(doc, *, _id, title="", after=None):
     doc.setdefault("nodes", []).append(_new_node(_id, title))
     if after:
-        n = _by_id(doc.get("nodes"), after)
-        if n is not None:
-            n.setdefault("next", []).append(_id)
+        _require(_by_id(doc.get("nodes"), after), f"no beat with id {after!r} to attach after") \
+            .setdefault("next", []).append(_id)
 
 
 @script("insert_between", describe="Insert a new beat BETWEEN two connected beats (rewires the arrow through it).",
         keywords=["insert between", "in between", "split the arrow", "between"],
         params={"a": "id of the beat before", "b": "id of the beat after", "title": "the new beat's title"})
 def insert_between(doc, *, _id, a, b, title=""):
+    na = _require(_by_id(doc.get("nodes"), a), f"no beat with id {a!r}")
+    _require(_by_id(doc.get("nodes"), b), f"no beat with id {b!r}")
     doc.setdefault("nodes", []).append(_new_node(_id, title))
-    na = _by_id(doc.get("nodes"), a)
-    if na is not None:
-        nx = na.setdefault("next", [])
-        if b in nx:
-            nx.remove(b)
-        nx.append(_id)
-    ni = _by_id(doc.get("nodes"), _id)
-    if ni is not None:
-        ni.setdefault("next", []).append(b)
+    nx = na.setdefault("next", [])
+    if b in nx:
+        nx.remove(b)
+    nx.append(_id)
+    _by_id(doc.get("nodes"), _id).setdefault("next", []).append(b)
 
 
 @script("set_beat_field", describe="Set a field on an existing beat.",
         keywords=["rename", "retitle", "change the", "edit the beat", "set the", "update beat"],
-        params={"id": "beat id", "field": "one of: title, inflection, start, end, what_happened, location",
+        params={"id": "beat id",
+                "field": {"desc": "which field to set", "required": True,
+                          "enum": ["title", "inflection", "start", "end", "what_happened", "location"]},
                 "value": "new text"})
 def set_beat_field(doc, *, _id, id, field, value=""):
-    n = _by_id(doc.get("nodes"), id)
-    if n is not None and field:
-        n[field] = value
+    _require(_by_id(doc.get("nodes"), id), f"no beat with id {id!r}")[field] = value
 
 
 @script("connect", describe="Connect one beat to another (draw an arrow source -> target).",
         keywords=["connect", "branch", "link", "leads to", "arrow", "then", "sequence"],
         params={"source": "id the arrow starts from", "target": "id it points to"})
 def connect(doc, *, _id, source, target):
-    n = _by_id(doc.get("nodes"), source)
-    if n is not None:
-        n.setdefault("next", []).append(target)
+    _require(_by_id(doc.get("nodes"), target), f"no beat with id {target!r} to point at")
+    _require(_by_id(doc.get("nodes"), source), f"no beat with id {source!r}") \
+        .setdefault("next", []).append(target)
 
 
 @script("disconnect", describe="Remove the arrow from one beat to another.",
         keywords=["disconnect", "unlink", "remove arrow", "detach"],
         params={"source": "id the arrow starts from", "target": "id it currently points to"})
 def disconnect(doc, *, _id, source, target):
-    n = _by_id(doc.get("nodes"), source)
-    nx = n.get("next") if n is not None else None
-    if isinstance(nx, list) and target in nx:
-        nx.remove(target)
+    n = _require(_by_id(doc.get("nodes"), source), f"no beat with id {source!r}")
+    nx = n.get("next")
+    if not isinstance(nx, list) or target not in nx:
+        raise ValueError(f"no arrow {source!r} -> {target!r} to remove")
+    nx.remove(target)
 
 
 @script("delete_beat", describe="Delete a beat from the graph.",
         keywords=["delete", "remove beat", "drop the beat", "cut the beat"],
         params={"id": "id of the beat to delete"})
 def delete_beat(doc, *, _id, id):
-    nodes = doc.get("nodes")
-    if isinstance(nodes, list):
-        doc["nodes"] = [n for n in nodes if str(n.get("id")) != str(id)]
+    _require(_by_id(doc.get("nodes"), id), f"no beat with id {id!r} to delete")
+    doc["nodes"] = [n for n in doc.get("nodes", []) if str(n.get("id")) != str(id)]
 
 
 @script("move_beat", describe="Reposition a beat to sit right after another in the sequence.",
@@ -168,22 +197,27 @@ def delete_beat(doc, *, _id, id):
 def move_beat(doc, *, _id, id, after=None):
     nodes = doc.get("nodes")
     if not isinstance(nodes, list):
-        return
+        raise ValueError("no beats to move")
     i = next((k for k, n in enumerate(nodes) if str(n.get("id")) == str(id)), None)
     if i is None:
-        return
+        raise ValueError(f"no beat with id {id!r} to move")
     el = nodes.pop(i)
-    j = next((k for k, n in enumerate(nodes) if str(n.get("id")) == str(after)), None) if after else None
+    j = None
+    if after:
+        j = next((k for k, n in enumerate(nodes) if str(n.get("id")) == str(after)), None)
+        if j is None:
+            nodes.insert(i, el)   # put it back; don't lose the beat on a bad target
+            raise ValueError(f"no beat with id {after!r} to move after")
     nodes.insert((j + 1) if j is not None else len(nodes), el)
 
 
 @script("reorder_beats", describe="Set the full beat order at once (give every beat id in the new order).",
         keywords=["reorder", "re-order", "order the beats", "sequence them", "rearrange"],
-        params={"order": "the complete list of beat ids in the desired order"})
+        params={"order": {"desc": "the complete list of beat ids in the desired order", "type": "array"}})
 def reorder_beats(doc, *, _id, order=None):
     nodes = doc.get("nodes")
     if not isinstance(nodes, list) or not isinstance(order, list):
-        return
+        raise ValueError("reorder needs the full list of beat ids")
     want = [str(x) for x in order]
     ranked = sorted(range(len(nodes)),
                     key=lambda i: (want.index(str(nodes[i].get("id")))
@@ -193,10 +227,11 @@ def reorder_beats(doc, *, _id, order=None):
 
 @script("set_spine", describe="Set a top-level spine field (logline, wound, lie, or truth).",
         keywords=["wound", "lie", "truth", "logline", "spine", "misbelief"],
-        params={"field": "one of: logline, wound, lie, truth", "value": "new text"})
+        params={"field": {"desc": "which spine field to set", "required": True,
+                          "enum": ["logline", "wound", "lie", "truth"]},
+                "value": "new text"})
 def set_spine(doc, *, _id, field, value=""):
-    if field:
-        doc[field] = value
+    doc[field] = value
 
 
 # ── Locations (a {start, locations:[…]} artifact) ────────────────────────────────
@@ -205,32 +240,66 @@ def set_spine(doc, *, _id, field, value=""):
         keywords=["add a location", "new location", "another place", "add place", "new place"],
         params={"name": "the place's name", "description": "the place objectively (no people/events)"})
 def add_location(doc, *, _id, name="", description=""):
-    doc.setdefault("locations", []).append(
-        {"id": _id, "name": name, "description": description, "background_prompt": ""})
+    locs = doc.setdefault("locations", [])
+    # Idempotent by name: a re-add UPDATES the existing place instead of duplicating it.
+    cur = next((l for l in locs if name.strip()
+                and str(l.get("name", "")).strip().lower() == name.strip().lower()), None)
+    if cur is not None:
+        if description:
+            cur["description"] = description
+        return
+    locs.append({"id": _id, "name": name, "description": description, "background_prompt": "", "parent": ""})
+
+
+@script("set_location_area",
+        describe="Group a location under an AREA — a larger region/zone that contains it. This is the map "
+                 "HIERARCHY: areas are the main nodes, locations nest inside them (an area is just a "
+                 "location with children). Leave area blank to detach it back to the top level.",
+        keywords=["area", "region", "zone", "district", "wing", "inside", "part of", "belongs to",
+                  "within", "group under", "nest", "contained in", "sub-location"],
+        params={"id": "id of the location to place",
+                "area": "id of the area/location it sits inside (blank to detach to top level)"})
+def set_location_area(doc, *, _id, id, area=None):
+    loc = _require(_by_id(doc.get("locations"), id), f"no location with id {id!r}")
+    if not area:
+        loc["parent"] = ""
+        return
+    if str(area) == str(id):
+        raise ValueError("a location can't sit inside itself")
+    _require(_by_id(doc.get("locations"), area), f"no area with id {area!r}")
+    seen, cur = set(), str(area)          # walk up from the parent; reaching `id` would form a cycle
+    while cur and cur not in seen:
+        if cur == str(id):
+            raise ValueError("that would nest the area inside its own descendant")
+        seen.add(cur)
+        up = _by_id(doc.get("locations"), cur)
+        cur = str(up.get("parent") or "") if up else ""
+    loc["parent"] = area
 
 
 @script("set_location_field", describe="Set a field on an existing location.",
         keywords=["rename location", "change the place", "edit location", "set the location", "update place"],
-        params={"id": "location id", "field": "one of: name, description, background_prompt", "value": "new text"})
+        params={"id": "location id",
+                "field": {"desc": "which field to set", "required": True,
+                          "enum": ["name", "description", "background_prompt"]},
+                "value": "new text"})
 def set_location_field(doc, *, _id, id, field, value=""):
-    l = _by_id(doc.get("locations"), id)
-    if l is not None and field:
-        l[field] = value
+    _require(_by_id(doc.get("locations"), id), f"no location with id {id!r}")[field] = value
 
 
 @script("remove_location", describe="Delete a location.",
         keywords=["remove location", "delete place", "drop the location", "cut the place"],
         params={"id": "id of the location to delete"})
 def remove_location(doc, *, _id, id):
-    locs = doc.get("locations")
-    if isinstance(locs, list):
-        doc["locations"] = [l for l in locs if str(l.get("id")) != str(id)]
+    _require(_by_id(doc.get("locations"), id), f"no location with id {id!r} to delete")
+    doc["locations"] = [l for l in doc.get("locations", []) if str(l.get("id")) != str(id)]
 
 
 @script("set_start", describe="Set which location the story opens in.",
         keywords=["start location", "opening location", "begins at", "starts in", "set start"],
         params={"id": "id of the starting location"})
 def set_start(doc, *, _id, id):
+    _require(_by_id(doc.get("locations"), id), f"no location with id {id!r} to start at")
     doc["start"] = id
 
 
@@ -250,12 +319,12 @@ def add_character(doc, *, _id, name="", role="", persona=""):
 @script("set_character_field", describe="Set a field on an existing character.",
         keywords=["rename character", "change the character", "edit character", "set the character",
                   "update character", "change their role", "rewrite the persona"],
-        params={"id": "character id", "field": "one of: name, role, persona, appearance, base_prompt",
+        params={"id": "character id",
+                "field": {"desc": "which field to set", "required": True,
+                          "enum": ["name", "role", "persona", "appearance", "base_prompt"]},
                 "value": "new text"})
 def set_character_field(doc, *, _id, id, field, value=""):
-    c = _by_id(doc.get("cast"), id)
-    if c is not None and field:
-        c[field] = value
+    _require(_by_id(doc.get("cast"), id), f"no character with id {id!r}")[field] = value
 
 
 @script("remove_character", describe="Remove a character from the cast (never the ★ main character).",
@@ -263,6 +332,112 @@ def set_character_field(doc, *, _id, id, field, value=""):
                   "remove npc", "kill off"],
         params={"id": "id of the character to remove"})
 def remove_character(doc, *, _id, id):
-    cast = doc.get("cast")
-    if isinstance(cast, list):
-        doc["cast"] = [c for c in cast if str(c.get("id")) != str(id)]
+    _require(_by_id(doc.get("cast"), id), f"no character with id {id!r} to remove")
+    doc["cast"] = [c for c in doc.get("cast", []) if str(c.get("id")) != str(id)]
+
+
+# ── Relationships (the cast's web: doc["relationships"]:[…]) ──────────────────────
+# Authored at build time (Character Agent) AND drift-able at runtime — the same shape the
+# world-state engine tracks (entities[name].relationships[target]); `value` seeds that.
+
+@script("set_relationship",
+        describe="Create or update how one character relates to another (rival, mentor, lover…). "
+                 "Describe the bond in PROSE — never a number.",
+        keywords=["relationship", "rival", "ally", "mentor", "lover", "enemy", "friend", "sibling",
+                  "history with", "knows", "connect them", "feels about", "their dynamic"],
+        params={"source": "id or name of the character who holds the feeling",
+                "target": "id or name of the other character",
+                "nature": "the KIND of bond (e.g. rival, mentor, lover, sibling, estranged)",
+                "dynamic": "2-3 WORDS for how source feels about target right now — terse and "
+                           "evocative, never a sentence (e.g. 'protective, smothering', 'old grudge', "
+                           "'wary respect', 'quiet devotion')",
+                "stance": {"desc": "coarse feeling, for the graph colour only",
+                           "enum": ["devoted", "warm", "neutral", "strained", "hostile"]},
+                "note": "optional extra history"})
+def set_relationship(doc, *, _id, source, target, nature="", dynamic="", stance="", note=""):
+    if str(source) == str(target):
+        raise ValueError("a character can't have a relationship with themselves")
+    rels = doc.setdefault("relationships", [])
+    cur = next((r for r in rels if r.get("source") == source and r.get("target") == target), None)
+    if cur is None:
+        cur = {"id": _id, "source": source, "target": target, "nature": "",
+               "dynamic": "", "stance": "neutral", "note": ""}
+        rels.append(cur)
+    if dynamic:
+        dynamic = " ".join(str(dynamic).split()[:6])   # 2-3 words; backstop a sentence
+    for k, v in (("nature", nature), ("dynamic", dynamic), ("note", note)):
+        if v:
+            cur[k] = v
+    if stance in ("devoted", "warm", "neutral", "strained", "hostile"):
+        cur["stance"] = stance
+
+
+@script("remove_relationship", describe="Remove the relationship between two characters.",
+        keywords=["remove relationship", "delete relationship", "they don't know", "no relationship",
+                  "sever", "unrelated"],
+        params={"source": "id or name of the first character",
+                "target": "id or name of the other character"})
+def remove_relationship(doc, *, _id, source, target):
+    rels = doc.get("relationships")
+    if isinstance(rels, list):
+        kept = [r for r in rels if not (r.get("source") == source and r.get("target") == target)]
+        if len(kept) != len(rels):
+            doc["relationships"] = kept
+            return
+    raise ValueError(f"no relationship between {source!r} and {target!r}")
+
+
+# ── Scene connections (the map: doc["connections"]:[…]) ──────────────────────────
+# Link scenes/places into a navigable graph (source -> target). Ids come from the doc's
+# locations/places/scenes when present (validated then); otherwise recorded as given.
+
+def _place_ids(doc) -> set:
+    ids = set()
+    for key in ("locations", "places", "scenes"):
+        for it in doc.get(key) or []:
+            if isinstance(it, dict) and it.get("id"):
+                ids.add(str(it["id"]))
+                for sc in it.get("scenes") or []:
+                    if isinstance(sc, dict) and sc.get("id"):
+                        ids.add(str(sc["id"]))
+    return ids
+
+
+@script("connect_scenes", describe="Connect one scene/place to another (a way to move between them).",
+        keywords=["connect", "leads to", "path", "exit", "door", "passage", "from here", "go to",
+                  "links to", "adjacent", "route"],
+        params={"source": "id of the scene/place you move FROM",
+                "target": "id of the scene/place it leads TO",
+                "label": "how the move reads (e.g. 'through the gate', 'upstairs') (optional)",
+                "kind": "the type of transition (e.g. door, path, stairs, portal, secret) (optional)"})
+def connect_scenes(doc, *, _id, source, target, label="", kind=""):
+    if str(source) == str(target):
+        raise ValueError("a scene can't connect to itself")
+    known = _place_ids(doc)
+    if known:
+        for x in (source, target):
+            if str(x) not in known:
+                raise ValueError(f"no scene/place with id {x!r}")
+    conns = doc.setdefault("connections", [])
+    cur = next((c for c in conns if c.get("source") == source and c.get("target") == target), None)
+    if cur is None:
+        cur = {"id": _id, "source": source, "target": target, "label": "", "kind": ""}
+        conns.append(cur)
+    if label:
+        cur["label"] = label
+    if kind:
+        cur["kind"] = kind
+
+
+@script("disconnect_scenes", describe="Remove the connection from one scene/place to another.",
+        keywords=["disconnect", "unlink", "no path", "block", "remove exit", "seal", "can't get to"],
+        params={"source": "id of the scene/place the link starts from",
+                "target": "id of the scene/place it currently leads to"})
+def disconnect_scenes(doc, *, _id, source, target):
+    conns = doc.get("connections")
+    if isinstance(conns, list):
+        kept = [c for c in conns if not (c.get("source") == source and c.get("target") == target)]
+        if len(kept) != len(conns):
+            doc["connections"] = kept
+            return
+    raise ValueError(f"no connection {source!r} -> {target!r}")

@@ -38,8 +38,8 @@ function firstNodeId(nodes) {
 
 // ── persisted → graph ───────────────────────────────────────────────────────
 
-// Flat storyboard.beats[] → graph (linear chain). `spine` optionally supplies wound/lie/truth.
-export function boardToGraph(board, spine = null) {
+// Flat storyboard.beats[] → graph (linear chain). wound/lie/truth start empty (edited on the graph).
+export function boardToGraph(board) {
   const beats = board?.beats || [];
   const nodes = beats.map((b, i) => ({
     id: `b${i}`,
@@ -55,10 +55,10 @@ export function boardToGraph(board, spine = null) {
     next: i < beats.length - 1 ? [`b${i + 1}`] : [],
   }));
   return {
-    logline: board?.logline || spine?.logline || '',
-    wound: spine?.wound || '',
-    lie: spine?.lie || '',
-    truth: spine?.truth || '',
+    logline: board?.logline || '',
+    wound: '',
+    lie: '',
+    truth: '',
     nodes,
   };
 }
@@ -84,11 +84,11 @@ export function storyToGraph(story) {
     }));
     return {
       logline: story?.storyboard?.logline || '',
-      wound: story?.spine?.wound || '', lie: story?.spine?.lie || '', truth: story?.spine?.truth || '',
+      wound: '', lie: '', truth: '',
       nodes,
     };
   }
-  return boardToGraph(story?.storyboard || {}, story?.spine || null);
+  return boardToGraph(story?.storyboard || {});
 }
 
 // ── graph → persisted ─────────────────────────────────────────────────────────

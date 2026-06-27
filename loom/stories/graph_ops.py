@@ -37,15 +37,13 @@ class GraphFunction:
     entry). The model calls it by `name`; `impl` runs against the `writes` level's doc."""
     name: str
     describe: str
-    params: dict           # {param_name: human description} — the model schema
+    params: dict           # {param_name: rich spec} — the model schema
     keywords: list[str] = field(default_factory=list)
     writes: str = "graph"  # the State-doc LEVEL this script mutates (default: the dev graph)
     reads: list[str] = field(default_factory=list)  # levels it reads (advisory; for context assembly)
-    impl: Any = None       # the registered code function (def impl(doc, *, _id, **params))
-
-    def to_prompt(self) -> str:
-        ps = ", ".join(f"{k} ({v})" for k, v in self.params.items()) or "(no params)"
-        return f"- {self.name}: {self.describe}\n    params: {ps}"
+    impl: Any = None       # the code function. kind "doc": impl(doc, *, _id, **params) mutates the
+                           # doc. kind "action": impl(ctx, body) runs with ctx + returns an artifact.
+    kind: str = "doc"      # "doc" (mutates the artifact) | "action" (runs w/ ctx, yields an artifact)
 
 
 # ── Parsing function-book entries ────────────────────────────────────────────────
@@ -56,6 +54,7 @@ def parse_functions(entries: list) -> list[GraphFunction]:
     logic/params/describe are CANONICAL in code (stories/scripts.py). An entry whose `fn`
     isn't registered (or a plain data entry) is ignored — there's no inline-code path."""
     from . import scripts as _S
+    from . import stage_tools as _ST
 
     out: list[GraphFunction] = []
     for e in entries or []:
@@ -65,16 +64,23 @@ def parse_functions(entries: list) -> list[GraphFunction]:
         if spec is None:
             continue
         name = (spec.get("fn") or getattr(e, "title", "") or "").strip()
-        reg = _S.get(name)
-        if reg is None:
-            continue   # not a registered script — nothing to run
         kws = [str(k) for k in (getattr(e, "keywords", []) or [])]
-        out.append(GraphFunction(
-            name=name, describe=reg.describe, params=reg.params,
-            keywords=kws or reg.keywords, writes=reg.writes,
-            reads=[str(r) for r in (spec.get("reads") or []) if r],
-            impl=reg.impl,
-        ))
+        reads = [str(r) for r in (spec.get("reads") or []) if r]
+        reg = _S.get(name)
+        if reg is not None:                       # a graph SCRIPT — mutates the doc
+            out.append(GraphFunction(
+                name=name, describe=reg.describe, params=reg.params,
+                keywords=kws or reg.keywords, writes=reg.writes, reads=reads,
+                impl=reg.impl, kind="doc"))
+            continue
+        act = _ST.get(name)                        # a STAGE/ACTION tool — runs w/ ctx, yields an artifact
+        if act is not None:
+            out.append(GraphFunction(
+                name=name, describe=act.describe, params=act.params,
+                keywords=kws or act.keywords, reads=reads,
+                impl=act.run, kind="action"))
+            continue
+        # neither registered — nothing to run
     return out
 
 
@@ -166,62 +172,81 @@ def offered(functions: list[GraphFunction], transcript: str, cap: int = 12) -> l
     return (matched + rest)[:cap]
 
 
-def functions_prompt(fns: list[GraphFunction]) -> str:
-    return "AVAILABLE GRAPH FUNCTIONS (call by name via graph_ops):\n" + "\n".join(f.to_prompt() for f in fns)
+def adopted_behaviors(root, book_ids: list, transcript: str) -> list[tuple[str, str]]:
+    """The driving-prompt BEHAVIOURS the chat agent adopts this turn — `(book_id, content)` for each
+    `facet="behavior"` entry whose trigger keywords fire. Behaviour is lorebook-fetched, so the one
+    agent shifts persona by what the writer mentions (its scripts come from the same books). The
+    book_ids form the behaviour SIGNATURE the caller uses to detect a persona switch."""
+    from ..server.services import lorebook_store as _LS
+    text = (transcript or "").lower()
+    out: list[tuple[str, str]] = []
+    for bid in book_ids or []:
+        for e in _LS.load_lorebook(root, bid):
+            if getattr(e, "facet", "") != "behavior" or not e.content:
+                continue
+            if (not e.keywords) or any(
+                    re.search(rf"\b{re.escape(k.lower())}\b", text) for k in e.keywords if k):
+                out.append((bid, e.content))
+    return out
 
 
-# The structured output the model returns to call functions. `params` is a JSON STRING
-# (not a nested object): strict structured-output modes (OpenAI/OpenRouter) can't represent
-# a free-form object with arbitrary keys, so the model writes the params as a JSON string and
-# we parse it. additionalProperties:false everywhere keeps strict mode happy.
-GRAPH_OPS_SCHEMA = {
-    "type": "object",
-    "additionalProperties": False,
-    "properties": {
-        "graph_ops": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "fn": {"type": "string", "description": "the exact function name to call"},
-                    "params": {"type": "string",
-                               "description": "a JSON object string of the function's params, "
-                                              "e.g. {\"title\": \"First crack\", \"after\": \"b0\"}"},
-                },
-                "required": ["fn", "params"],
-            },
-        }
-    },
-    "required": ["graph_ops"],
-}
+def behavior_of(root, book_id: str) -> str:
+    """The behaviour prompt of a specific book (its `facet="behavior"` entry), regardless of
+    keywords — used when the writer EXPLICITLY picks a mode instead of relying on trigger detection."""
+    from ..server.services import lorebook_store as _LS
+    for e in _LS.load_lorebook(root, book_id):
+        if getattr(e, "facet", "") == "behavior" and e.content:
+            return e.content
+    return ""
 
 
-def ops_schema(functions: list[GraphFunction]) -> dict:
-    """Build the structured-output schema with `params` as a concrete object whose properties
-    are the UNION of the offered functions' param names. Free-form objects break strict mode
-    (OpenAI/OpenRouter return `{}`); concrete named props work everywhere. Strict mode also
-    requires every property in `required`, so optional params are typed nullable — the model
-    fills the relevant ones and nulls the rest."""
-    props: dict = {}
+def list_modes(root) -> list[dict]:
+    """Every selectable MODE — the function books that carry a behaviour entry. Each {id, label}
+    lets a UI offer an explicit persona switch (more reliable than keyword auto-detection)."""
+    from ..server.services import lorebook_store as _LS
+    out: list[dict] = []
+    for b in _LS.list_books(root):
+        if b.get("category") != "function":
+            continue
+        beh = next((e for e in _LS.load_lorebook(root, b["id"])
+                    if getattr(e, "facet", "") == "behavior" and e.content), None)
+        if beh is not None:
+            out.append({"id": b["id"], "label": (beh.title or b.get("name") or b["id"]).replace("Behaviour — ", "")})
+    return out
+
+
+def tools_spec(functions: list[GraphFunction]) -> list[dict]:
+    """Native tool specs (one per offered function) for the provider `tools=` API — the
+    standard LLM tool-calling shape: each tool gets its OWN parameter schema, so the model
+    calls them by name with a typed argument object. (This replaces the old `ops_schema`
+    union-of-all-params blob, which strict structured-output forced into one flat nullable
+    object.) Each param's rich spec (from scripts.py: {desc,type,enum,required}) drives the
+    schema — `enum` constrains a fixed-choice param so the model can't pass an invalid value;
+    only genuinely-required params land in `required`. Tolerates a bare-string param (legacy)."""
+    out: list[dict] = []
     for fn in functions:
-        for k in fn.params:
-            if k == "order":
-                props[k] = {"type": ["array", "null"], "items": {"type": "string"}}
+        props: dict = {}
+        required: list[str] = []
+        for k, spec in fn.params.items():
+            if not isinstance(spec, dict):   # legacy: bare description string
+                spec = {"desc": str(spec), "type": "string", "enum": None,
+                        "required": "optional" not in str(spec).lower()}
+            if spec.get("type") == "array":
+                p = {"type": "array", "items": {"type": "string"}, "description": spec.get("desc", "")}
             else:
-                props.setdefault(k, {"type": ["string", "null"]})
-    params_schema = {"type": "object", "additionalProperties": False,
-                     "properties": props, "required": list(props)}
-    return {
-        "type": "object", "additionalProperties": False,
-        "properties": {
-            "graph_ops": {"type": "array", "items": {
-                "type": "object", "additionalProperties": False,
-                "properties": {"fn": {"type": "string", "description": "the exact function name"},
-                               "params": params_schema},
-                "required": ["fn", "params"]}}},
-        "required": ["graph_ops"],
-    }
+                p = {"type": spec.get("type") or "string", "description": spec.get("desc", "")}
+            if spec.get("enum"):
+                p["enum"] = list(spec["enum"])
+            props[k] = p
+            if spec.get("required", True):
+                required.append(k)
+        out.append({
+            "name": fn.name,
+            "description": fn.describe,
+            "parameters": {"type": "object", "additionalProperties": False,
+                           "properties": props, "required": required},
+        })
+    return out
 
 
 def _call_params(call: dict) -> dict:

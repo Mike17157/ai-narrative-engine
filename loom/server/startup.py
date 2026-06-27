@@ -56,6 +56,36 @@ def reap_stale_jobs() -> None:
 
 
 # ---------------------------------------------------------------------------
+# 2b. Warm the managed ComfyUI (background, non-blocking)
+# ---------------------------------------------------------------------------
+
+def warm_comfyui(ctx) -> None:
+    """Bring the managed ComfyUI up at boot so the first render isn't a cold launch.
+    Runs in a daemon thread — never blocks server start. No-op unless the server is managed
+    and `comfyui.warm_on_start` is set; `ensure_up()` only launches if it isn't already up."""
+    import threading
+
+    try:
+        if not getattr(ctx.user.comfyui, "warm_on_start", True):
+            return
+        from ..comfy.server import get_server
+        server = get_server(ctx.comfy_url)
+        if not getattr(server, "managed", False):
+            return   # connect-only setup — nothing for Loom to launch
+
+        def _run():
+            try:
+                server.ensure_up()
+                log.info("startup: managed ComfyUI is up")
+            except Exception:  # noqa: BLE001 — a launch failure must never crash boot
+                log.exception("startup: managed ComfyUI warm-start failed")
+
+        threading.Thread(target=_run, name="comfyui-warm-start", daemon=True).start()
+    except Exception:  # noqa: BLE001
+        log.exception("startup: ComfyUI warm-start could not start")
+
+
+# ---------------------------------------------------------------------------
 # 3. models_manifest.json regeneration
 # ---------------------------------------------------------------------------
 

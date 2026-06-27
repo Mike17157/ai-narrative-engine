@@ -41,6 +41,28 @@ def register(app, ctx):
             res["by_family"] = by_family
         return res
 
+    @app.delete("/api/comfy/models/file")
+    def delete_model_file(folder: str, rel: str):
+        """Delete one model file by its scan `folder` (checkpoints/loras/vae/…) + `rel`
+        path. Path-checked to stay inside that folder; invalidates the scan cache."""
+        bd = ctx.comfy_base_dir()
+        md = (bd / "models") if bd else None
+        if not md or not md.is_dir():
+            return JSONResponse({"error": "ComfyUI models directory not found"}, status_code=404)
+        try:
+            base = (md / folder.replace("\\", "/")).resolve()
+            target = (base / rel.replace("\\", "/")).resolve()
+            if target == base or base not in target.parents:
+                return JSONResponse({"error": "path outside model folder"}, status_code=400)
+            if not target.is_file():
+                return JSONResponse({"error": "not found"}, status_code=404)
+            target.unlink()
+            from ...comfy.scan import invalidate_scan_cache
+            invalidate_scan_cache()
+            return {"ok": True, "deleted": f"{folder}/{rel}"}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": str(exc)}, status_code=500)
+
     @app.post("/api/comfy/models/resolve")
     def model_resolve(body: dict):
         """Is a model with this filename already installed for this kind? If so,

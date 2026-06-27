@@ -22,6 +22,9 @@ class TextResult:
     # Populated when the step requested structured output (`emits`); the parsed
     # JSON object the model returned.
     data: dict[str, Any] = field(default_factory=dict)
+    # Populated when the step passed `tools`; the model's native tool calls,
+    # normalized to [{"fn": <name>, "params": {...}}] across providers.
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass
@@ -41,6 +44,7 @@ class TextProvider(Protocol):
         system: str | None,
         prompt: str,
         emits: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], None] | None = None,
         images: list[str] | None = None,
         cancel: Callable[[], bool] | None = None,
@@ -48,9 +52,12 @@ class TextProvider(Protocol):
         """Produce a text turn.
 
         `emits` is an optional JSON Schema; when given, the result's `.data`
-        holds the validated object the model returned. `on_delta` receives
-        streamed text chunks when supported. `images` (data URIs) make the turn
-        multimodal for vision-capable models.
+        holds the validated object the model returned. `tools` is an optional
+        list of tool specs ({"name", "description", "parameters": <JSON Schema>});
+        when given, the model may call them and the result's `.tool_calls` holds
+        the calls as [{"fn", "params"}]. `on_delta` receives streamed text chunks
+        when supported. `images` (data URIs) make the turn multimodal for
+        vision-capable models.
         """
         ...
 

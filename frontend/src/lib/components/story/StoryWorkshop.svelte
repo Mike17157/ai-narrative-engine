@@ -23,7 +23,7 @@
     {#if ready}<span class="ready">● ready to draft</span>{/if}
     <span style="flex:1"></span>
     <button class="ghost sm" disabled={busy || !hasExchange}
-      onclick={() => onGenerate?.({ premise: graph?.logline?.trim() || lastAssistant })}>Quick spine (skip graph) →</button>
+      onclick={() => onGenerate?.({ premise: graph?.logline?.trim() || lastAssistant })}>Quick draft (skip graph) →</button>
     <button class="go" class:pulse={ready} disabled={busy || !hasExchange || !graph?.nodes?.length}
       onclick={() => onGenerate?.({ graph })}>
       {graph?.nodes?.length ? `Draft from this arc (${graph.nodes.length}) →` : 'Build the arc first…'}

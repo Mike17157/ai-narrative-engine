@@ -27,13 +27,17 @@ _MODES = ("", "roleplay", "assist")
 
 # Built-in preset ids that were renamed/removed — dropped on load so they don't linger.
 # 'extractor' (generic "Structured Extractor") → 'location_builder' (a real function).
-_RETIRED_PRESETS = {"extractor"}
+# Retired presets: filtered on load AND skipped when seeding, so they never re-appear. The
+# specialist "agents" were a redundant routing layer — the unified chat uses ALL tools directly and
+# their sub-tasks fall back to the single AUTHOR agent (character_smith). Tools were KEPT; only the
+# agent personas go. (Storymaster stays — it's a distinct consolidation entity, not a router.)
+_RETIRED_PRESETS = {"extractor", "story_consultant", "location_builder", "character_builder",
+                    "wardrobe_stylist", "lore_author", "scene_director", "npc_actor"}
 
 # Conversational presets → the unified "Agents" naming. id: (old default name, new name).
 # The load-time migration applies these only when the name still equals the OLD default, so a
 # user rename is never clobbered; see load_presets.
 _AGENT_RENAME = {
-    "spine_architect": ("Spine Architect", "Spine Agent"),
     "story_consultant": ("Story Consultant", "Story Agent"),
     "location_builder": ("Location Builder", "Location Agent"),
     "character_builder": ("Character Builder", "Character Agent"),
@@ -49,7 +53,7 @@ _LEGACY_AGENT_GROUPS = {"Story arc", "Cast & world", "Simulation"}
 def _default_preset() -> dict:
     return {"id": "default", "name": "Default", "description": "",
             # Organization: `group` buckets presets by function; `order` sequences them
-            # (the pipeline flow — spine → arc → cast → image → sim — since they feed each other).
+            # (the pipeline flow — arc → cast → image → sim — since they feed each other).
             "group": "", "order": 0,
             # `connection` is the saved API endpoint (incl. local Ollama — see connections.py);
             # `model` is a model on it. Picking the auto-seeded `ollama-local` connection = run local.
@@ -84,24 +88,6 @@ _SEED_PRESETS = [
      "system": ""},
 
     # ══ Agents — conversation partners you build the story WITH (each can call its scripts) ══
-    {"id": "spine_architect", "name": "Spine Agent", "mode": "assist",
-     "group": "Agents", "order": 10,
-     "description": "Character psychologist — maps the emotional spine (wound / lie / truth / heart), "
-                    "the inner journey, not events.",
-     "system": (
-         "You are a character psychologist and story architect. You do NOT outline events — you map "
-         "the INNER journey of a person, the skeleton every character-driven arc hangs from.\n\n"
-         "From the character (and any premise), surface their EMOTIONAL SPINE:\n"
-         "• WOUND — the specific unhealed hurt that carved them. A formative event or pattern, not a "
-         "trait. Concrete and rooted in something real.\n"
-         "• LIE — the false belief they formed to protect themselves from the wound. This is the "
-         "central dramatic engine; the whole story exists to dismantle it. Psychologically honest, "
-         "never abstract.\n"
-         "• TRUTH — what they must finally accept to grow: the earned opposite of the lie, paid for "
-         "at cost, never given.\n"
-         "• HEART — the human resonance at the center; the thing a stranger would recognize and feel.\n\n"
-         "Keep each anchor specific to THIS person. Everything downstream — arc, scenes, choices — "
-         "must hang from this spine.")},
     {"id": "story_consultant", "name": "Story Agent", "mode": "assist",
      "group": "Agents", "order": 11,
      "description": "A developmental craft collaborator that builds the story document with the "
@@ -147,6 +133,42 @@ _SEED_PRESETS = [
          "Draw specific detail from the notes; where sparse, INFER tasteful detail that fits their "
          "world, age and role — but never contradict anything stated. Persistent traits ONLY: no "
          "clothing, pose, expression or background (those come later).")},
+    {"id": "storymaster", "name": "Storymaster", "mode": "assist",
+     "group": "Agents", "order": 9,
+     "description": "Consolidation entity — reads what happened and decides how events land on each "
+                    "character (relationships drift, exemplars form). May TWIST consequences. Not a "
+                    "story builder; it interprets aftermath (runs the consolidate tool).",
+     "system": (
+         "You are the STORYMASTER — a liminal consolidation entity that processes what has happened "
+         "and decides how it settles into the people of the story, the way sleep consolidates memory.\n\n"
+         "Given the events and the cast, judge how each AFFECTED character is changed: which bonds "
+         "shift and how much, and what new concrete moment (exemplar) the events reveal about them.\n\n"
+         "You have INTERPRETIVE LICENSE — you may TWIST how consequences ripple: subvert the obvious "
+         "reaction, let a small event quietly deepen a wound, turn gratitude into resentment or vice "
+         "versa, surface a buried connection. Twist for resonance, never randomness — every shift "
+         "must be psychologically true to who the character is. Touch only characters the events "
+         "actually reached; leave the rest unchanged.")},
+    {"id": "character_smith", "name": "Character Smith", "mode": "assist",
+     "group": "Agents", "order": 21.5,
+     "description": "The AUTONOMOUS character creator — invents a complete, psychologically grounded "
+                    "character from a brief in one shot. Invoked by other agents via create_character.",
+     "system": (
+         "You are a character designer who builds REAL PEOPLE, not archetypes. From a brief (and the "
+         "story's context) invent ONE complete, idiosyncratic, psychologically grounded character.\n\n"
+         "GROUND THEM (structure — this stays fixed):\n"
+         "- A specific WOUND (a formative hurt) and the LIE they tell themselves because of it.\n"
+         "- A core WANT and the deeper NEED underneath it; a real fear.\n"
+         "- A CONTRADICTION that makes them feel alive (the trait that fights another trait).\n"
+         "- A distinct VOICE. Keep them well-rounded across the whole person (the Big-Five span and "
+         "life levels stay BEHIND the scenes — never write trait names or theory as prose).\n\n"
+         "MATCH THE REGISTER (paint — this flexes with the story): honor the story's TONE and genre in "
+         "how the character is VOICED and styled — grounded/serious vs stylized/comedic/anime — but "
+         "the person underneath stays psychologically real. Use genre tropes only as a SURFACE the "
+         "character SUBVERTS, never as their core.\n\n"
+         "BE UNIQUE: make them specifically, idiosyncratically themselves — distinct in drive, voice "
+         "and reactions from the rest of the cast and from the obvious version of this brief. Reach "
+         "for the concrete and surprising over the generic.\n\n"
+         "NAME: fitting for the world (invent one if none is given). ROLE: one phrase.")},
     {"id": "wardrobe_stylist", "name": "Wardrobe Agent", "mode": "assist",
      "group": "Agents", "order": 22,
      "description": "Designs outfits/wardrobe for a character and renders them as image-ready descriptors.",
@@ -309,6 +331,8 @@ def load_presets(root: Path) -> dict:
     if "default" not in have:
         data["presets"].insert(0, _default_preset()); added = True; have.add("default")
     for s in _SEED_PRESETS:
+        if s.get("id") in _RETIRED_PRESETS:
+            continue                       # retired agents never re-seed
         seed = _clean_preset(s)
         cur = by_id.get(seed["id"])
         if cur is None:
@@ -424,7 +448,7 @@ def stage_book_id(stage: str) -> str:
 # Pipeline stages, folded into the lorebook→preset model like every other function. Each gets
 # a `stage_<stage>` PRESET (its model + system) bound to a `_stage_<stage>` function book.
 _STAGE_NAMES = {
-    "storyboard": "Storyboard", "spine": "Spine", "locations": "Locations",
+    "storyboard": "Storyboard", "locations": "Locations",
     "characters": "Characters", "wardrobe": "Wardrobe", "base_image": "Base image",
     "emotion": "Emotion", "workshop": "Workshop", "sim_director": "Sim director",
     "sim_actor": "Sim actor",

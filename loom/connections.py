@@ -96,8 +96,8 @@ def test_connection(provider: str, api_key: str, base_url: str | None = None) ->
             r = httpx.get(f"{base}/v1/models",
                           headers={"x-api-key": api_key, "anthropic-version": "2023-06-01"}, timeout=20)
             r.raise_for_status()
-            # Claude 3+ (everything the API lists today) accepts image input.
-            return [{"id": m["id"], "name": m.get("display_name", m["id"]), "vision": True}
+            # Claude 3+ (everything the API lists today) accepts image input AND tool use.
+            return [{"id": m["id"], "name": m.get("display_name", m["id"]), "vision": True, "tools": True}
                     for m in r.json().get("data", [])]
 
         if provider == "openrouter":
@@ -118,7 +118,14 @@ def test_connection(provider: str, api_key: str, base_url: str | None = None) ->
                 return "image" in mods
             return "image" in mods
 
-        out = [{"id": m["id"], "name": m.get("name", m["id"]), "vision": _vision(m)}
+        def _tools(m: dict) -> bool | None:
+            # OpenRouter lists per-model `supported_parameters`; "tools" there = native
+            # tool-calling. Other OpenAI-compatible providers don't report it → None (unknown,
+            # don't hide). The picker hides only known-False; the runtime guard catches the rest.
+            sp = m.get("supported_parameters")
+            return ("tools" in sp) if isinstance(sp, list) else None
+
+        out = [{"id": m["id"], "name": m.get("name", m["id"]), "vision": _vision(m), "tools": _tools(m)}
                for m in r.json().get("data", [])]
         out.sort(key=lambda m: m["name"].lower())
         return out

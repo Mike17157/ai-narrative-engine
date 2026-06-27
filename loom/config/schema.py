@@ -70,6 +70,19 @@ class Character(BaseModel):
     fields: dict[str, Any] = Field(default_factory=dict)
     # Portrait preset: checkpoint + LoRAs for consistent generated images.
     image: CharacterImage = Field(default_factory=CharacterImage)
+    # PLAYABLE — when true this card is a *you* puppet: a character the human can EMBODY
+    # in any story (portable, never story-bound). This folds the legacy thin Persona
+    # (name + blurb) into the full character card, so an embodied player carries a real
+    # backstory (`system`) AND a per-character lorebook that auto-attaches at play time.
+    # The story doesn't store who you play — it's bound per-playthrough — so one puppet
+    # ports across every story.
+    playable: bool = False
+    # OPTIONAL portable HOME scenes a playable persona carries with them — a character can
+    # be at home in several places (apartment, parents' house, the studio). When embodied in
+    # a story they become the player's own spots and stand in for a story 'persona_home' slot.
+    # Empty = fall back to the story's persona_home scene (if any). `Scene` is defined below;
+    # `from __future__ import annotations` makes this forward ref resolve lazily.
+    home_scenes: list[Scene] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------- #
@@ -119,6 +132,43 @@ class Location(BaseModel):
     # A PURE background plate: the empty environment only — no characters/figures.
     background_prompt: str = ""
     background: str | None = None            # rendered background asset (later)
+    # Map grouping: the id of a parent location this one sits inside (an "area" is just a
+    # location with children — a tree, no coordinates/adjacency). "" = top level.
+    # Written by the set_location_area script; see [[persona-scene-roadmap]].
+    parent: str = ""
+
+
+# --------------------------------------------------------------------------- #
+# Scenes & Places — a STORY-AUTHORED, character-anchored layer over bare locations.
+# A Place is a first-class CONTAINER ("The House", "Main Street"); the Scenes inside
+# it are the character spots that happen there — mom in the kitchen, the sister in her
+# room, the baker behind the counter. Several scenes can share one Place, and a scene
+# can be shared by several characters. A scene's `backstory` tells the director who is
+# usually here + what they do; `role` == 'persona_home' marks the swappable "you" home
+# that an embodied playable card can replace.  See [[persona-scene-roadmap]].
+# --------------------------------------------------------------------------- #
+class Scene(BaseModel):
+    id: str
+    name: str = ""                           # "Mom's kitchen", "Sister's room"
+    character: str | None = None             # the anchor character key (None = shared/ambient)
+    characters: list[str] = Field(default_factory=list)  # additional sharers of this spot
+    backstory: str = ""                      # what this character does here (situational)
+    background_prompt: str = ""              # a PURE background plate for this spot
+    background: str | None = None            # rendered asset (later)
+    role: str = ""                           # 'persona_home' = the swappable player-home slot
+
+
+class Place(BaseModel):
+    id: str
+    name: str
+    description: str = ""                     # the place, objectively
+    background_prompt: str = ""               # establishing plate for the whole place
+    background: str | None = None
+    scenes: list[Scene] = Field(default_factory=list)
+
+
+# Character.home_scenes forward-references Scene (defined above) — resolve it now.
+Character.model_rebuild()
 
 
 class Beat(BaseModel):
@@ -206,26 +256,6 @@ class Arc(BaseModel):
     divergence_axis: str = ""     # the persona dimension timelines diverge along
 
 
-class EmotionalBeat(BaseModel):
-    """One psychological station on the protagonist's inner journey."""
-    inflection: str = ""    # name of the shift (e.g. "First Crack", "The Cost")
-    description: str = ""   # what this looks like from outside in the story
-
-
-class EmotionalSpine(BaseModel):
-    """Character-psychology first: the wound → lie → truth axis that drives all arcs.
-    Generated before the storyboard so every external event is engineered to force
-    one of these internal inflections."""
-    wound: str = ""         # the specific unhealed hurt that shapes all behaviour
-    lie: str = ""           # the false belief the protagonist formed to protect from the wound
-    truth: str = ""         # what they must finally accept to grow
-    heart: str = ""         # the human resonance — why a stranger would recognise themselves
-    beats: list[EmotionalBeat] = Field(default_factory=list)   # psychological stations
-    logline: str = ""
-    tone: str = ""
-    themes: list[str] = Field(default_factory=list)
-
-
 class LoreEntry(BaseModel):
     id: str = ""
     title: str = ""
@@ -243,23 +273,77 @@ class LoreEntry(BaseModel):
     script: str = ""         # "" | "fallback" | …  (see loom/stories/guards.py registry)
 
 
+_STANCES = ("devoted", "warm", "neutral", "strained", "hostile")
+
+
+class Relationship(BaseModel):
+    """A directional bond between two cast members (source feels → target). The SOURCE OF TRUTH is
+    `dynamic` — prose, in the characters' own terms, that the narrator/actors actually read and that
+    DRIFT REWRITES during play (not a number). `stance` is a coarse CATEGORICAL label used only for
+    graph colour — never the thing you reason from. (Numeric warmth was removed: a scalar doesn't
+    steer an LLM and forcing emotional change through an integer delta produced arbitrary noise.)"""
+    id: str = ""
+    source: str = ""      # character key/name who holds the feeling
+    target: str = ""      # who it's toward
+    nature: str = ""      # the KIND of bond: rival / mentor / lover / mother / debtor …
+    dynamic: str = ""     # 2-3 WORDS: how it feels right now ("protective, smothering"); drift edits this
+    stance: str = "neutral"   # categorical, for colour only: devoted/warm/neutral/strained/hostile
+    note: str = ""        # optional extra history
+    value: int | None = None  # DEPRECATED legacy warmth; kept only so old stories load (migrated below)
+
+    @model_validator(mode="after")
+    def _migrate(self) -> "Relationship":
+        # Old data carried a -3..+3 `value` and no stance/dynamic — derive them once so legacy
+        # stories keep working, then the numeric field is ignored from here on.
+        if self.stance not in _STANCES:
+            self.stance = "neutral"
+        if self.value is not None and self.stance == "neutral":
+            v = max(-3, min(3, int(self.value)))
+            self.stance = ("hostile" if v <= -2 else "strained" if v == -1
+                           else "neutral" if v == 0 else "warm" if v == 1 else "devoted")
+        if not self.dynamic:
+            self.dynamic = self.note or self.nature
+        self.dynamic = " ".join(self.dynamic.split()[:6])   # keep it to 2-3 words (backstop)
+        return self
+
+
+class SceneLink(BaseModel):
+    """A directional connection in the scene/place map: you can move source → target."""
+    id: str = ""
+    source: str = ""      # scene/place/location id you move FROM
+    target: str = ""      # where it leads TO
+    label: str = ""       # how the move reads ("through the gate")
+
+
 class Story(BaseModel):
     name: str
     premise: str = ""                        # one-paragraph synopsis
     tone: str = ""
     themes: list[str] = Field(default_factory=list)
-    spine: EmotionalSpine | None = None      # character-psychology spine (generated before storyboard)
-    # The bounded plot outline this experience was built from (kept as the spine
-    # the runtime can loosely follow; scenes + cast are extracted from it).
+    # The bounded plot outline this experience was built from; scenes + cast are extracted from it.
     storyboard: Storyboard = Field(default_factory=Storyboard)
     cast: list[CastMember] = Field(default_factory=list)  # the roster (presence is dynamic)
     lorebook: dict[str, Any] = Field(default_factory=dict)
     locations: list[Location] = Field(default_factory=list)
+    # Story-authored Places (containers) + their character-anchored Scenes. Additive over
+    # `locations` — the world's "spots" (mom's kitchen, the baker's bakery). See Place/Scene.
+    places: list[Place] = Field(default_factory=list)
     start: str | None = None                 # starting location id
     background: str | None = None            # cover / default background
     fields: dict[str, Any] = Field(default_factory=dict)  # source card key, creator…
     intended_ending: str = ""     # the agreed book ending (first-class, drives arc generation)
     arcs: list[Arc] = Field(default_factory=list)
+    # Authored baselines (Character/Scene Agents build these); they also seed runtime state.
+    relationships: list[Relationship] = Field(default_factory=list)  # the cast's bond web
+    connections: list[SceneLink] = Field(default_factory=list)       # the scene/place map
+    # Playable character keys this story SUGGESTS you embody — the "you" slots it ships
+    # with. The player can adopt one or bring their own playable card (which then swaps in,
+    # e.g. their home scene replaces the default persona's). Just hints; the play binding is
+    # still per-playthrough (see Character.playable).
+    default_personas: list[str] = Field(default_factory=list)
+    # Sliding-window depth: how many most-recent play turns stay verbatim before older turns get
+    # compressed into memory on consolidation. A per-thread world_state["recent_window"] overrides it.
+    recent_window: int = 8
 
     @model_validator(mode="after")
     def _check_start(self) -> "Story":
@@ -382,6 +466,10 @@ class ComfyUISettings(BaseModel):
     models_path: str | None = None
     # Whether Loom may launch ComfyUI headless when it isn't already running.
     managed: bool = False
+    # Launch the managed ComfyUI at server boot (in the background) instead of lazily on the
+    # first render — so it's warm and ready. Only applies when `managed`. Turn off for dev if
+    # frequent backend restarts make the cold relaunch annoying (it's killed on backend exit).
+    warm_on_start: bool = True
     # Explicit launch overrides; left unset, a Desktop install is autodetected.
     python: str | None = None
     main_py: str | None = None

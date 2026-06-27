@@ -150,6 +150,7 @@ def scan_models(models_dir: str | Path) -> dict:
                 continue
             info = classify(str(p))
             info["folder"] = sub
+            info["mtime"] = p.stat().st_mtime
             info["rel"] = str(p.relative_to(d)).replace("\\", "/")
             info["arch_dir"] = info["rel"].split("/")[0] if "/" in info["rel"] else "(root)"
             # Folder is authoritative for support-model kinds the header can't pin down.

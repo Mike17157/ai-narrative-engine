@@ -62,6 +62,11 @@ CREATE TRIGGER IF NOT EXISTS lore_au AFTER UPDATE ON lore BEGIN
   INSERT INTO lore_fts(rowid, title, keywords, content)
   VALUES (new.rowid, new.title, new.keywords, new.content);
 END;
+CREATE TABLE IF NOT EXISTS docs (
+  key     TEXT PRIMARY KEY,      -- opaque doc key (e.g. '_world' for the global world graph)
+  json    TEXT DEFAULT '{}',     -- the whole document as JSON (mutated wholesale, like a session)
+  updated REAL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS books (
   id          TEXT PRIMARY KEY,
   name        TEXT DEFAULT '',
@@ -91,6 +96,9 @@ def _default_scope(category: str | None) -> str:
 RESERVED_BOOKS = {
     "_craft":     {"name": "Storytelling Craft", "category": "craft",     "rating": "sfw",
                    "description": "Modern storytelling theory the AI reasons with. Always-on for the workshop."},
+    "_psyche":    {"name": "Character Psyche (Big Five)", "category": "craft", "rating": "sfw",
+                   "description": "IPIP Big-Five facet behaviours (public domain) — grounds generated "
+                                  "characters in concrete tendencies instead of averaged priors."},
     "_global":    {"name": "Global Lore",        "category": "world",     "rating": "sfw",
                    "description": "World facts shared across every story and chat."},
     "_nsfw":      {"name": "Intimacy & NSFW",    "category": "intimacy",  "rating": "nsfw",
@@ -153,6 +161,7 @@ def _conn(root: Path):
         _inited.add(key)
         _migrate_json(root, con)
         _seed_books(root, con)
+        _topup_craft(root, con)
     return con
 
 
@@ -169,6 +178,27 @@ def _row_to_entry(r) -> LoreEntry:
 
 
 # ── One-time migration of the legacy JSON lorebooks ─────────────────────────────
+
+def _topup_craft(root: Path, con) -> None:
+    """Insert any `_craft.json` entries not yet in the DB (insert-if-absent). `_migrate_json` only
+    seeds when the whole table is empty, so this is how NEW craft principles added to the json reach
+    an existing DB — without clobbering user edits or resurrecting nothing else."""
+    p = root / "configs" / "lorebooks" / "_craft.json"
+    if not p.is_file():
+        return
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001
+        return
+    have = {r[0] for r in con.execute("SELECT entry_id FROM lore WHERE scope='_craft'").fetchall()}
+    added = 0
+    for e in (data.get("entries") or []):
+        if e.get("id") and e["id"] not in have:
+            _insert(con, "_craft", LoreEntry(**e))
+            added += 1
+    if added:
+        con.commit()
+
 
 def _migrate_json(root: Path, con) -> None:
     d = root / "configs" / "lorebooks"
@@ -230,6 +260,26 @@ def _seed_books(root: Path, con) -> None:
             for e in entries:
                 _insert(con, bid, LoreEntry(**e))
 
+    # _psyche: IPIP Big-Five facet behaviours, built from the grounding module (lazy import → no
+    # import cycle). Seeded once; never resurrected after the user empties it.
+    if not (con.execute("SELECT COUNT(*) FROM lore WHERE scope='_psyche'").fetchone() or [0])[0]:
+        try:
+            from ...stories.pipeline.grounding import psyche_entries
+            for e in psyche_entries():
+                _insert(con, "_psyche", LoreEntry(**e))
+        except Exception:  # noqa: BLE001 — grounding optional; seeding must not break init
+            pass
+
+    # Per-book BEHAVIOURS: the driving prompt the chat agent adopts when the book triggers. One
+    # `_behavior` entry per function book, seeded once (user edits preserved — only insert if absent).
+    for bid, (title, kws, content) in _BEHAVIORS.items():
+        if not con.execute("SELECT 1 FROM books WHERE id=?", (bid,)).fetchone():
+            continue
+        if con.execute("SELECT 1 FROM lore WHERE scope=? AND entry_id='_behavior'", (bid,)).fetchone():
+            continue
+        _insert(con, bid, LoreEntry(id="_behavior", title=title, keywords=kws, content=content,
+                                    facet="behavior", priority=5))
+
     # Keep the managed `_refusal` floor entry current: convert the original one-phrase-per-
     # entry format to the trigger→action model AND refresh the phrase set when it changes
     # (e.g. the high-precision retune). Only the floor entry + legacy input rows are touched;
@@ -254,7 +304,10 @@ def _seed_books(root: Path, con) -> None:
     # missing, so user edits/deletions of the others are never clobbered or resurrected).
     for bid, entries in (("_graph_fns", _GRAPH_FNS_ENTRIES), ("_location_fns", _LOCATION_FNS_ENTRIES),
                          ("_character_fns", _CHARACTER_FNS_ENTRIES),
-                         ("_story_tools", _STORY_TOOLS_ENTRIES), ("_spine_tools", _SPINE_TOOLS_ENTRIES)):
+                         ("_relationship_fns", _RELATIONSHIP_FNS_ENTRIES), ("_scene_fns", _SCENE_FNS_ENTRIES),
+                         ("_wardrobe_fns", _WARDROBE_FNS_ENTRIES), ("_story_tools", _STORY_TOOLS_ENTRIES),
+                         ("_smith_tools", _SMITH_TOOLS_ENTRIES),
+                         ("_storymaster_tools", _STORYMASTER_TOOLS_ENTRIES)):
         if con.execute("SELECT 1 FROM books WHERE id=?", (bid,)).fetchone():
             have = {r[0] for r in con.execute("SELECT entry_id FROM lore WHERE scope=?", (bid,)).fetchall()}
             for e in entries:
@@ -265,16 +318,44 @@ def _seed_books(root: Path, con) -> None:
     # every flow uses the right job preset. Set when unset; also migrate the early builds that
     # were all bound to 'story_consultant' to their proper per-function preset.
     for bid, pid in (("_graph_fns", "story_consultant"), ("_location_fns", "location_builder"),
-                     ("_character_fns", "character_builder")):
+                     ("_character_fns", "character_builder"),
+                     ("_relationship_fns", "character_builder"), ("_scene_fns", "scene_director"),
+                     ("_wardrobe_fns", "wardrobe_stylist")):
         row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
         if row is not None and (not (row[0] or "") or row[0] == "story_consultant"):
             con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
     # Stage-tool books → their Agent (set only when unbound, so user edits are kept).
-    for bid, pid in (("_story_tools", "story_consultant"), ("_spine_tools", "spine_architect")):
+    for bid, pid in (("_story_tools", "story_consultant"), ("_smith_tools", "character_smith"),
+                     ("_storymaster_tools", "storymaster")):
         row = con.execute("SELECT preset FROM books WHERE id=?", (bid,)).fetchone()
         if row is not None and not (row[0] or ""):
             con.execute("UPDATE books SET preset=? WHERE id=?", (pid, bid))
     con.commit()
+
+
+# ── Generic single-doc store (the `docs` table) ──────────────────────────────────
+# A whole-document store keyed by an opaque string — for state that's ONE JSON blob
+# mutated wholesale (load → edit → save), not a set of retrievable entries. The global
+# world graph lives here; sessions use disk files for the same shape.
+
+def get_doc(root: Path, key: str) -> dict | None:
+    row = _conn(root).execute("SELECT json FROM docs WHERE key=?", (key,)).fetchone()
+    if not row or not row[0]:
+        return None
+    try:
+        return json.loads(row[0])
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def put_doc(root: Path, key: str, doc: dict) -> dict:
+    con = _conn(root)
+    blob = json.dumps(doc, ensure_ascii=False)
+    con.execute("INSERT INTO docs(key,json,updated) VALUES(?,?,?) "
+                "ON CONFLICT(key) DO UPDATE SET json=excluded.json, updated=excluded.updated",
+                (key, blob, time.time()))
+    con.commit()
+    return doc
 
 
 def ensure_book(root: Path, scope: str) -> None:
@@ -634,6 +715,54 @@ _CHARACTER_FNS_ENTRIES = [
                               "remove npc", "kill off"]),
 ]
 
+_RELATIONSHIP_FNS_ENTRIES = [
+    _gfn("set_relationship", ["relationship", "rival", "ally", "mentor", "lover", "enemy", "friend",
+                              "sibling", "history with", "their dynamic", "feels about",
+                              "control", "power", "dominates", "defers to", "status", "growing closer"]),
+    _gfn("remove_relationship", ["remove relationship", "no relationship", "sever", "unrelated"]),
+]
+
+_SCENE_FNS_ENTRIES = [
+    _gfn("connect_scenes", ["connect", "leads to", "path", "exit", "door", "passage", "go to",
+                            "links to", "adjacent", "route", "stairs", "portal"]),
+    _gfn("disconnect_scenes", ["disconnect", "no path", "block", "remove exit", "seal"]),
+    _gfn("set_location_area", ["area", "region", "zone", "district", "wing", "inside", "part of",
+                               "belongs to", "within", "group under", "nest", "sub-location"]),
+]
+
+# `generate_image` is a STAGE tool every image-capable Agent gets — it renders via THAT agent's
+# own preset image workflow (ctx.preset_image_provider). The same tool is referenced by each
+# agent's book, so it shows under Character / Scene / Wardrobe in the Tools catalog.
+def _img_tool() -> dict:
+    return _sfn("generate_image",
+                ["generate image", "render", "draw", "illustrate", "picture of", "show me",
+                 "make an image", "portrait of", "outfit image", "render the scene"],
+                "Render an image using this agent's image workflow (its preset's workflow + look).",
+                "image")
+
+_CHARACTER_FNS_ENTRIES.append(_img_tool())
+_CHARACTER_FNS_ENTRIES.append(_sfn(   # the character manager records per-character scene memory
+    "record_scene",
+    ["record the scene", "remember this", "log the scene", "scene memory", "after the scene"],
+    "Each present character compresses the scene into their own memory + relationship drift.",
+    "memories"))
+_SCENE_FNS_ENTRIES.append(_img_tool())
+_LOCATION_FNS_ENTRIES.append(_img_tool())
+_WARDROBE_FNS_ENTRIES = [_img_tool()]
+
+# `design_wardrobe` is the WARDROBE agent's capability as a tool — it runs AS the Wardrobe agent.
+# It lives on the Wardrobe book (its own) AND on the Character/Smith books so those agents can
+# DELEGATE styling to it (agents invoking agents — composable, not one-dimensional).
+def _wardrobe_tool() -> dict:
+    return _sfn("design_wardrobe",
+                ["wardrobe", "outfit", "outfits", "style them", "dress them", "what they wear",
+                 "clothes", "attire", "give them an outfit"],
+                "Design and save a set of outfits for a character (delegates to the Wardrobe agent).",
+                "wardrobe")
+
+_WARDROBE_FNS_ENTRIES.append(_wardrobe_tool())
+_CHARACTER_FNS_ENTRIES.append(_wardrobe_tool())
+
 # STAGE tools — heavier pipeline stages an Agent can RUN from the workshop (not just edit the
 # live doc). Bound to the agent whose job they are; the runner lives in stories/stage_tools.py.
 _STORY_TOOLS_ENTRIES = [
@@ -642,14 +771,32 @@ _STORY_TOOLS_ENTRIES = [
           "generate the beats", "draft the outline", "map the beats"],
          "Run the storyboarder — generate the story's beats (logline, premise, tone, themes, "
          "beats) from the character and premise.", "board"),
-]
-_SPINE_TOOLS_ENTRIES = [
-    _sfn("spine",
-         ["spine", "emotional spine", "wound", "lie", "truth", "inner journey", "arc of change"],
-         "Run the spine architect — derive the emotional spine (wound / lie / truth + the "
-         "psychological beats from lie to truth).", "spine"),
+    _sfn("generate_story_cover",
+         ["cover", "story image", "cover image", "story art", "poster", "key art", "title image"],
+         "Render the story's cover image using this agent's image workflow.", "image"),
+    _sfn("set_story_title",
+         ["title", "name the story", "call it", "story title", "titled"],
+         "Set and save the story's title.", "title"),
 ]
 
+# The AUTONOMOUS character creator's tool — bound to the Character Smith agent (and, later, the
+# storymaster). One-shot generate a character from a brief + mint a card + add to cast.
+_SMITH_TOOLS_ENTRIES = [
+    _sfn("create_character",
+         ["create a character", "invent a character", "generate a character", "make a character",
+          "new cast member", "we need a character"],
+         "Generate a complete character from a brief and add it to the cast.", "character"),
+    _wardrobe_tool(),   # the Smith can also delegate styling to the Wardrobe agent
+]
+
+# The STORYMASTER's consolidation tool — reads events, twists how they land, applies the changes.
+_STORYMASTER_TOOLS_ENTRIES = [
+    _sfn("consolidate",
+         ["consolidate", "what happened", "aftermath", "the fallout", "process events",
+          "while they sleep", "reflect on"],
+         "Consolidate events into per-character impacts (relationships drift, exemplars form).",
+         "consolidation"),
+]
 # Premise interview — a DETERMINISTIC question script. The premise builder feeds these
 # questions to the user IN ORDER (priority DESC), one per turn, growing a running premise
 # from the answers. Each entry's `content` IS the question asked. Reorder/edit/add freely
@@ -683,6 +830,50 @@ _PREMISE_INTERVIEW_ENTRIES = [
 ]
 
 
+# Per-book BEHAVIOURS — the driving prompt the unified chat agent ADOPTS when this book's triggers
+# fire. Stored as a `facet="behavior"` lorebook entry per function book, so behaviour (not just
+# scripts) is lorebook-fetched: the one agent shifts persona by what the writer mentions. Distilled
+# from the retired specialist agents' systems. (entry_id "_behavior", one per book.)
+_BEHAVIORS = {
+    # ONE "Characters" mode — creating, editing AND their relationships are all working on the cast.
+    "_smith_tools": ("Behaviour — characters",
+        ["character", "persona", "cast member", "villain", "protagonist", "npc", "create a character",
+         "add a character", "new character", "someone new", "make a person",
+         "edit character", "change character", "rename character", "update character", "appearance",
+         "looks like", "describe", "their backstory", "their personality",
+         "relationship", "bond", "feels about", "feel toward", "rival", "lover", "ally", "enemy",
+         "friend", "resent", "trust", "dynamic between", "how they feel", "strained", "hostile",
+         "warm", "devoted", "distant", "closer", "reconcile", "drift apart"],
+        "Work on the CAST. NEW people: build REAL, idiosyncratic characters — never archetypes (a "
+        "specific wound, the lie it bred, a want vs a deeper need, a contradiction, a distinct voice), "
+        "with the rich create_character tool; never a bare add. EDITS: keep an existing character "
+        "internally consistent — change only what's asked, concrete over adjectives. RELATIONSHIPS: "
+        "prose in 2-3 words (the dynamic) + a coarse stance for colour, never numbers; bonds are "
+        "asymmetric and specific — how they actually act around each other."),
+    "_location_fns": ("Behaviour — locations",
+        ["location", "place", "setting", "room", "city", "map", "where it happens"],
+        "Build neutral, concrete places — physical look, materials, light, atmosphere; no people or "
+        "events baked in. Stay consistent with the world's tone and era."),
+    "_scene_fns": ("Behaviour — scenes & places",
+        ["scene", "connect scenes", "connect", "link", "navigate", "move to", "area", "sub-scene", "path between"],
+        "Wire scenes and places into a navigable map; anchor character sub-scenes to their places. "
+        "Keep transitions concrete."),
+    "_wardrobe_fns": ("Behaviour — wardrobe",
+        ["outfit", "wardrobe", "clothes", "dress", "costume", "attire", "what they wear"],
+        "Design outfits that express personality, role, status and world — a small coherent set with "
+        "image-ready garment descriptors. Ground every choice in the setting; no generic filler."),
+    "_story_tools": ("Behaviour — shaping the story",
+        ["storyboard", "title", "rename the story", "call the story", "name the story", "premise",
+         "theme", "arc", "plot", "beats", "cover", "outline", "ending"],
+        "Work as a developmental editor: find the truest story latent in the cast — wound, want vs "
+        "need, human inevitable conflict, every beat costs something. Treat the premise as a "
+        "FOUNDATION to build outward from and surprise, not a spec. Concrete over abstract; no "
+        "theme-word salad."),
+    # NOTE: no storymaster mode — the storymaster is a separate consolidation ROLE (runs on
+    # sleep/death), not a Builder mode you'd pick while authoring. Its tools still exist.
+}
+
+
 _STARTER_BOOKS = [
     ("_graph_fns", {"name": "Graph Functions", "category": "function", "rating": "sfw",
                     "description": "Functions the story workshop can call to edit the development graph. "
@@ -697,13 +888,29 @@ _STARTER_BOOKS = [
                         "description": "Functions for editing the story's cast as a chat flow "
                                        "(operate on a {cast:[…]} document)."},
      _CHARACTER_FNS_ENTRIES),
+    ("_relationship_fns", {"name": "Relationship Functions", "category": "function", "rating": "sfw",
+                           "description": "Author the cast's relationship web (rival / mentor / lover…) — "
+                                          "char↔char bonds that also seed runtime relationship state."},
+     _RELATIONSHIP_FNS_ENTRIES),
+    ("_scene_fns", {"name": "Scene Functions", "category": "function", "rating": "sfw",
+                    "description": "Connect scenes/places into a navigable map (source → target), "
+                                   "and render scene images via the agent's image workflow."},
+     _SCENE_FNS_ENTRIES),
+    ("_wardrobe_fns", {"name": "Wardrobe Functions", "category": "function", "rating": "sfw",
+                       "description": "Render outfit images via the Wardrobe agent's image workflow."},
+     _WARDROBE_FNS_ENTRIES),
     ("_story_tools", {"name": "Story Agent Tools", "category": "function", "rating": "sfw",
                       "description": "Pipeline STAGES the Story Agent can run from the workshop "
                                      "(e.g. the storyboarder) — not just live-doc edits."},
      _STORY_TOOLS_ENTRIES),
-    ("_spine_tools", {"name": "Spine Agent Tools", "category": "function", "rating": "sfw",
-                      "description": "Pipeline STAGES the Spine Agent can run (the spine architect)."},
-     _SPINE_TOOLS_ENTRIES),
+    ("_storymaster_tools", {"name": "Storymaster Tools", "category": "function", "rating": "sfw",
+                            "description": "The storymaster's consolidation tool — turns events into "
+                                           "per-character impacts (relationship drift + new exemplars)."},
+     _STORYMASTER_TOOLS_ENTRIES),
+    ("_smith_tools", {"name": "Character Smith Tools", "category": "function", "rating": "sfw",
+                      "description": "The autonomous character creator's tool (create_character) — "
+                                     "one-shot generate a character from a brief and add it to the cast."},
+     _SMITH_TOOLS_ENTRIES),
     ("_premise_interview", {"name": "Premise Interview", "category": "craft", "rating": "sfw",
                             "description": "Deterministic question script the premise builder asks IN "
                                            "ORDER (priority DESC) to draw a story out of you — from "

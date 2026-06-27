@@ -246,7 +246,7 @@ export function isBypassed(id) {
 // A deep clone of the workflow with every bypassed node rewired out: for each of
 // its outputs, consumers are repointed to the node's same-typed input source.
 function executableWorkflow() {
-  const g = JSON.parse(JSON.stringify($state.snapshot(img.workflow) || {}));
+  const g = structuredClone($state.snapshot(img.workflow) || {});
   for (const id of Object.keys(g)) {
     if (!g[id]?._meta?.bypassed) continue;
     // map each output slot -> the node's matching-typed input link (same splice as deleteNode)
@@ -513,7 +513,7 @@ export async function runSweep(param, values) {
   };
   for (const cell of img.test.cells) {
     if (_testCancelled || !img.test) break;
-    const g = JSON.parse(JSON.stringify(snap));
+    const g = structuredClone(snap);
     if (g[param.id]?.inputs) g[param.id].inputs[param.field] = cell.value;
     await _renderCell(cell, base, g);
   }

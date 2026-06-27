@@ -156,6 +156,16 @@ def register(app, ctx):
             return JSONResponse({"error": out["error"]}, status_code=500)
         return out
 
+    # An IMPORTED card (SillyTavern/Chub) is a different kind of thing from a character we
+    # author in the pipeline — external reference material. New imports carry fields.imported;
+    # pre-existing ones are detected by their raw card-field signature (we never set these).
+    _IMPORT_SIG = {"description", "personality", "scenario", "first_mes", "mes_example",
+                   "character_book", "spec", "spec_version", "character_version", "extensions"}
+
+    def _is_imported(c) -> bool:
+        f = c.fields or {}
+        return bool(f.get("imported")) or any(k in f for k in _IMPORT_SIG)
+
     @app.get("/api/characters")
     def characters() -> list:
         char_dir = ctx.char_dir()
@@ -176,6 +186,9 @@ def register(app, ctx):
             {
                 "key": k, "name": c.name, "greeting": c.greeting, "system": c.system,
                 "fields": c.fields,
+                "playable": bool(getattr(c, "playable", False)),
+                "imported": _is_imported(c),
+                "home_scenes": [s.model_dump() for s in getattr(c, "home_scenes", []) or []],
                 "image": c.image.model_dump(),
                 "avatar": f"/api/characters/{k}/avatar" if (char_dir / f"{k}.png").is_file() else None,
                 "reference": f"/api/characters/{k}/reference" if ctx.reference_path(k) else None,
@@ -546,6 +559,10 @@ def register(app, ctx):
                 data["system"] = body.get("system") or ""
             if "greeting" in body:
                 data["greeting"] = body.get("greeting") or None
+            if "playable" in body:
+                data["playable"] = bool(body.get("playable"))
+            if isinstance(body.get("home_scenes"), list):
+                data["home_scenes"] = body["home_scenes"]
             if isinstance(body.get("fields"), dict):
                 data["fields"] = {**(data.get("fields") or {}), **body["fields"]}
             from ...config.schema import Character
@@ -555,6 +572,28 @@ def register(app, ctx):
             return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
         ctx.reload_settings()
         return {"ok": True}
+
+    @app.post("/api/characters/create")
+    def create_character(body: dict):
+        """Create a brand-new character card from scratch (used by the persona wizard).
+        Minimal input — name + optional persona/greeting/fields/playable — persisted as a
+        fresh configs/characters/<key>.yaml via write_character (which derives a unique key
+        and reloads settings). Returns {ok, key, name}."""
+        body = body or {}
+        name = (body.get("name") or "").strip()
+        if not name:
+            return JSONResponse({"error": "name required"}, status_code=400)
+        cdata = {
+            "name": name,
+            "system": body.get("system") or "",
+            "greeting": body.get("greeting") or None,
+            "fields": body.get("fields") if isinstance(body.get("fields"), dict) else {},
+            "playable": bool(body.get("playable")),
+        }
+        try:
+            return ctx.write_character(cdata, None)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not create: {exc}"}, status_code=400)
 
     @app.post("/api/characters/{key}/reference/from-url")
     async def set_reference_from_url(key: str, body: dict):

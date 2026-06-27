@@ -10,21 +10,36 @@
 
   const CATEGORIES = ['world', 'story', 'rpg', 'character', 'craft', 'intimacy', 'guard', 'function'];
 
-  // ── Function books (entries whose content is a graph-op spec) ──────────────
+  // ── Function books (entries that BIND a registered tool to trigger keywords) ──────
+  // A function entry's content is just {fn:"<name>"} (a graph script) or {kind:"stage",fn:"<name>"}
+  // (a pipeline stage). The tool's logic/params/describe live in CODE (Library ▸ Tools); the
+  // entry only chooses WHICH tool + the trigger keywords. So we pick from the catalog, not type.
   let isFnBook = $derived(detail?.book?.category === 'function');
+  let tools = $state({ graph: [], stage: [] });
+  let toolByFn = $derived(Object.fromEntries(
+    [...(tools.graph || []), ...(tools.stage || [])].map((t) => [t.fn, t])));
+
   function parseFn(content) {
-    try { const s = JSON.parse(content); return (s && Array.isArray(s.ops)) ? s : null; }
+    try { const s = JSON.parse(content); return (s && s.fn) ? s : null; }
     catch { return null; }
   }
-  const FN_TEMPLATE = JSON.stringify({
-    fn: 'my_function',
-    describe: 'what this function does to the graph',
-    params: { id: 'a beat id', value: 'new text' },
-    ops: [{ op: 'set', path: '/nodes/#{{id}}/title', value: '{{value}}' }],
-  }, null, 2);
+  function fnValue(content) {
+    const s = parseFn(content);
+    return s ? ((s.kind === 'stage' ? 'stage:' : 'graph:') + s.fn) : '';
+  }
+  function setEntryTool(e, value) {
+    const i = value.indexOf(':');
+    const kind = value.slice(0, i), fn = value.slice(i + 1);
+    e.content = JSON.stringify(kind === 'stage' ? { kind: 'stage', fn } : { fn });
+    // Seed triggers from the tool's defaults when the entry has none yet.
+    const t = toolByFn[fn];
+    if (t && !((e._kw ?? (e.keywords || []).join(', ')).trim()) && (t.keywords || []).length)
+      e._kw = t.keywords.join(', ');
+    touchEntry(e);
+  }
   async function addFunction() {
     const r = await put('/lorebooks/' + encodeURIComponent(selId) + '/entries',
-      { title: 'new_function', keywords: [], content: FN_TEMPLATE, facet: 'fn', priority: 1, enabled: true });
+      { title: 'new function', keywords: [], content: '{}', facet: 'fn', priority: 1, enabled: true });
     if (r.ok && r.data?.entry) {
       const e = r.data.entry; e._open = true;
       detail.entries = [...detail.entries, e];
@@ -69,6 +84,7 @@
     await loadBooks();
     await loadBinCount();
     try { presets = (await get('/presets')).presets || []; } catch { presets = []; }
+    try { tools = await get('/tools'); } catch { tools = { graph: [], stage: [] }; }
     loading = false;
   });
 
@@ -409,8 +425,9 @@
         <button class="addent" onclick={addEntry}>＋ Add entry</button>
       </div>
       {#if isFnBook}
-        <p class="fnhelp">Each entry is a graph FUNCTION: its content is a JSON op-spec ({"{ fn, describe, params, ops }"}),
-          its keywords are the trigger terms the workshop matches. The model fills <code>{'{{param}}'}</code> placeholders.</p>
+        <p class="fnhelp">Each entry BINDS a registered <a href="/library/tools">tool</a> to trigger keywords:
+          pick the tool, set the terms that offer it. The tool's logic &amp; params live in code — the model
+          calls it by name when the writer asks. Keywords are how the workshop knows to offer it this turn.</p>
       {/if}
       <div class="entries">
         {#each detail.entries as e, ei (e.id)}
@@ -418,8 +435,8 @@
             <div class="entrow" onclick={() => { e._open = !e._open; entSel = ei; detail.entries = detail.entries; }}>
               <span class="caret">{e._open ? '▾' : '▸'}</span>
               <span class="etitle">{e.title || '(untitled)'}</span>
-              {#if isFnBook}{@const fn = parseFn(e.content)}
-                <span class="fnbadge" class:bad={!fn}>{fn ? 'ƒ ' + (fn.fn || e.title) : '⚠ invalid'}</span>
+              {#if isFnBook}{@const s = parseFn(e.content)}{@const known = s && toolByFn[s.fn]}
+                <span class="fnbadge" class:bad={!known}>{known ? 'ƒ ' + s.fn : (s ? '⚠ unknown tool' : '⚠ pick a tool')}</span>
               {/if}
               <span class="ekw">{(e.keywords || []).slice(0, 4).join(', ')}{(e.keywords || []).length > 4 ? '…' : ''}</span>
               <span class="emsg">{e._msg || ''}</span>
@@ -436,15 +453,42 @@
                       <option value="input">input (transcript)</option>
                       <option value="output">output (the reply)</option>
                     </select></label>
-                  <label class="sel">Script
-                    <select value={e.script || ''} onchange={(ev) => { e.script = ev.target.value; touchEntry(e); }}>
-                      <option value="">— none (inject text) —</option>
-                      <option value="fallback">fallback (re-run on fallback model)</option>
-                    </select></label>
+                  {#if !isFnBook}
+                    <label class="sel">Script
+                      <select value={e.script || ''} onchange={(ev) => { e.script = ev.target.value; touchEntry(e); }}>
+                        <option value="">— none (inject text) —</option>
+                        <option value="fallback">fallback (re-run on fallback model)</option>
+                      </select></label>
+                  {/if}
                 </div>
-                <label>{isFnBook ? 'Function spec (JSON)' : ((e.script && !e.content) ? 'Text (optional)' : 'Content')}
-                  <textarea class="grow" class:mono={isFnBook} rows="4" bind:value={e.content} use:autosize={e.content} oninput={() => touchEntry(e)}
-                    placeholder={isFnBook ? '{ "fn": "...", "describe": "...", "params": {...}, "ops": [...] }' : (e.script ? 'optional text to also return when this fires' : 'the lore text injected when triggered')}></textarea></label>
+                {#if isFnBook}
+                  {@const sel = parseFn(e.content)}{@const tool = sel && toolByFn[sel.fn]}
+                  <label>Tool
+                    <select value={fnValue(e.content)} onchange={(ev) => setEntryTool(e, ev.target.value)}>
+                      <option value="" disabled>— pick a tool —</option>
+                      <optgroup label="Graph scripts">
+                        {#each tools.graph as t}<option value={'graph:' + t.fn}>{t.fn}</option>{/each}
+                      </optgroup>
+                      <optgroup label="Stage tools">
+                        {#each tools.stage as t}<option value={'stage:' + t.fn}>{t.fn}</option>{/each}
+                      </optgroup>
+                    </select></label>
+                  {#if tool}
+                    <div class="toolinfo">
+                      <p class="tdesc">{tool.describe}</p>
+                      {#if tool.params && Object.keys(tool.params).length}
+                        <ul class="tparams">{#each Object.entries(tool.params) as [k, v]}<li><code>{k}</code> <span>{v}</span></li>{/each}</ul>
+                      {/if}
+                      <a class="tlink" href="/library/tools">View in Tools ↗</a>
+                    </div>
+                  {:else if sel}
+                    <div class="toolwarn">⚠ “{sel.fn}” isn’t a registered tool — pick one above.</div>
+                  {/if}
+                {:else}
+                  <label>{(e.script && !e.content) ? 'Text (optional)' : 'Content'}
+                    <textarea class="grow" rows="4" bind:value={e.content} use:autosize={e.content} oninput={() => touchEntry(e)}
+                      placeholder={e.script ? 'optional text to also return when this fires' : 'the lore text injected when triggered'}></textarea></label>
+                {/if}
                 <div class="entopts">
                   <label class="num">Priority<input type="number" bind:value={e.priority} oninput={() => touchEntry(e)} /></label>
                   <label class="num">Facet<input bind:value={e.facet} oninput={() => touchEntry(e)} placeholder="(group; 1 per turn)" /></label>
@@ -591,7 +635,15 @@
     color: rgba(100,210,130,.95); background: rgba(100,210,130,.12); border: 1px solid rgba(100,210,130,.25); }
   .fnbadge.bad { color: var(--bad); background: rgba(255,122,122,.1); border-color: rgba(255,122,122,.3); }
   .fnhelp { font-size: 11.5px; color: var(--muted); line-height: 1.5; margin: 2px 0 6px; }
+  .fnhelp a { color: var(--accent); }
   .fnhelp code { font-family: ui-monospace, monospace; background: var(--elev); padding: 0 4px; border-radius: 4px; }
+  .toolinfo { border: 1px solid var(--border); border-left: 2px solid var(--accent); border-radius: 8px; background: var(--elev); padding: 8px 11px; display: flex; flex-direction: column; gap: 6px; }
+  .tdesc { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.45; }
+  .tparams { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+  .tparams li { font-size: 11.5px; color: var(--faint); }
+  .tparams code { font-family: ui-monospace, monospace; color: var(--text); background: var(--elev-2); padding: 0 4px; border-radius: 4px; margin-right: 4px; }
+  .tlink { font-size: 11px; color: var(--accent); align-self: flex-start; }
+  .toolwarn { font-size: 12px; color: var(--bad, #e88); }
   textarea.mono { font-family: ui-monospace, monospace; font-size: 12px; }
   .ekw { color: var(--faint); font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .emsg { color: var(--accent); font-size: 12px; }

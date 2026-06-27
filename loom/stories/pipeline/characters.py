@@ -30,14 +30,14 @@ def _name_tokens(s: str) -> list[str]:
 
 
 def extract_protagonist(provider, *, name: str, persona: str, extras: dict | None = None,
-                        systems: dict | None = None, on_event=None) -> dict:
+                        systems: dict | None = None, on_event=None, craft: str = "") -> dict:
     """Distill the imported source card into one clean base character card.
     Returns {name, persona, appearance, role}."""
     if on_event:
         on_event({"type": "phase", "label": f"Distilling the base card — {name}"})
     dl = (lambda t: on_event({"type": "delta", "text": t})) if on_event else None
     card = _card_context(name, persona, extras or {})
-    out = _call(provider, _sys(systems or {}, "protagonist"),
+    out = _call(provider, _sys(systems or {}, "protagonist") + (("\n\n" + craft) if craft else ""),
                 f"{card}\n\nNormalize this into ONE clean base character card for the main character.",
                 PROTAGONIST_SCHEMA, "protagonist", on_delta=dl)
     return {"name": out.get("name") or name, "persona": out.get("persona") or (persona or ""),
@@ -76,7 +76,7 @@ def revise_character(provider, *, name: str, persona: str, role: str = "", appea
 
 def extract_characters(provider, *, name: str, persona: str, board: dict,
                        extras: dict | None = None, systems: dict | None = None,
-                       reference_card: str = "", on_event=None) -> dict:
+                       reference_card: str = "", on_event=None, craft: str = "") -> dict:
     """Extract and generate supporting cast cards from the storyboard.
     Returns {npcs: [{name, persona, appearance, role}]}."""
     pl = (name or "").lower().strip()
@@ -125,7 +125,7 @@ def extract_characters(provider, *, name: str, persona: str, board: dict,
     if reference_card:
         ref = ("\n\nBASE CHARACTER CARD (the MAIN CHARACTER) — write THIS supporting character "
                "in the EXACT same structure, section headings, and depth:\n" + reference_card)
-    sys_p = _sys(systems or {}, "characters")
+    sys_p = _sys(systems or {}, "characters") + (("\n\n" + craft) if craft else "")
     logline = board.get("logline", "")
 
     # Phase 1 — cast roster: distinct full names + heritage decided for the whole cast together.
@@ -266,9 +266,10 @@ def compose_expressions(provider, persona: str) -> dict:
               "properties": {k: {"type": "string"} for k in EMOTION_KEYS}}
     listing = "\n".join(f"- {e['key']} ({e['label']}): cues — {e['hint']}" for e in EMOTIONS)
     system = _EXPRESSION_SYSTEM + (
-        "\n\nYou are given a FIXED list of emotions. For EVERY emotion key, output how THIS "
-        "character's face shows it as 3-7 booru expression tags (face/eyes/eyebrows/mouth + "
-        "emotion tags), personalized to the persona. Return exactly one field per emotion key.")
+        "\n\nYou are given a FIXED list of base emotions. For EVERY emotion key, output how THIS "
+        "character's face shows it as 3-7 booru expression tags (face/eyes/eyebrows/mouth + emotion "
+        "tags) — the base emotion TINGED by their personality (e.g. coy happy, sly happy, guarded "
+        "sad). Return exactly one field per emotion key.")
     prompt = f"CHARACTER PERSONA:\n{persona}\n\nEMOTIONS (give a face prompt for each):\n{listing}"
     try:
         data = provider.generate_text(system=system, prompt=prompt, emits=schema).data or {}

@@ -3,8 +3,10 @@
   import { chars, loadChars, charName } from '$lib/characters.svelte.js';
   import { stories, loadStory } from '$lib/stories.svelte.js';
   import CastDashboard from '$lib/components/story/CastDashboard.svelte';
+  import CharacterCatalogue from '$lib/components/story/CharacterCatalogue.svelte';
 
   let st = $derived(stories.current);
+  let view = $state('dashboard');   // 'dashboard' | 'catalogue'
   // ?c=<key> (from the side-menu cast tier) selects that member in the carousel; no separate page.
   // ?job=<id> passed by the story wizard after firing plan-wardrobe-all immediately on save.
   let selKey = $derived(page.url.searchParams.get('c') || '');
@@ -29,11 +31,28 @@
 </script>
 
 <div class="page castpage"><div class="col full fillh">
-  <CastDashboard storyKey={st.key} {cast} selectKey={selKey} onChanged={reload} initialJob={jobParam} />
+  <div class="view-toggle">
+    <button class="vt-btn" class:active={view === 'dashboard'} onclick={() => view = 'dashboard'}>Dashboard</button>
+    <button class="vt-btn" class:active={view === 'catalogue'} onclick={() => view = 'catalogue'}>Catalogue</button>
+  </div>
+  {#if view === 'dashboard'}
+    <CastDashboard storyKey={st.key} {cast} selectKey={selKey} onChanged={reload} initialJob={jobParam} />
+  {:else}
+    <CharacterCatalogue storyKey={st.key} {cast} locations={st.locations || []} onChanged={reload} />
+  {/if}
 </div></div>
 
 <style>
   /* Override global .page padding so the snap container can fill flush */
   .castpage { padding: 0; overflow: hidden; }
-  .fillh { height: 100%; }
+  .fillh { height: 100%; position: relative; }
+
+  /* Floating Dashboard / Catalogue switch */
+  .view-toggle { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 40;
+                 display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+                 background: var(--panel); box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+  .vt-btn { padding: 5px 14px; font-size: 12.5px; font-weight: 600; background: none; border: none;
+            box-shadow: none; color: var(--faint); cursor: pointer; }
+  .vt-btn:hover { color: var(--text); background: var(--elev); filter: none; }
+  .vt-btn.active { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--panel)); filter: none; }
 </style>

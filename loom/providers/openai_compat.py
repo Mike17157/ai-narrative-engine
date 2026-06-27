@@ -9,7 +9,7 @@ Model `options`:
     base_url:   default "https://openrouter.ai/api/v1"
     api_key:    bearer key (falls back to OPENROUTER_API_KEY / OPENAI_API_KEY)
     model:      e.g. "anthropic/claude-3.5-sonnet", "openai/gpt-4o-mini"
-    max_tokens: int (default 1024)
+    max_tokens: int (default 40000)
 
 Sampling controls (any subset; omitted → the model/provider default): temperature,
 top_p, top_k, frequency_penalty, presence_penalty, repetition_penalty, min_p. These
@@ -21,7 +21,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Callable
+
+# Parses OpenRouter's context-overflow 400 so we can shrink max_tokens to fit and retry. We need the
+# TOTAL requested (text + tool-schema + output), not just text — the tool-calling path adds ~1k of
+# tool input the text path doesn't. "maximum context length is 32768 tokens. However, you requested
+# about 33474 tokens (169 of text input, 970 of tool input, 32335 in the output)."
+_CTX_RE = re.compile(r"maximum context length is (\d+) tokens.*?requested about (\d+) tokens", re.I | re.S)
+# Learned safe output cap per model, so a generous ceiling (40k) doesn't re-fail on every call to a
+# smaller-context model (e.g. qwen-2.5's 32k). Populated the first time a model rejects an oversized cap.
+_CTX_CAP: dict[str, int] = {}
 
 import httpx
 
@@ -38,7 +48,11 @@ class OpenAICompatProvider:
             or ""
         )
         self.model: str = options.get("model", "openai/gpt-4o-mini")
-        self.max_tokens: int = int(options.get("max_tokens", 1024))
+        # Default ceiling on OUTPUT tokens. It's just a cap (the model stops when done), so a
+        # generous default avoids silently truncating large structured outputs into invalid JSON.
+        # ponytail: 40k is a ceiling, not a reservation; if a provider rejects a too-large cap for a
+        # given model, set a smaller per-preset `params.max_tokens`.
+        self.max_tokens: int = int(options.get("max_tokens", 40000))
         # Optional sampling controls — only those explicitly set are forwarded straight to
         # /chat/completions (OpenRouter forwards model-specific ones where supported).
         self.sampling: dict[str, Any] = {}
@@ -82,12 +96,45 @@ class OpenAICompatProvider:
             h["X-Title"] = "Loom"
         return h
 
-    def generate_text(
+    def generate_text(self, **kwargs) -> TextResult:
+        """max_tokens is a desired CEILING (default 40k), not a reservation. Two realities a generous
+        ceiling must survive on OpenRouter: (1) a model's context may be SMALLER than the ceiling and
+        OpenRouter REJECTS (doesn't clamp) oversized requests — we learn the fit per model (`_CTX_CAP`)
+        so it only fails once, ever; (2) busy/free models RATE-LIMIT (429) — we back off and retry."""
+        import time
+        cap = _CTX_CAP.get(self.model)
+        if cap and cap < self.max_tokens:
+            self.max_tokens = cap   # use the previously-learned fit; no wasted failed request
+        last: Exception | None = None
+        for attempt in range(6):
+            try:
+                return self._generate_once(**kwargs)
+            except RuntimeError as exc:
+                last = exc
+                s = str(exc)
+                m = _CTX_RE.search(s)
+                if m:                                   # context overflow → shrink to fit, remember, retry
+                    ctx_max, requested = int(m.group(1)), int(m.group(2))
+                    overflow = requested - ctx_max      # how far over we were (covers text + tool input)
+                    safe = max(256, self.max_tokens - overflow - 256) if overflow > 0 else self.max_tokens
+                    if safe < self.max_tokens:
+                        _CTX_CAP[self.model] = min(_CTX_CAP.get(self.model, safe), safe)
+                        self.max_tokens = safe
+                        continue
+                    raise
+                if "429" in s or "rate" in s.lower() or "temporarily" in s.lower() or "overloaded" in s.lower():
+                    time.sleep(min(30, 3 * 2 ** attempt))   # transient throttle → exponential back off
+                    continue
+                raise                                   # anything else is a real error
+        raise last  # exhausted retries
+
+    def _generate_once(
         self,
         *,
         system: str | None,
         prompt: str,
         emits: dict[str, Any] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], None] | None = None,
         images: list[str] | None = None,
         cancel: Callable[[], bool] | None = None,
@@ -110,6 +157,26 @@ class OpenAICompatProvider:
         body: dict[str, Any] = {"model": self.model, "messages": messages,
                                 "max_tokens": self.max_tokens, **self.sampling}
         url = f"{self.base_url}/chat/completions"
+
+        # Native tool-use path — OpenAI-style `tools` + `tool_calls`. Non-streaming
+        # (tool calls aren't text deltas); returns the calls for the caller to apply.
+        if tools:
+            body["tools"] = [{"type": "function", "function": {
+                "name": t["name"], "description": t.get("description", ""),
+                "parameters": t["parameters"]}} for t in tools]
+            resp = httpx.post(url, json=body, headers=self._headers(), timeout=120)
+            if resp.status_code >= 400:
+                raise RuntimeError(self._err(resp))
+            msg = resp.json()["choices"][0]["message"]
+            calls: list[dict] = []
+            for tc in (msg.get("tool_calls") or []):
+                fn = tc.get("function") or {}
+                args = fn.get("arguments")
+                if isinstance(args, str):
+                    try: args = json.loads(args) if args.strip() else {}
+                    except (ValueError, TypeError): args = {}
+                calls.append({"fn": fn.get("name"), "params": args if isinstance(args, dict) else {}})
+            return TextResult(text=msg.get("content") or "", tool_calls=calls)
 
         # Structured path — OpenAI-style json_schema response_format.
         if emits is not None:

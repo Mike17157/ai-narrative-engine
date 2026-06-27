@@ -47,12 +47,15 @@ _OUTFIT_SYSTEM = (
     "Do NOT add art-style, medium or quality words. No trailing period."
 )
 _EXPRESSION_SYSTEM = (
-    "You choose facial-expression cues for an anime character reacting with a given EMOTION, "
-    "personalized to their persona (a stoic character shows subtle expressions; an energetic one is "
-    "exaggerated). Output ONE line of 3-7 comma-separated EXPRESSION cues — facial expression, eyes, "
-    "eyebrows, mouth, and emotion-specific cues (blush, tears, sweatdrop, wavy mouth, etc.), written "
-    "as short descriptive phrases. Do NOT restate hair, clothing, body, background, framing or the "
-    "character's name. No trailing period."
+    "You choose facial-expression cues for an anime character reacting with a given EMOTION. "
+    "TINGE the base emotion with THIS character's personality — the same base feeling reads "
+    "differently per person: a coy character's 'happy' is a coy/bashful happy, a sly one's is a "
+    "sly/smug happy, a guarded one's is a restrained half-smile. Pick the personality flavour the "
+    "persona implies and let it shape the cues (a stoic shows subtle expressions; an energetic one "
+    "is exaggerated). Output ONE line of 3-7 comma-separated EXPRESSION cues — facial expression, "
+    "eyes, eyebrows, mouth, and emotion-specific cues (blush, tears, sweatdrop, wavy mouth, smirk, "
+    "averted gaze, etc.), written as short descriptive phrases. Do NOT restate hair, clothing, body, "
+    "background, framing or the character's name. No trailing period."
 )
 
 # Persona (the {{user}} side) generation — given the user's long-form self-description, produce BOTH
@@ -254,6 +257,12 @@ PLAY_SCHEMA = {
                                            "(listed in the system prompt under their name)"},
             }}},
         "movement": {"type": "boolean"},
+        # Player lifecycle: the only thing that triggers memory consolidation. "sleeping" → the
+        # cast consolidates the scenes they witnessed (a dream/rest pass); "dead" → the storymaster
+        # sends the player back to a significant moment. Report "active" on every normal turn.
+        "player_status": {"type": "string", "enum": ["active", "sleeping", "dead"],
+                          "description": "set to 'sleeping' when the player character sleeps/rests, "
+                                         "'dead' when they die, otherwise 'active'"},
     },
 }
 

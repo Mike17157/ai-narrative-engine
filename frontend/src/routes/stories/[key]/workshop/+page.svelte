@@ -63,6 +63,7 @@
         character={charKey}
         {charName}
         sessionId={`story-${key}`}
+        storyKey={key}
         title="Story Workshop"
         subtitle={story.name}
         initialGraph={storyToGraph(story)}

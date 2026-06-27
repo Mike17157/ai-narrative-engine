@@ -35,7 +35,6 @@ from .services import prompts as _prompts
 # (see configs/image_roles.json). No role is hard-pinned to a workflow anymore —
 # image_roles.json is the single source of truth for role → workflow mapping.
 IMAGE_ROLES = ("base", "sprite", "scene", "chat")
-_ROLE_PINNED: dict[str, str] = {}
 
 
 def _parse_role_entry(v) -> tuple[str, dict]:
@@ -52,48 +51,6 @@ _ROLE_LABELS = {
 }
 
 _IMG_URL_RE = re.compile(r"https?://[^\s\"'<>)]+?\.(?:png|jpe?g|webp|gif)", re.IGNORECASE)
-
-
-def _retrieve_palette(draft: list, kind: str) -> tuple[dict, list]:
-    """The composer's pass-2 retrieval: a faceted palette of real, compatible tags + a few intact
-    real bundles for coherence. Primary source is the tag similarity GRAPH (navigated from the
-    draft); falls back to the one-hop PMI palette, then just the soup sample. `kind` in
-    {"appearance","clothing"}."""
-    palette: dict = {}
-    lines: list = []
-    if not draft:
-        return palette, lines
-    try:
-        from ..tags import get_graph
-        g = get_graph()
-        if g.ready:
-            palette = g.palette(draft, kind, per_facet=24)
-    except Exception:  # noqa: BLE001 — graph unavailable: fall back below
-        palette = {}
-    try:
-        from ..tags import get_cooccur
-        ix = get_cooccur()
-        if ix.ready:
-            if not palette:
-                palette = ix.faceted_palette(draft, kind, per_facet=24)
-            sampler = ix.sample_appearance_lines if kind == "appearance" else ix.sample_clothing_lines
-            lines = sampler(draft, n=8)
-    except Exception:  # noqa: BLE001
-        pass
-    return palette, lines
-
-
-def _palette_block(palette: dict, sample_lines: list) -> str:
-    """Render a faceted PMI palette (+ a few coherent real examples) as the grounding block for a
-    composer's 2nd pass — an organized menu of real booru tags the model constructs from."""
-    facet_lines = "\n".join(f"  {f.upper()}: {', '.join(tags)}"
-                            for f, tags in palette.items() if tags)
-    block = ("PALETTE — real Danbooru tags that co-occur with your draft, grouped by facet (these "
-             "are VALID tags; draw RICHLY from them where they fit this character):\n" + facet_lines)
-    if sample_lines:
-        block += ("\n\nA FEW REAL EXAMPLES (whole real characters, for coherent combinations):\n"
-                  + "\n".join(f"- {ln}" for ln in sample_lines))
-    return block
 
 
 class AppContext:
@@ -336,10 +293,8 @@ class AppContext:
         return {"detailer": bool(f.get("img_detailer", True)), "upscale": up, "highrez": up}
 
     def role_default(self, role: str) -> str | None:
-        """What a role resolves to with NO override: the role-pinned workflow if it exists,
-        else the active image connection's model, else the user.yaml default."""
-        if role in _ROLE_PINNED and _ROLE_PINNED[role] in self.base_settings.models:
-            return _ROLE_PINNED[role]
+        """What a role resolves to with NO override: the active image connection's model,
+        else the user.yaml default."""
         conn = self.store.active("image")
         return (conn.model if conn else None) or self.user.defaults.get("image_model")
 
@@ -443,26 +398,26 @@ class AppContext:
     def author_provider(self, model_sel: str | None, params: dict | None = None):
         """Text provider for the Story Builder — an explicit (selectable) author
         model if given, else the active chat connection. Always raises the token
-        ceiling (the default 1024 truncates a stage's structured JSON). A config's
-        `params` (temperature/…) override, so an explicit max_tokens wins over 4096."""
+        ceiling (a small default truncates a stage's structured JSON). A config's
+        `params` (temperature/…) override, so an explicit max_tokens wins over the default."""
         from ..providers.registry import build_provider
 
         params = params or {}
         s = self.effective_settings()
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
             md = s.models[model_sel].model_copy()
-            md.options = {**md.options, "max_tokens": 4096, **params}
+            md.options = {**md.options, "max_tokens": 40000, **params}
             return build_provider(md)
         conn = self.store.active("text")
         if conn is None:
             return None
-        opts = {**conn.to_model_options(), "max_tokens": 4096, **params}
+        opts = {**conn.to_model_options(), "max_tokens": 40000, **params}
         if model_sel:
             opts["model"] = model_sel
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
 
     def stage_provider(self, stage: str | None, model_override: str | None = None,
-                       max_tokens: int = 4096):
+                       max_tokens: int = 40000):
         """The ONE model-resolution chokepoint for a pipeline stage. A STAGE LOREBOOK bound
         to a PRESET supplies the stage's model + connection + params (so any stage can run
         local Ollama, etc., like every chat surface). Falls back to the legacy
@@ -868,4 +823,64 @@ class AppContext:
         path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
         self.reload_settings()
         return f"/api/stories/{key}/bg/{loc}.png"
+
+    def update_story_fields(self, key: str, fields: dict) -> None:
+        """Patch top-level fields onto a saved story's YAML (e.g. name, background) + reload.
+        VALIDATES the merged story (pydantic) BEFORE writing, so a bad field shape raises
+        instead of corrupting the YAML on disk. Raises FileNotFoundError for a draft (no YAML)."""
+        from ..config.schema import Story
+        safe = re.sub(r"[^\w\-]+", "", key)
+        path = self.story_dir() / f"{safe}.yaml"
+        if not path.is_file():
+            raise FileNotFoundError(key)
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data.update(fields)
+        # Self-heal a DANGLING start: if it points at a location that no longer exists, drop it —
+        # otherwise the whole-Story validator would block every unrelated edit (e.g. adding a location).
+        loc_ids = {l.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)}
+        if data.get("start") and data["start"] not in loc_ids:
+            data["start"] = None
+        Story(**data)   # validate the merged result FIRST — never write a corrupt story
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self.reload_settings()
+
+    def cast_doc_to_members(self, cast_list) -> list[dict]:
+        """Convert an inline cast doc ({name,role,persona,primary}) into Story CastMember refs
+        ({character,primary,outfit?}), CREATING a character card for any member that isn't
+        already a reference. Idempotent by name — an existing character of the same name is
+        reused, never duplicated — and each member is stamped with its resolved `character`
+        key so a re-persist won't create a second card. This is how the cast tools persist:
+        authoring an inline character actually mints a card via write_character."""
+        members: list[dict] = []
+        for c in cast_list or []:
+            if not isinstance(c, dict):
+                continue
+            key = (c.get("character") or "").strip()
+            if not key:
+                name = (c.get("name") or "").strip()
+                if not name:
+                    continue
+                key = next((k for k, ch in self.base_settings.characters.items()
+                            if (getattr(ch, "name", "") or "").strip().lower() == name.lower()), "")
+                if not key:   # mint a new card from the inline persona
+                    res = self.write_character(
+                        {"name": name, "system": c.get("persona") or "",
+                         "fields": {"role": c.get("role") or ""}}, None)
+                    key = (res or {}).get("key", "") if isinstance(res, dict) else ""
+                c["character"] = key   # stamp it back so the doc becomes a reference (idempotent)
+            if key:
+                m = {"character": key, "primary": bool(c.get("primary"))}
+                if c.get("outfit"):
+                    m["outfit"] = c["outfit"]
+                members.append(m)
+        return members
+
+    def save_story_bg(self, key: str, png: bytes) -> str:
+        """Write a story's COVER image and record it as the story background. Mirrors
+        save_location_bg but for the whole-story cover (served at /api/stories/{key}/bg/_cover.png)."""
+        d = self.story_bg_dir(key); d.mkdir(parents=True, exist_ok=True)
+        (d / "_cover.png").write_bytes(png)
+        url = f"/api/stories/{key}/bg/_cover.png"
+        self.update_story_fields(key, {"background": url})
+        return url
 

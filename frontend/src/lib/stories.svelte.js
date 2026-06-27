@@ -19,7 +19,7 @@ const blankWizard = () => ({
   start: null,
   arcs: [],                // OPTIONAL themed arcs woven from the cast
   // Legacy fields kept so old drafts still load (unused by the lean flow):
-  spine: null, board: null, cast: null, intended_ending: '', workshopPremise: '',
+  board: null, cast: null, intended_ending: '', workshopPremise: '',
   draftId: null,           // server-side draft ID once persisted
   existingStoryKey: null,  // if set, save overwrites this story instead of creating a new one
   sessionId: null,         // server-side console checkpoint id (consult/graph), persists across reloads
@@ -277,7 +277,7 @@ export function regenStory(st) {
 
 // --- edit page (clone of current; debounced auto-save) -------------------- //
 export function editStory() {
-  stories.editing = JSON.parse(JSON.stringify(stories.current));
+  stories.editing = structuredClone(stories.current);
   stories.editing.themes = stories.editing.themes || [];
   stories.editing.locations = stories.editing.locations || [];
   stories.editing.storyboard = stories.editing.storyboard || { logline: '', beats: [] };
@@ -288,7 +288,8 @@ export function editStory() {
 let editSaveTimer = null, editSaving = false;
 function editPayload(e) {
   return { name: e.name, premise: e.premise, tone: e.tone, themes: e.themes,
-           storyboard: e.storyboard, cast: e.cast, locations: e.locations, start: e.start };
+           storyboard: e.storyboard, cast: e.cast, locations: e.locations, start: e.start,
+           intended_ending: e.intended_ending };
 }
 
 // Persist edits made directly to the loaded story (e.g. a flat-beat card edited

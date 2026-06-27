@@ -53,11 +53,14 @@ def register(app, ctx):
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
         spine = body.get("spine") or {}
+        from .pipeline import grounding as _G
+        _prem = (body.get("premise") or "").strip()
         system, prompt = storyboard_inputs(name=ch.name, persona=ch.system,
                                            extras=ctx.card_extras(ch, body["character"]),
                                            systems=systems,
-                                           premise=(body.get("premise") or "").strip(),
-                                           spine=spine)
+                                           premise=_prem,
+                                           spine=spine,
+                                           craft=_G.craft_notes(ctx.root, f"{_prem} {ch.system or ''}"[:600], k=6, section="character"))
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -255,85 +258,6 @@ def register(app, ctx):
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
-    @app.post("/api/stories/spine")
-    async def story_spine(body: dict):
-        """Generate the EMOTIONAL SPINE for a character — wound / lie / truth / beats.
-        Streams delta text while the model writes, then emits a final `spine` event.
-
-        Body: { character: str, premise?: str, intended_ending?: str }
-        """
-        import asyncio
-        import threading
-
-        from fastapi.concurrency import run_in_threadpool
-        from fastapi.responses import StreamingResponse
-
-        from .pipeline._helpers import SPINE_SCHEMA, _card_context, _sys
-
-        body = body or {}
-        ch = ctx.base_settings.characters.get(body.get("character"))
-        if ch is None:
-            return JSONResponse({"error": "no such character"}, status_code=404)
-
-        provider, systems = ctx.builder_ctx(body, "spine")
-        if provider is None:
-            return JSONResponse({"error": systems}, status_code=400)
-
-        extras = ctx.card_extras(ch, body["character"])
-        card = _card_context(ch.name, ch.system, extras)
-        premise = (body.get("premise") or "").strip()
-        intended_ending = (body.get("intended_ending") or "").strip()
-        system = _sys(systems, "spine")
-
-        parts = [f"CHARACTER CARD:\n{card}"]
-        if premise:
-            parts.append(f"STORY PREMISE:\n{premise}")
-        if intended_ending:
-            parts.append(f"INTENDED ENDING:\n{intended_ending}")
-        parts.append(
-            "Read this character deeply. Reveal the WOUND already present in who they are. "
-            "Derive the LIE they tell themselves because of it. Find the TRUTH they must accept. "
-            "Map the emotional beats — the psychological stations — that would take them from lie to truth. "
-            "Output structured JSON only."
-        )
-        prompt = "\n\n".join(parts)
-
-        loop = asyncio.get_running_loop()
-        q: asyncio.Queue = asyncio.Queue()
-        cancel_evt = threading.Event()
-
-        def on_delta(t: str):
-            loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t})
-
-        async def run():
-            try:
-                res = await run_in_threadpool(lambda: provider.generate_text(
-                    system=system, prompt=prompt, emits=SPINE_SCHEMA,
-                    on_delta=on_delta, cancel=cancel_evt.is_set))
-                if not cancel_evt.is_set():
-                    spine = res.data or {}
-                    if not spine:
-                        loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": "no spine produced"})
-                    else:
-                        loop.call_soon_threadsafe(q.put_nowait, {"type": "spine", "spine": spine})
-            except Exception as exc:  # noqa: BLE001
-                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
-            loop.call_soon_threadsafe(q.put_nowait, None)
-
-        asyncio.create_task(run())
-
-        async def events():
-            try:
-                while True:
-                    ev = await q.get()
-                    if ev is None:
-                        break
-                    yield f"data: {json.dumps(ev)}\n\n"
-            finally:
-                cancel_evt.set()
-            yield 'data: {"type": "done"}\n\n'
-
-        return StreamingResponse(events(), media_type="text/event-stream")
 
     # ── Character psyche scaffold — build ONE character through a conversation ──────
     # Exemplars (life/saying/reaction) accrete into the character's own lorebook
@@ -589,8 +513,10 @@ def register(app, ctx):
         provider, _systems = ctx.builder_ctx(body, "arc")
         if provider is None:
             return JSONResponse({"error": _systems}, status_code=400)
+        from .pipeline import grounding as _G
+        _arc_craft = _G.craft_notes(ctx.root, f"theme arc structure climax ending {body.get('premise') or ''}"[:400], k=6, section="arc")
         try:
-            res = provider.generate_text(system=ARCS_SYSTEM,
+            res = provider.generate_text(system=ARCS_SYSTEM + (("\n\n" + _arc_craft) if _arc_craft else ""),
                                          prompt=arcs_prompt(cast, body.get("premise") or ""),
                                          emits=ARCS_SCHEMA)
         except Exception as exc:  # noqa: BLE001
@@ -1018,13 +944,15 @@ def register(app, ctx):
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
         extras = ctx.card_extras(ch, body["character"])
+        from .pipeline import grounding as _G
+        _craft = _G.craft_notes(ctx.root, (ch.system or ch.name or "")[:600], k=6, section="character")
         try:
             base = extract_protagonist(provider, name=ch.name, persona=ch.system or "",
-                                       extras=extras, systems=systems)
+                                       extras=extras, systems=systems, craft=_craft)
             out = extract_characters(provider, name=base["name"], persona=base["persona"],
                                      board=body.get("board") or {}, extras=extras,
                                      systems=systems,
-                                     reference_card=base["persona"])
+                                     reference_card=base["persona"], craft=_craft)
             npcs = out.get("npcs", [])
             # ONE uniform cast list — protagonist first, flagged `primary`. Compose the SUPERIOR ✨
             # image description (_compose_base_prompt: FEATURES_SCHEMA → Danbooru co-occurrence) for
@@ -1227,14 +1155,9 @@ def register(app, ctx):
         # The model sees the full history and must reply to the last user turn.
         prompt = "\n\n".join(transcript_parts) if transcript_parts else "User: Help me develop a story for this character."
 
-        # Auto-inject the STAGE-TOOL protocol into the post-history slot (the tail, the last thing
-        # before the reply → strongest steer): tell the agent which pipeline stages it can run and
-        # the sentinel to request one. The model only emits it when the writer actually asks; the
-        # console detects the sentinel, calls /api/stories/run-stage, and strips it from the prose.
-        from . import stage_tools as _ST
-        _protocol = _ST.protocol_text(_ST.catalog())
-        if _protocol:
-            prompt = prompt + "\n\n[" + _protocol + "]"
+        # (Stage/action tools — storyboard, generate_image — are no longer requested via a text
+        # sentinel here. They ride the SAME native tool-calling pass as graph tools: the console's
+        # graph-ops call offers every tool and the model calls them with params. See graph_ops.py.)
 
         # Context-budget breakdown for the console's usage dial (estimate ~4 chars/token).
         from ..server.services.lorebook import estimate_tokens
@@ -1293,36 +1216,57 @@ def register(app, ctx):
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
+    @app.get("/api/agent/modes")
+    def agent_modes():
+        """The selectable agent MODES — each function book that carries a behaviour entry. The chat
+        can force one explicitly (reliable) instead of relying on keyword trigger detection."""
+        from . import graph_ops as GO
+        return {"modes": GO.list_modes(ctx.root)}
+
     @app.post("/api/stories/graph-ops")
     def story_graph_ops(body: dict):
         """Data-driven graph FUNCTIONS. Attached *function books* (lorebooks whose entries
         carry a function spec) define operations on the development graph. The transcript's
-        trigger terms OFFER the relevant functions; the model DECIDES which to call (emits
-        `graph_ops`); we apply them to the working graph and return it. See graph_ops.py."""
+        trigger terms OFFER the relevant functions as native tools; the model DECIDES which to
+        call (tool calls); we apply them to the working graph and return it. See graph_ops.py."""
         from ..server.services import lorebook_store as _LS
         from . import graph_ops as GO
 
         body = body or {}
         graph = body.get("graph") if isinstance(body.get("graph"), dict) else {}
         messages = body.get("messages") or []
+        # The current REQUEST = the latest user message; behaviour pulls fire off it.
+        req_text = next((str(m.get("content", "")) for m in reversed(messages)
+                         if isinstance(m, dict) and m.get("role") == "user"), "")
         transcript = "\n".join(str(m.get("content", "")) for m in messages if isinstance(m, dict))
 
-        # Collect function definitions from every attached book (function entries only).
+        # `all_tools` (the unified chat): EVERY function book is available, and the DRIVING PERSONA
+        # swaps lorebook-style by which book's triggers fire ("add a new character" → the character
+        # smith takes the wheel). Otherwise: only the explicitly-attached books.
+        from ..server.services import presets as _P
+        if body.get("all_tools"):
+            book_ids = [b["id"] for b in _LS.list_books(ctx.root) if b.get("category") == "function"]
+        else:
+            book_ids = [re.sub(r"[^\w\-]+", "_", str(b)) for b in (body.get("lorebooks") or [])]
+
+        book_fns: dict = {}
         fns: list = []
-        for b in (body.get("lorebooks") or []):
-            scope = re.sub(r"[^\w\-]+", "_", str(b))
-            fns += GO.parse_functions(_LS.load_lorebook(ctx.root, scope))
-        off = GO.offered(fns, transcript)
+        for bid in book_ids:
+            bf = GO.parse_functions(_LS.load_lorebook(ctx.root, bid))
+            book_fns[bid] = bf
+            fns += bf
+        # Offer all when offer_all/all_tools (so a command isn't gated by trigger phrasing); else rank.
+        cap = 40 if body.get("all_tools") else 12
+        off = fns if (body.get("offer_all") or body.get("all_tools")) else GO.offered(fns, transcript, cap=cap)
         if not off:
             return {"ok": True, "graph": graph, "applied": [], "offered": []}
 
-        # Provider follows the SAME chain as the chat turn: Function → Lorebook → Preset.
-        # The attached function book binds a preset (model+params); that drives the ops call
-        # — it never crosses over to the free-chat config. Falls back to a builder stage /
-        # the workshop default only when no book is bound.
-        from ..server.services import presets as _P
+        # ONE chat driver — no per-agent routing. The model + (optional) connection come from a
+        # single chat preset; the "driving prompt" is LOREBOOK-STYLE: the guidance of whichever
+        # tool-books the turn triggers is injected, while ALL tools stay callable. (Tools carry their
+        # own behaviour, so the old specialist agent-personas were a redundant routing layer.)
         script = body.get("script")
-        preset = _P.preset_for_books(ctx.root, body.get("lorebooks"))
+        preset = _P.preset_for_books(ctx.root, book_ids)   # model/connection only — not a persona
         if preset is not None:
             provider = ctx.text_provider_for((preset.get("model") or "").strip() or None,
                                              preset.get("params") or {},
@@ -1333,25 +1277,133 @@ def register(app, ctx):
             return JSONResponse({"error": "no chat connection — connect a chat model first"}, status_code=400)
 
         label = (body.get("artifact_label") or "DOCUMENT").strip()
+        # The driving prompt is LOREBOOK-FETCHED: adopt the BEHAVIOUR entries of whichever tool-books
+        # the current request triggers (the one agent shifts persona by what the writer mentions).
+        mode = (body.get("mode") or "").strip()
+        if mode and mode in book_fns:
+            # EXPLICIT mode: force this book's behaviour, deterministically (beats keyword detection).
+            adopted = GO.behavior_of(ctx.root, mode)
+            behavior_sig = mode
+        else:
+            adopted_pairs = GO.adopted_behaviors(ctx.root, book_ids, req_text)
+            adopted = "\n\n".join(c for _, c in adopted_pairs)
+            behavior_sig = ",".join(sorted({b for b, _ in adopted_pairs}))
+        # CONTEXT MUTATION: when a NEW behaviour is pulled (persona switch), cut the conversation at
+        # the current request — the new persona works a clean context instead of inheriting the old
+        # agent's. The client round-trips `active_behavior`; we tell it when we cut so it mirrors.
+        context_cut = False
+        if behavior_sig and behavior_sig != (body.get("active_behavior") or "") and len(messages) > 1:
+            li = max((i for i, m in enumerate(messages)
+                      if isinstance(m, dict) and m.get("role") == "user"), default=None)
+            if li is not None and li > 0:
+                messages = messages[li:]
+                transcript = "\n".join(str(m.get("content", "")) for m in messages if isinstance(m, dict))
+                context_cut = True
+        # STORY CONTEXT so the agent can actually CONVERSE about the story (premise/ending/arcs/cast),
+        # not just edit the relationship/location graph it's handed.
+        story_ctx = ""
+        skey_ctx = (body.get("story") or "").strip()
+        st_ctx = ctx.base_settings.stories.get(skey_ctx) if skey_ctx else None
+        if st_ctx is not None:
+            sd = st_ctx.model_dump()
+            sb = sd.get("storyboard") or {}
+            cast_names = [getattr(ctx.base_settings.characters.get(m.get("character")), "name", m.get("character"))
+                         for m in (sd.get("cast") or []) if m.get("character")]
+            bits = [
+                ("Title", sd.get("name")), ("Premise", sd.get("premise")), ("Tone", sd.get("tone")),
+                ("Themes", ", ".join(sd.get("themes") or [])), ("Logline", sb.get("logline")),
+                ("Heart", sb.get("heart")), ("Intended ending", sd.get("intended_ending")),
+                ("Arcs", "; ".join(a.get("name", "") for a in (sd.get("arcs") or []) if a.get("name"))),
+                ("Cast", ", ".join(n for n in cast_names if n)),
+            ]
+            story_ctx = "\n".join(f"{k}: {v}" for k, v in bits if v)
+
+        # Craft, the SAME way everything else here is lorebook-driven: retrieve from `_craft` by what
+        # the writer is talking about (no separate hardcoded map). Discussing the ending surfaces the
+        # Truby climax/self-revelation/world-bound entries; talking character surfaces want-vs-need, etc.
+        from .pipeline import grounding as _G
+        craft_block = _G.craft_notes(ctx.root, req_text or transcript, k=5)
+
         system = (
-            f"You edit a JSON {label} by calling functions, filling each function's params from "
-            "the conversation.\n\n"
-            + GO.functions_prompt(off)
-            + f"\n\nCURRENT {label}:\n" + json.dumps(graph, ensure_ascii=False)
-            + "\n\nEmit `graph_ops` — the function calls that apply the changes the writer asked "
-            "for. Fill EVERY param each function needs (never leave a name/value blank) and use "
-            "EXACT ids from the document above. When you ADD a new item, set ALL its fields in "
-            "that same add call's params — a new item's id is assigned afterward, so you cannot "
-            "reference it later in the same batch. Emit an empty list if no change is called for. "
-            "Only call functions from the list above by their exact name; never invent names."
+            "You are the writer's story collaborator — talk WITH them about the story. Discuss ideas, "
+            "give your honest opinion, brainstorm, and suggest concrete improvements; answer questions "
+            "directly. When the writer asks for a change (or clearly agrees to one), MAKE it by calling "
+            "the right tool — you can edit the JSON " + label + " and run actions (create characters, "
+            "render images, set the title/ending…), preferring the most specific, richest tool. If the "
+            "turn is just discussion, a question, or thinking out loud, DON'T call a tool — reply in "
+            "prose (1-4 sentences, specific to THIS story). ALWAYS say something back.\n\n"
+            + (f"ADOPT THIS BEHAVIOUR for the current request:\n{adopted}\n\n" if adopted else "")
+            + (f"STORY CONTEXT:\n{story_ctx}\n\n" if story_ctx else "")
+            + (f"{craft_block}\n\n" if craft_block else "")
+            + f"CURRENT {label} (the editable graph):\n" + json.dumps(graph, ensure_ascii=False)
+            + "\n\nWhen you DO call a tool: fill EVERY param (never blank) using EXACT ids from the "
+            "document above; when you ADD an item set ALL its fields in that same call (its id is "
+            "assigned afterward, so you can't reference it later in the batch)."
         )
-        prompt = transcript or f"Apply the appropriate functions to the {label.lower()}."
+        prompt = transcript or f"Apply the appropriate tools to the {label.lower()}."
         try:
-            data = provider.generate_text(system=system, prompt=prompt, emits=GO.ops_schema(off)).data or {}
+            res = provider.generate_text(system=system, prompt=prompt, tools=GO.tools_spec(off))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"graph-ops failed: {exc}"}, status_code=500)
-        new_graph, log = GO.apply_ops(graph, data.get("graph_ops") or [], fns)
-        return {"ok": True, "graph": new_graph, "applied": log, "offered": [f.name for f in off]}
+
+        # ONE native tool pass, two tool kinds. DOC tools mutate the artifact (apply_ops);
+        # ACTION tools (image render, storyboard…) run with `ctx` and yield ARTIFACTS — the
+        # unified path, so every agent can call any of its tools the same way (no sentinel).
+        calls = res.tool_calls or []
+        action = {f.name: f for f in off if f.kind == "action"}
+        doc_fns = [f for f in off if f.kind != "action"]
+        doc_calls = [c for c in calls if isinstance(c, dict) and str(c.get("fn")) not in action]
+        new_graph, log = GO.apply_ops(graph, doc_calls, doc_fns)
+
+        artifacts: list = []
+        preset_id = (preset or {}).get("id") if isinstance(preset, dict) else None
+        for c in calls:
+            f = action.get(str(c.get("fn", ""))) if isinstance(c, dict) else None
+            if f is None:
+                continue
+            abody = {**GO._call_params(c), "character": body.get("character"),
+                     "preset": preset_id, "graph": graph, "story": body.get("story")}
+            try:
+                result = f.impl(ctx, abody) or {}
+                artifacts.append({"fn": f.name, **result})
+                log.append({"fn": f.name, "ok": True, "artifact": True})
+            except Exception as exc:  # noqa: BLE001 — one bad action never sinks the batch
+                log.append({"fn": f.name, "ok": False, "error": str(exc)})
+
+        # PERSIST the doc-tool result to the story (so every tool sticks, not just the action
+        # tools). When a saved-story key is present, the doc's story-field-shaped keys are
+        # written straight to the story YAML — same wholesale-replace the frontend PUT does, so
+        # it relies on the same "the editor seeded a complete doc" contract. The dev-graph
+        # workshop (nodes/logline/…) has no story-field keys here, so it's a no-op (it persists
+        # via its own storyboard/arcs conversion on Save).
+        skey = (body.get("story") or "").strip()
+        if skey and ctx.base_settings.stories.get(skey) is not None:
+            # Fields whose tool-output shape matches the Story schema persist straight through.
+            _PERSIST = ("locations", "places", "start", "relationships", "connections")
+            fields = {k: new_graph[k] for k in _PERSIST if k in new_graph}
+            # `cast` is special: the cast tools author an inline {name,role,persona} doc, but
+            # Story.cast is CastMember REFERENCES — so convert (minting a character card per new
+            # member via the character-creation path, idempotent by name). Mutates new_graph's
+            # cast members to carry their resolved `character` key (returned to the caller).
+            if isinstance(new_graph.get("cast"), list):
+                fields["cast"] = ctx.cast_doc_to_members(new_graph["cast"])
+            if fields:
+                try:
+                    ctx.update_story_fields(skey, fields)
+                    log.append({"fn": "·persist", "ok": True, "saved": sorted(fields)})
+                except Exception as exc:  # noqa: BLE001 — a save failure never sinks the response
+                    log.append({"fn": "·persist", "ok": False, "error": str(exc)})
+
+        out = {"ok": True, "graph": new_graph, "applied": log,
+               "artifacts": artifacts, "offered": [f.name for f in off],
+               "reply": (getattr(res, "text", "") or "").strip(),   # the agent's conversational reply
+               "active_behavior": behavior_sig, "context_cut": context_cut}
+        # No tool calls AND no prose reply → likely a model that can't tool-call (or is broken).
+        # A conversational turn (reply present, no tools) is normal — don't warn on it.
+        if not calls and not out["reply"]:
+            out["warning"] = "the model returned neither a reply nor a tool call — it may not support " \
+                             "tool-calling; bind a tool-capable model to this preset"
+        return out
 
     @app.get("/api/stages")
     def list_stage_tools():
@@ -1359,6 +1411,121 @@ def register(app, ctx):
         (used by the Scripts panel + the post-history tool protocol)."""
         from . import stage_tools as ST
         return {"stages": ST.catalog()}
+
+    @app.get("/api/tools")
+    def list_tools():
+        """Catalog of model-callable TOOLS for the Library ▸ Tools tab. Two kinds, both code
+        (read-only): GRAPH scripts (scripts.py — called as native tools via function books) and
+        pipeline STAGE tools (stage_tools.py — triggered by agents). `used_by` lists which
+        function books reference each tool, so you can see what's wired to what."""
+        import inspect
+
+        from ..server.services import lorebook_store as LS
+        from ..server.services import presets as P
+        from . import graph_ops as GO
+        from . import scripts as S
+        from . import stage_tools as ST
+
+        def _src(fn) -> str:
+            """The tool's actual implementation source — the truest 'how it works'."""
+            try:
+                return inspect.getsource(fn)
+            except (OSError, TypeError):
+                return ""
+
+        # Which function books reference each tool (a function entry names a registered tool),
+        # and which preset (= Agent) each book binds to — so a tool can report the Agents it powers.
+        used: dict[str, list[str]] = {}
+        book_preset: dict[str, str] = {}
+        for b in LS.list_books(ctx.root):
+            book_preset[b["id"]] = b.get("preset") or ""
+            for e in LS.load_lorebook(ctx.root, b["id"]):
+                spec = GO._parse_spec(getattr(e, "content", "") or "")
+                fn = (spec or {}).get("fn")
+                if fn:
+                    used.setdefault(str(fn), [])
+                    if b["id"] not in used[str(fn)]:
+                        used[str(fn)].append(b["id"])
+
+        pmeta = {p["id"]: {"id": p["id"], "name": p.get("name") or p["id"], "group": p.get("group") or ""}
+                 for p in P.load_presets(ctx.root).get("presets", [])}
+
+        def _agents(fn: str) -> list[dict]:
+            """The distinct Agents (presets) a tool powers — via the books that reference it."""
+            seen: dict[str, dict] = {}
+            for bid in used.get(fn, []):
+                pid = book_preset.get(bid) or ""
+                if pid and pid in pmeta and pid not in seen:
+                    seen[pid] = pmeta[pid]
+            return list(seen.values())
+
+        def _pdisplay(params: dict) -> dict:
+            # Flatten the rich param specs to {name: description} for the catalog UI; enum/type
+            # live in the model-facing schema (tools_spec), not this human view.
+            out = {}
+            for k, v in (params or {}).items():
+                desc = v.get("desc", "") if isinstance(v, dict) else str(v)
+                if isinstance(v, dict) and v.get("enum"):
+                    desc = (desc + " — one of: " + ", ".join(map(str, v["enum"]))).strip(" —")
+                out[k] = desc
+            return out
+
+        graph = [{"fn": sd.name, "kind": "graph", "describe": sd.describe,
+                  "params": _pdisplay(sd.params),
+                  "keywords": sd.keywords, "writes": sd.writes, "used_by": used.get(sd.name, []),
+                  "agents": _agents(sd.name), "source": _src(sd.impl)}
+                 for sd in S.REGISTRY.values()]
+        stage = [{**t, "used_by": used.get(t["fn"], []), "agents": _agents(t["fn"]),
+                  "params": _pdisplay(ST.TOOLS[t["fn"]].params) if t["fn"] in ST.TOOLS else {},
+                  "source": _src(ST.TOOLS[t["fn"]].run) if t["fn"] in ST.TOOLS else ""}
+                 for t in ST.catalog()]
+        return {"graph": graph, "stage": stage}
+
+    @app.post("/api/tools/{fn}")
+    def edit_tool(fn: str, body: dict):
+        """Validate — and optionally save — an edited tool's source. Tools are code; saving
+        splices the new function text into its .py file after an ast.parse check (snippet AND
+        whole-file), then a backend restart applies it to the running registry.
+        body: { source: str, validate_only?: bool }."""
+        import ast
+        import inspect
+        from pathlib import Path as _Path
+
+        from . import scripts as S
+        from . import stage_tools as ST
+
+        body = body or {}
+        source = body.get("source") or ""
+        sd = S.REGISTRY.get(fn)
+        target = sd.impl if sd else (ST.TOOLS[fn].run if fn in ST.TOOLS else None)
+        if target is None:
+            return JSONResponse({"error": f"no such tool: {fn!r}"}, status_code=404)
+
+        # 1) the edited snippet must parse on its own
+        try:
+            ast.parse(source)
+        except SyntaxError as exc:
+            return JSONResponse({"error": exc.msg, "line": exc.lineno}, status_code=400)
+        if body.get("validate_only"):
+            return {"ok": True}
+
+        # 2) splice into the file and re-validate the WHOLE module before writing
+        try:
+            path = inspect.getsourcefile(target)
+            old = inspect.getsource(target)
+        except (OSError, TypeError):
+            return JSONResponse({"error": "cannot locate tool source"}, status_code=500)
+        text = _Path(path).read_text(encoding="utf-8")
+        if old not in text:
+            return JSONResponse({"error": "source drifted on disk — reload and retry"}, status_code=409)
+        new_text = text.replace(old, source if source.endswith("\n") else source + "\n", 1)
+        try:
+            ast.parse(new_text)
+        except SyntaxError as exc:
+            return JSONResponse({"error": f"file would not parse: {exc.msg}", "line": exc.lineno},
+                                status_code=400)
+        _Path(path).write_text(new_text, encoding="utf-8")
+        return {"ok": True, "note": "saved — restart the backend to apply"}
 
     @app.post("/api/stories/run-stage")
     def story_run_stage(body: dict):
@@ -1575,8 +1742,12 @@ def register(app, ctx):
             "The final arc's mini_ending must match the intended ending."
         )
 
+        from .pipeline import grounding as _G
+        _arc_craft = _G.craft_notes(
+            ctx.root, f"{intended_ending} arc structure change"[:400], k=6, section="arc")
         prompt = (
-            f"PREMISE CONVERSATION:\n{transcript}\n\n"
+            (f"{_arc_craft}\n\n" if _arc_craft else "")
+            + f"PREMISE CONVERSATION:\n{transcript}\n\n"
             f"INTENDED ENDING: {intended_ending or '(not specified)'}\n\n"
             f"AVAILABLE CAST: {cast_list}\n\n"
             "Design the arc structure now."
@@ -1683,6 +1854,13 @@ def register(app, ctx):
             arc_cast_details.append(ch.name if ch else ck)
         cast_line = ", ".join(arc_cast_details) or "(unspecified)"
 
+        # Truby/ending craft so the arc (esp. its final chapter) lands a self-revelation whose
+        # consequence binds the world's fate to the hero's choice — never a generic "greater good".
+        from .pipeline import grounding as _G
+        _exp_craft = _G.craft_notes(
+            ctx.root, f"{intended_ending} {arc.name} {arc.mini_ending or ''} climax self-revelation"[:400],
+            k=6, section="chapters")
+
         system = (
             "You are writing the CHAPTERS for ONE ARC of a book.\n\n"
             "You will receive:\n"
@@ -1696,31 +1874,16 @@ def register(app, ctx):
             "Hook: tension into next | Location | Characters (comma-separated) | "
             "Scene: visual background prompt\n\n"
             f"The id should be {arc_id}-ch1, {arc_id}-ch2, etc. (e.g. {arc_id}-ch1).\n"
-            "The final chapter must land on this arc's mini_ending.\n"
+            "The final chapter must land on this arc's mini_ending — as the protagonist's "
+            "self-revelation and the CHOICE it forces, with the outer stakes bound to that choice "
+            "(never a generic 'greater good'). Apply the CRAFT NOTES below.\n"
             "Characters in each chapter must be a subset of this arc's cast — no one else."
         )
 
-        # Spine context — informs which emotional inflections this arc should force.
-        spine = st.spine
-        spine_block = ""
-        if spine and (spine.wound or spine.beats):
-            lines = ["EMOTIONAL SPINE (character psychology — shape chapters to force these inflections):"]
-            if spine.wound:
-                lines.append(f"  WOUND: {spine.wound}")
-            if spine.lie:
-                lines.append(f"  LIE: {spine.lie}")
-            if spine.truth:
-                lines.append(f"  TRUTH: {spine.truth}")
-            if spine.beats:
-                lines.append("  BEATS:")
-                for b in spine.beats:
-                    lines.append(f"    [{b.inflection}] {b.description}")
-            spine_block = "\n".join(lines) + "\n\n"
-
         prompt = (
-            f"BOOK HEART: {heart or '(not set)'}\n"
+            (f"{_exp_craft}\n\n" if _exp_craft else "")
+            + f"BOOK HEART: {heart or '(not set)'}\n"
             f"INTENDED ENDING: {intended_ending or '(not set)'}\n\n"
-            f"{spine_block}"
             f"PREVIOUS ARCS:\n{prev_endings}\n\n"
             f"THIS ARC:\n"
             f"  Name: {arc.name}\n"
@@ -1976,35 +2139,14 @@ def register(app, ctx):
                     "- Each timeline `name`: 2-4 words, evocative (e.g. 'The Opened Door')\n"
                     "- Each timeline `premise`: one sentence — what choice or stance defines this path through the arc"
                 )
-                # Build spine block for timeline derivation if the story has one.
-                spine = st.spine
-                spine_tl_block = ""
-                if spine and (spine.wound or spine.beats):
-                    lines = ["EMOTIONAL SPINE (the axis timelines diverge along):"]
-                    if spine.wound:
-                        lines.append(f"  WOUND: {spine.wound}")
-                    if spine.lie:
-                        lines.append(f"  LIE: {spine.lie}")
-                    if spine.truth:
-                        lines.append(f"  TRUTH: {spine.truth}")
-                    if spine.beats:
-                        lines.append("  BEATS to force:")
-                        for b in spine.beats:
-                            lines.append(f"    [{b.inflection}] {b.description}")
-                    spine_tl_block = "\n".join(lines) + "\n\n"
-
                 derive_prompt = (
                     f"PROTAGONIST PERSONA:\n{prot_persona[:800] or '(not set)'}\n\n"
-                    f"{spine_tl_block}"
                     f"ARC: {arc.name}\n"
                     f"  Dramatic function: {arc.dramatic_function or '(unset)'}\n"
                     f"  Mini-ending: {arc.mini_ending or '(unset)'}\n\n"
                     f"CAST:\n{cast_block}\n\n"
                     f"STORY HEART: {st.storyboard.heart or '(unset)'}\n\n"
-                    "If an emotional spine is provided, use it as the divergence axis — timelines "
-                    "should represent different ways the protagonist could face (or avoid) the "
-                    "emotional beats. Otherwise derive the axis from the persona directly.\n\n"
-                    "Derive the divergence axis and 2-3 timeline premises now."
+                    "Derive the divergence axis from the persona, and 2-3 timeline premises now."
                 )
                 derive_result = await run_in_threadpool(
                     lambda: provider.generate_text(system=derive_system, prompt=derive_prompt,
@@ -2501,7 +2643,7 @@ def register(app, ctx):
             if l.get("name"):
                 name_to_loc[l["name"].lower()] = lid
 
-        # Persist the storyboard as the spine; link each beat's place to a location id.
+        # Persist the storyboard; link each beat's place to a location id.
         # New beats include emotional_core, hook, and scene_prompt from the enriched format.
         board = draft.get("storyboard") or {}
         beats = []
@@ -2541,7 +2683,6 @@ def register(app, ctx):
             "fields": {"source_character": primary_key} if primary_key else {},
             "intended_ending": draft.get("intended_ending", ""),
             "arcs": arcs_validated,
-            "spine": draft.get("spine") or None,
         }
         try:
             Story(**story)  # validate (start ∈ locations, cast ∈ characters)
@@ -2599,8 +2740,9 @@ def register(app, ctx):
             return JSONResponse({"error": "no such story"}, status_code=404)
         data = st.model_dump()
         for f in ("name", "premise", "tone", "themes", "storyboard", "cast",
-                  "lorebook", "locations", "start", "background", "fields",
-                  "intended_ending", "arcs", "spine"):
+                  "lorebook", "locations", "places", "start", "background", "fields",
+                  "intended_ending", "arcs", "relationships", "connections", "default_personas",
+                  "recent_window"):
             if f in (body or {}):
                 data[f] = body[f]
         try:
@@ -2858,7 +3000,7 @@ def register(app, ctx):
         tconn = ctx.store.active("text")
         if tconn is None:
             return JSONResponse({"error": "no chat connection"}, status_code=400)
-        opts = {**tconn.to_model_options(), "max_tokens": 1500}
+        opts = {**tconn.to_model_options(), "max_tokens": 40000}
         if body.get("chat_model"):
             opts["model"] = body["chat_model"]
         provider = build_provider(ModelDef(provider=tconn.provider, kind="text", options=opts))
@@ -2885,23 +3027,63 @@ def register(app, ctx):
 
         cast = "\n".join(cast_line(m) for m in st.cast) or "(none)"
         locs = "\n".join(f"- {l.id} | {l.name}: {l.description}" for l in st.locations) or "(none)"
+
+        # Story-authored PLACES (containers) + their character-anchored SCENES — the world's
+        # spots ("mom's kitchen", "the baker's bakery"). Rendered so the director knows who is
+        # usually where, and can place characters in their spots without being told each turn.
+        def _cname(k: str) -> str:
+            c = ctx.base_settings.characters.get(k)
+            return (c.name if c else k) or k
+
+        def _scene_line(s) -> str:
+            anchors = [_cname(k) for k in ([s.character] if s.character else []) + list(s.characters or [])]
+            who = ", ".join(a for a in anchors if a) or "shared"
+            tail = f" — {s.backstory}" if s.backstory else ""
+            home = " [HOME slot]" if s.role == "persona_home" else ""
+            return f"    · {s.name or s.id} [{who}]{home}{tail}"
+
+        def _place_block(p) -> str:
+            lines = [f"- {p.name}" + (f": {p.description}" if p.description else "")]
+            lines += [_scene_line(s) for s in p.scenes]
+            return "\n".join(lines)
+
+        places = "\n".join(_place_block(p) for p in st.places)
         # World lore is no longer dumped here — it lives in the `story-<key>` book and is
         # retrieved (ranked) into the WORLD INFO block below, like every other lorebook.
         cur = body.get("location") or st.start or (st.locations[0].id if st.locations else "")
-        # The protagonist. The frontend passes the active persona (who *you* are);
-        # fall back to a generic "Player" so old callers still work. A named player
-        # with a description lets the director narrate to a real identity instead of
-        # a nameless "you", and the transcript reflects that name.
+        # The protagonist. The frontend passes who *you* are this playthrough. Two shapes:
+        #  - EMBODIED: player.character = a playable character KEY → the human puppets a real
+        #    card. We pull its name + full backstory (`system`) and attach its per-character
+        #    lorebook scope so the puppet's canon flows into context like any other lore. The
+        #    binding is per-playthrough (not stored on the story) → the puppet ports anywhere.
+        #  - LEGACY: player.{name,description} = the thin persona (or a bare "Player").
         player = body.get("player") or {}
-        player_name = (player.get("name") or "Player").strip() or "Player"
-        player_desc = (player.get("description") or "").strip()
-        player_line = f"PLAYER: {player_name}" + (f" — {player_desc}" if player_desc else "")
+        player_char = (player.get("character") or "").strip()
+        player_scope = None
+        player_back = ""
+        pc = ctx.base_settings.characters.get(player_char) if player_char else None
+        if pc is not None:
+            player_name = pc.name or (player.get("name") or "Player")
+            player_back = (pc.system or "").strip()
+            player_desc = (player_back.splitlines()[0][:200] if player_back else "")
+            player_scope = re.sub(r"[^\w\-]+", "_", player_char)
+        else:
+            player_name = (player.get("name") or "Player").strip() or "Player"
+            player_desc = (player.get("description") or "").strip()
+        player_line = (
+            f"PLAYER (the human DRIVES this character — narrate TO them and react to their "
+            f"actions; never decide their choices or speak for them): {player_name}"
+            + (f" — {player_desc}" if player_desc else "")
+        )
         system = (
             f"You are the narrator and director of an interactive visual novel titled \"{st.name}\".\n"
             f"PREMISE: {st.premise}\nTONE: {st.tone}\n"
             + f"{player_line}\n"
             f"CAST (use these names):\n{cast}\n"
-            f"LOCATIONS (the scene is in exactly one; use the id):\n{locs}\n\n"
+            f"LOCATIONS (the scene is in exactly one; use the id):\n{locs}\n"
+            + (f"PLACES (containers holding character 'spots' — honor who is usually where; a "
+               f"character at home is in their spot unless the scene says otherwise):\n{places}\n" if places else "")
+            + "\n"
             "Narrate the next moment in-world and in the established tone, responding to the player. "
             "Then report the scene state in your structured output:\n"
             "- reply: the narration (second person to the player, plus character action/dialogue). Vivid but concise.\n"
@@ -2914,6 +3096,47 @@ def register(app, ctx):
             "- movement: true ONLY when this moment invites the player to move to a different location "
             "(they suggest leaving, a path opens, the beat concludes) — otherwise false."
         )
+
+        # EMBODIMENT: hand the narrator each cast member's OWN exemplars (life/saying/reaction) from
+        # their per-character lorebook, so it VOICES them as the specific person — not just a name.
+        # This is the per-character lorebook actually lighting up in play (the cast line alone is thin).
+        def _embody(m):
+            c = ctx.base_settings.characters.get(m.character)
+            if c is None:
+                return ""
+            scope = re.sub(r"[^\w\-]+", "_", str(m.character))
+            ex = _LS0.top_by_priority(ctx.root, scope, 5)
+            lines = "\n".join(f"    · [{e.facet or 'life'}] {e.content}" for e in ex if e.content)
+            return f"- {c.name}:\n{lines}" if lines else ""
+        embodiment = "\n".join(b for b in (_embody(m) for m in st.cast) if b)
+        if embodiment:
+            system += ("\n\nEMBODY THE CAST — voice each character from THEIR OWN remembered moments "
+                       "below; stay true to these, they ARE the person:\n" + embodiment)
+
+        # Embodied player: fold the puppet's full backstory into the brief so the director
+        # treats the player as a real person in this world (their history, ties, and voice
+        # are canon) while still letting the human steer every choice.
+        if player_back:
+            system += (
+                f"\n\nWHO THE PLAYER IS — {player_name}'s backstory (canon; weave it into the "
+                f"world and the cast's reactions, but the human chooses what they do and say):\n"
+                f"{player_back}"
+            )
+        # Persona HOME swap: the embodied puppet brings their OWN home(s). A persona can carry
+        # several portable home scenes (they're at home in various places); these stand in for a
+        # story 'persona_home' slot. Falls back to a free-text home_note when no scenes are set.
+        if pc is not None:
+            _homes = list(getattr(pc, "home_scenes", []) or [])
+            if _homes:
+                _hl = "\n".join(
+                    f"  · {h.name or h.id}" + (f" — {h.backstory}" if h.backstory else "") for h in _homes)
+                system += (f"\n\n{player_name}'S HOME (the player's OWN places they carry with them — "
+                           f"their home spots; one stands in for any 'persona_home' slot above):\n{_hl}")
+            else:
+                _home = ((pc.fields or {}).get("home_note") or "").strip()
+                if _home:
+                    system += (f"\n\n{player_name}'S HOME (the player's own place — use this as their "
+                               f"home, standing in for any 'persona_home' slot above): {_home}")
 
         history = body.get("history") or []
         lines = []
@@ -2949,6 +3172,8 @@ def register(app, ctx):
         attached = body.get("lorebooks")
         world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in (attached or []) if s]
         world_scopes += [story_scope, thread_scope]   # the story's own book + this thread's facts
+        if player_scope:
+            world_scopes.append(player_scope)         # the embodied puppet's own per-character lore
         hits = _LS.retrieve(ctx.root, _recent or transcript, world_scopes, top_k=6)
         if hits:
             system = system + "\n\n" + format_lore_block(hits)
@@ -2979,8 +3204,36 @@ def register(app, ctx):
         moved = body.get("choice")
         directive = ""
         if moved:
-            dest = next((l.name for l in st.locations if l.id == moved), moved)
-            directive = f"\n\n[The player moves to: {dest}. Narrate the transition and arrival there; set location to '{moved}'.]"
+            # A scene id (a spot inside a Place) takes priority over a flat location id —
+            # narrate arrival into that spot and bring its anchored character(s) on-stage.
+            _sc = _pl = None
+            for _p in st.places:
+                for _s in _p.scenes:
+                    if _s.id == moved:
+                        _sc, _pl = _s, _p
+                        break
+                if _sc:
+                    break
+            # An embodied puppet's OWN home scene (portable, not in st.places) is also a target.
+            _hs = next((h for h in (getattr(pc, "home_scenes", []) or []) if h.id == moved), None) if pc else None
+            if _sc is not None:
+                _anchors = [_cname(k) for k in ([_sc.character] if _sc.character else []) + list(_sc.characters or [])]
+                _who = ", ".join(a for a in _anchors if a)
+                _line = f"The player moves to {_sc.name or _sc.id}" + (f" in {_pl.name}" if _pl else "") + "."
+                if _who:
+                    _line += f" {_who} {'are' if ',' in _who else 'is'} here."
+                if _sc.backstory:
+                    _line += f" ({_sc.backstory})"
+                directive = (f"\n\n[{_line} Narrate the transition and arrival; bring the named "
+                             f"character(s) into the scene and include them in `present`.]")
+            elif _hs is not None:
+                _line = f"The player goes to their own home, {_hs.name or _hs.id}."
+                if _hs.backstory:
+                    _line += f" ({_hs.backstory})"
+                directive = f"\n\n[{_line} Narrate the transition and arrival at the player's home.]"
+            else:
+                dest = next((l.name for l in st.locations if l.id == moved), moved)
+                directive = f"\n\n[The player moves to: {dest}. Narrate the transition and arrival there; set location to '{moved}'.]"
         prompt = (f"CURRENT LOCATION: {cur}\n\nTRANSCRIPT:\n{transcript}{directive}\n\n"
                   f"Narrate the next turn and report the scene state.")
 
@@ -2992,7 +3245,7 @@ def register(app, ctx):
         from ..server.services import config_files as _cf
         play_schema = _copy.deepcopy(PLAY_SCHEMA)
         play_schema["properties"]["state_deltas"] = {"type": "array", "items": _SE.STATE_DELTA_ITEM}
-        play_schema["required"] = list(play_schema["required"]) + ["state_deltas"]
+        play_schema["required"] = list(play_schema["required"]) + ["state_deltas", "player_status"]
 
         _fb_key = _cf.load_text_roles(ctx.root).get("fallback")
         fallback = ctx.text_provider_for(_fb_key) if _fb_key else None
@@ -3025,15 +3278,33 @@ def register(app, ctx):
             world_state = _SE.apply_deltas(world_state, data.get("state_deltas") or [],
                                            root=ctx.root, scope=thread_scope)
             world_state["location"] = loc or world_state.get("location") or ""
+            # Index this turn as a STEP and record who witnessed it — a character who first
+            # appears here JOINS now (sees only from this step on, never the backlog). Store the
+            # turn's narration at the same index so perception can scope each character's memory.
+            from . import perception as _PC
+            this_step = _PC.record_step(world_state, [k for k in present_keys if k])
+            world_state.setdefault("transcript", []).append(data.get("reply", ""))
             save_session(ctx.root, sid, {**_sess, "state": _SE.with_world(_sess.get("state"), world_state)})
         except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
             pass
 
+        # Lifecycle trigger: ONLY the player sleeping or dying consolidates memory. Sleep → the
+        # cast compresses the scenes they witnessed; death → also rewind to a significant moment.
+        consolidation = None
+        status = (data.get("player_status") or "active").strip().lower()
+        if status in ("sleeping", "dead") and key:
+            from . import stage_tools as _ST
+            consolidation = _ST.consolidate_on_rest(ctx, key, world_state, status)
+            save_session(ctx.root, sid, {**_sess, "state": _SE.with_world(_sess.get("state"), world_state)})
+
         return {
             "reply": data.get("reply", ""), "location": loc,
             "present": [k for k in present_keys if k],
+            "step": world_state.get("step"),   # this turn's indexed step (perception)
             "emotions": emotions,
             "movement": bool(data.get("movement")),
+            "player_status": status,
+            "consolidation": consolidation,    # {memories, rewind} on sleep/death, else None
             "state": _SE.summary(world_state),
             "guard": {"tripped": guarded.get("tripped"), "used_fallback": guarded.get("used_fallback")},
         }
@@ -3430,4 +3701,58 @@ def register(app, ctx):
         except Exception:  # noqa: BLE001
             return JSONResponse({"error": "bad image data"}, status_code=400)
         url = ctx.save_location_bg(key, loc, png)
+        return {"ok": True, "url": url}
+
+    @app.post("/api/stories/{key}/scene/{sid}/background/candidate")
+    async def scene_background_candidate(key: str, sid: str, body: dict):
+        """Render ONE background candidate for a Place's Scene (fresh seed each call).
+        Returns a data URI — not saved. Mirrors the location background flow but the
+        prompt comes from the scene's own background_prompt (the spot's empty plate)."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        scene = next((s for p in st.places for s in p.scenes if s.id == sid), None)
+        if scene is None:
+            return JSONResponse({"error": "no such scene"}, status_code=404)
+        prompt = (scene.background_prompt or scene.name or "").strip()
+        if not prompt:
+            return JSONResponse({"error": "scene has no background prompt"}, status_code=400)
+        provider, model_id = ctx.role_image_provider("scene", (body or {}).get("image_model"))
+        if provider is None:
+            return JSONResponse({"error": model_id}, status_code=400)
+        _randomize_seeds(provider.workflow)
+        try:
+            png = await _render(provider, prompt, out_prefix=ctx.output_prefix_for(model_id, "scene", sid))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
+        if png is None:
+            return JSONResponse({"error": "image model returned no image"}, status_code=500)
+        return {"image": "data:image/png;base64," + base64.b64encode(png).decode()}
+
+    @app.post("/api/stories/{key}/scene/{sid}/background/select")
+    def select_scene_background(key: str, sid: str, body: dict):
+        """Save a chosen candidate (base64 data URI) as the scene's background, writing
+        it back into the right scene inside the story's places."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None or not any(s.id == sid for p in st.places for s in p.scenes):
+            return JSONResponse({"error": "no such story/scene"}, status_code=404)
+        uri = (body or {}).get("data", "")
+        b64 = uri.split(",", 1)[1] if "," in uri else uri
+        try:
+            png = base64.b64decode(b64)
+        except Exception:  # noqa: BLE001
+            return JSONResponse({"error": "bad image data"}, status_code=400)
+        d = ctx.story_bg_dir(key); d.mkdir(parents=True, exist_ok=True)
+        fname = f"scene_{re.sub(r'[^a-z0-9_]+', '', sid.lower())}.png"
+        (d / fname).write_bytes(png)
+        url = f"/api/stories/{key}/bg/{fname}"
+        safe = re.sub(r"[^\w\-]+", "", key)
+        path = ctx.story_dir() / f"{safe}.yaml"
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for p in data.get("places", []):
+            for s in p.get("scenes", []):
+                if s.get("id") == sid:
+                    s["background"] = url
+        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        ctx.reload_settings()
         return {"ok": True, "url": url}

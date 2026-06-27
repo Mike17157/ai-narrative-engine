@@ -12,6 +12,50 @@ import re
 import yaml
 
 
+def render_reference(ctx, key: str) -> str:
+    """Compose the base-image prompt for an ALREADY-MINTED character and render its reference
+    portrait → configs/characters/<key>.ref.png (also stores base_prompt on the card). The
+    standalone portrait step from generate_full_character — used by the autonomous creator to
+    kick off a portrait right after minting. Synchronous (blocking render). Returns the filename.
+    Raises on failure (caller decides whether to treat it best-effort)."""
+    from loom.comfy.server import get_server
+    from loom.stories.pipeline import compose_base_prompt
+
+    from .images import _clean_reference_png, _randomize_seeds
+
+    ch = ctx.base_settings.characters.get(key)
+    if ch is None:
+        raise ValueError(f"no such character {key!r}")
+    fields = ch.fields or {}
+    cfg = ctx.load_story_builder()
+    comp = compose_base_prompt(ctx.stage_provider("base_image"), ch.name, ch.system or "",
+                               fields.get("appearance", ""), fields.get("role", ""),
+                               systems=(cfg.get("systems") or {}))
+    base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
+    if not base_prompt:
+        raise ValueError("base prompt generation failed")
+
+    safe = re.sub(r"[^\w\-]+", "", key)
+    ppath = ctx.char_dir() / f"{safe}.yaml"
+    if ppath.is_file():   # persist the base prompt on the card (matches full_gen)
+        data = yaml.safe_load(ppath.read_text(encoding="utf-8")) or {}
+        data.setdefault("fields", {})["base_prompt"] = base_prompt
+        ppath.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+
+    iprov, mid = ctx.role_image_provider("base")
+    if iprov is None:
+        raise ValueError(mid)
+    get_server(iprov.base_url).ensure_up()
+    _randomize_seeds(iprov.workflow)
+    res = iprov.generate_image(prompt=base_prompt, latent=ctx.pose_latent("neutral"),
+                               out_prefix=ctx.output_prefix_for(mid, "base", key))
+    if not res.images:
+        raise RuntimeError("portrait render produced no image")
+    (ctx.char_dir() / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
+    ctx.reload_settings()
+    return f"{safe}.ref.png"
+
+
 def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     from ...comfy.server import get_server
     from ...config.schema import Character

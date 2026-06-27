@@ -1,14 +1,14 @@
 {
   "model": "",
   "models": {
-    "workshop": "deepseek/deepseek-chat",
-    "spine": "deepseek/deepseek-chat",
-    "storyboard": "deepseek/deepseek-chat",
+    "workshop": "qwen/qwen-2.5-72b-instruct",
+    "spine": "qwen/qwen-2.5-72b-instruct",
+    "storyboard": "qwen/qwen-2.5-72b-instruct",
     "sim_director": "deepseek/deepseek-chat",
     "sim_actor": "z-ai/glm-4.7-flash",
-    "characters": "anthropic/claude-sonnet-4-5",
-    "locations": "anthropic/claude-sonnet-4-5",
-    "wardrobe": "anthropic/claude-sonnet-4-5",
+    "characters": "qwen/qwen-2.5-72b-instruct",
+    "locations": "qwen/qwen-2.5-72b-instruct",
+    "wardrobe": "qwen/qwen-2.5-72b-instruct",
     "base_image": "anthropic/claude-sonnet-4-5",
     "emotion": "anthropic/claude-haiku-4-5"
   },

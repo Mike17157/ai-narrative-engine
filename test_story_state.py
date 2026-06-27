@@ -70,18 +70,33 @@ SCRIPT_CASES = {
     # locations
     "add_location": ({"locations": []}, {"name": "Pier", "description": "a wooden pier"},
                      lambda d: d["locations"][0]["name"] == "Pier"
-                     and set(d["locations"][0]) == {"id", "name", "description", "background_prompt"}),
+                     and set(d["locations"][0]) == {"id", "name", "description", "background_prompt", "parent"}),
     "set_location_field": ({"locations": [{"id": "l0", "name": "X"}]}, {"id": "l0", "field": "name", "value": "Dock"},
                            lambda d: d["locations"][0]["name"] == "Dock"),
+    "set_location_area": ({"locations": [{"id": "l0"}, {"id": "a0"}]}, {"id": "l0", "area": "a0"},
+                          lambda d: d["locations"][0]["parent"] == "a0"),
     "remove_location": ({"locations": [{"id": "l0"}]}, {"id": "l0"},
                         lambda d: d["locations"] == []),
-    "set_start": ({}, {"id": "l0"}, lambda d: d.get("start") == "l0"),
+    "set_start": ({"locations": [{"id": "l0"}]}, {"id": "l0"}, lambda d: d.get("start") == "l0"),
     # cast
     "add_character": ({"cast": []}, {"name": "Aria", "role": "rival", "persona": "sharp"},
                       lambda d: d["cast"][0]["name"] == "Aria" and d["cast"][0]["primary"] is False),
     "set_character_field": ({"cast": [{"id": "c0", "role": "rival"}]}, {"id": "c0", "field": "role", "value": "ally"},
                             lambda d: d["cast"][0]["role"] == "ally"),
     "remove_character": ({"cast": [{"id": "c0"}]}, {"id": "c0"}, lambda d: d["cast"] == []),
+    # relationships (authored baseline; same shape seeds runtime state)
+    "set_relationship": ({}, {"source": "c0", "target": "c1", "nature": "rival",
+                              "dynamic": "open rivalry", "stance": "hostile"},
+                         lambda d: d["relationships"][0]["nature"] == "rival"
+                         and d["relationships"][0]["stance"] == "hostile"
+                         and d["relationships"][0]["dynamic"] == "open rivalry"),
+    "remove_relationship": ({"relationships": [{"source": "c0", "target": "c1"}]}, {"source": "c0", "target": "c1"},
+                            lambda d: d["relationships"] == []),
+    # scene connections (the navigable map)
+    "connect_scenes": ({"locations": [{"id": "l0"}, {"id": "l1"}]}, {"source": "l0", "target": "l1", "label": "the gate"},
+                       lambda d: d["connections"][0]["source"] == "l0" and d["connections"][0]["target"] == "l1"),
+    "disconnect_scenes": ({"connections": [{"source": "l0", "target": "l1"}]}, {"source": "l0", "target": "l1"},
+                          lambda d: d["connections"] == []),
 }
 
 
@@ -130,10 +145,28 @@ def test_graph_ops_integration() -> None:
     g, _ = GO.apply_ops({"nodes": [{"id": "b0", "next": []}]},
                         [{"fn": "add_beat", "params": json.dumps({"title": "Crack", "after": "b0"})}], fns)
     check(len(g["nodes"]) == 2 and g["nodes"][0]["next"] == [g["nodes"][1]["id"]], "apply_ops wires via invoke")
+    # native tool-calling path: tools_spec → per-tool schema; calls arrive as dict params
+    specs = GO.tools_spec(fns)
+    add = next(s for s in specs if s["name"] == "add_beat")
+    check("title" in add["parameters"]["properties"] and "after" not in add["parameters"]["required"],
+          "tools_spec gives per-tool schema; optional param not required")
+    g2, _ = GO.apply_ops({"nodes": [{"id": "b0", "next": []}]},
+                         [{"fn": "add_beat", "params": {"title": "Crack", "after": "b0"}}], fns)
+    check(len(g2["nodes"]) == 2 and g2["nodes"][0]["next"] == [g2["nodes"][1]["id"]],
+          "native tool call (dict params) applies via invoke")
     check(GO.parse_functions([trig("nonesuch")]) == [], "unregistered fn ignored")
     check(GO.is_function_entry(E("Plain lore.", [], "Harbor")) is False, "data entry is not a function")
     _, log = GO.apply_ops({}, [{"fn": "ghost", "params": "{}"}], fns)
     check(any(not x["ok"] for x in log), "unknown call logged as failure")
+    # best-practice schema: enum-constrained param; bad target ids surface as failed calls
+    efns = GO.parse_functions([trig("set_beat_field"), trig("connect")])
+    sbf = next(s for s in GO.tools_spec(efns) if s["name"] == "set_beat_field")
+    check("title" in (sbf["parameters"]["properties"]["field"].get("enum") or []),
+          "tools_spec exposes enum for a fixed-choice param")
+    _, log2 = GO.apply_ops({"nodes": []},
+                           [{"fn": "set_beat_field", "params": {"id": "zzz", "field": "title", "value": "x"}}], efns)
+    check(log2 and not log2[0]["ok"] and "zzz" in (log2[0].get("error") or ""),
+          "bad target id raises -> logged as a failed call (not a silent no-op)")
 
 
 # ── stories/state_engine.py (WORLD_OPS) ──────────────────────────────────────────
@@ -275,6 +308,36 @@ def test_real_db_books_resolve_to_code() -> None:
     check(total >= 15, "all built-in function books resolved")
 
 
+def test_world_graph() -> None:
+    section("world graph (global cross-story doc persisted in libSQL)")
+    from loom.stories import world_graph as WG
+
+    root = Path(tempfile.mkdtemp())
+    check(WG.load(root) == {"locations": [], "relationships": [], "connections": []}, "empty default")
+
+    doc, log = WG.apply(root, [
+        {"fn": "add_location", "params": {"name": "Harbor", "description": "a stone harbor"}},
+        {"fn": "set_relationship", "params": {"source": "Aria", "target": "Daniel",
+                                              "nature": "rival", "dynamic": "old grudge over a stolen ship",
+                                              "stance": "hostile"}},
+    ])
+    check(all(x["ok"] for x in log), "calls applied via the same scripts engine")
+    check(len(doc["locations"]) == 1 and doc["relationships"][0]["stance"] == "hostile",
+          "location + relationship edge land in the global doc")
+
+    # persisted: a fresh load reads it back from libSQL (not in-memory)
+    reloaded = WG.load(root)
+    check(reloaded["relationships"][0]["nature"] == "rival", "round-trips through the docs table")
+
+    # containment works in the global graph too (add a second location, nest it)
+    harbor = reloaded["locations"][0]["id"]
+    doc2, _ = WG.apply(root, [{"fn": "add_location", "params": {"name": "Pier"}}])
+    pier = next(l for l in doc2["locations"] if l["name"] == "Pier")["id"]
+    _, log3 = WG.apply(root, [{"fn": "set_location_area", "params": {"id": pier, "area": harbor}}])
+    check(any(x["ok"] for x in log3) and WG.load(root)["locations"][-1]["parent"] == harbor,
+          "set_location_area nests + persists in the global graph")
+
+
 def test_stage_resolution() -> None:
     section("stage resolution (stage -> preset by convention, no book middleman)")
     from loom.server.services import presets as P
@@ -289,10 +352,23 @@ def test_stage_resolution() -> None:
     check(len(P.load_presets(root)["presets"]) == n, "seed_stage_presets is idempotent")
 
 
+def test_perception() -> None:
+    section("perception (indexed steps + per-character seen / join-no-backlog)")
+    from loom.stories import perception as PC
+    w: dict = {}
+    PC.record_step(w, ["a", "b"]); PC.record_step(w, ["a"]); PC.record_step(w, ["a", "c"])
+    check(w["step"] == 3, "step counter advances per turn")
+    check(PC.seen_steps(w, "a") == [0, 1, 2], "a saw every step")
+    check(PC.seen_steps(w, "b") == [0], "b only saw the opening step")
+    check(PC.seen_steps(w, "c") == [2] and PC.joined_at(w, "c") == 2, "c joined at 2 — no backlog")
+    check(PC.visible(w, "c", ["m0", "m1", "m2"]) == ["m2"], "a joiner sees only the last message")
+
+
 def main() -> int:
     for t in (test_script_coverage, test_scripts_via_invoke, test_graph_ops_integration,
               test_world_ops, test_state_doc, test_session_roundtrip, test_sim_ops,
-              test_stage_resolution, test_real_db_books_resolve_to_code):
+              test_world_graph, test_stage_resolution, test_perception,
+              test_real_db_books_resolve_to_code):
         try:
             t()
         except Exception as exc:  # noqa: BLE001

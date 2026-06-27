@@ -41,3 +41,11 @@ image:
   loras: []
   stack: null
 _migrated_split: true
+playable: true
+home_scenes:
+- id: maya_dorm
+  name: Maya's dorm
+  backstory: Books everywhere, a cold mug of tea, fairy lights over the desk.
+- id: maya_archive
+  name: The university archive
+  backstory: Her real home; she knows every aisle.

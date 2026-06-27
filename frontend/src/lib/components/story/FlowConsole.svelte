@@ -15,6 +15,7 @@
     subtitle = '',
     character = '',
     config = '',                 // chat-config id (drives model/system/lorebooks + graph-ops)
+    storyKey = '',               // SAVED story key (if any) — lets tools persist straight to it
     artifactLabel = 'Document',
     initialArtifact = null,
     lorebooks = $bindable([]),   // data + function books for this flow
@@ -84,11 +85,16 @@
     fnBusy = true; fnMsg = null;
     const r = await post('/stories/graph-ops', {
       config, character, graph: workingArtifact || {}, lorebooks, artifact_label: artifactLabel,
+      story: storyKey || undefined,   // lets tools persist straight to the saved story
       messages: messages.filter((m) => m.content),
     });
     fnBusy = false;
     if (r.data?.ok) {
       if (r.data.graph) setArtifact(r.data.graph, true);
+      // Action tools (image render…) come back as artifacts — render images inline in the chat.
+      for (const a of (r.data.artifacts || [])) {
+        if (a.image) messages = [...messages, { role: 'assistant', content: '', image: a.image, imageAlt: a.prompt }];
+      }
       const ok = (r.data.applied || []).filter((a) => a.ok);
       fnMsg = ok.length ? `✓ ${ok.map((a) => a.fn).join(', ')}`
         : ((r.data.offered || []).length ? 'no changes called for' : 'attach a function book first');

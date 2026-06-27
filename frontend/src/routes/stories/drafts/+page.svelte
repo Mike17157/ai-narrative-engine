@@ -43,7 +43,7 @@
     <div class="empty">
       <div class="emk">🧭</div>
       <p>Nothing in progress.</p>
-      <span>Start a new story from a character — build its spine, storyboard, scenes and cast.</span>
+      <span>Start a new story from a character — build its characters, outfits and scenes.</span>
       <button onclick={newStory}>＋ New story</button>
     </div>
   {/if}

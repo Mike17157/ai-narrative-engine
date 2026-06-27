@@ -738,6 +738,87 @@
       "enabled": true,
       "priority": 7,
       "facet": "arc"
+    },
+    {
+      "id": "world-bound-climax",
+      "title": "Bind the world's fate to the hero's choice (Truby)",
+      "facet": "stakes",
+      "priority": 8,
+      "enabled": true,
+      "keywords": [
+        "climax",
+        "ending",
+        "stakes",
+        "world",
+        "greater good",
+        "fate",
+        "choice",
+        "sacrifice",
+        "consequence",
+        "kingdom",
+        "save the world"
+      ],
+      "content": "The climax must NOT turn on an abstract 'greater good' — that stake is generic and belongs to no one. Truby/Arndt: the external crisis is the ARENA where the hero's internal contradiction (their Lie/weakness vs their need) is finally decided, and the world's fate is the EXTERNALIZATION of that personal choice. Engineer it so the same single action resolves both the inner flaw and the outer problem at once — a choice only the changed hero could make. Stakes must be specific to THIS protagonist's motives and mental world; the world matters because it is bound to their reckoning, not because saving it is generically good."
+    },
+    {
+      "id": "opponent-attacks-weakness",
+      "title": "The opponent attacks the hero's great weakness (Truby)",
+      "facet": "antagonist",
+      "priority": 7,
+      "enabled": true,
+      "keywords": [
+        "opponent",
+        "antagonist",
+        "weakness",
+        "need",
+        "flaw",
+        "conflict",
+        "crisis",
+        "pressure",
+        "tailored",
+        "mirror"
+      ],
+      "content": "Truby: the true opponent is the character BEST ABLE to attack the hero's greatest weakness and need — not just whoever blocks the external goal. Design the crisis so it presses on exactly the protagonist's flaw/Lie, forcing the self-revelation. Hero and opponent should fight over the same moral question from opposed views (four-corner opposition). A threat that doesn't target the hero's specific wound is just spectacle."
+    },
+    {
+      "id": "seven-key-steps",
+      "title": "Truby's seven key story steps",
+      "facet": "structure",
+      "priority": 7,
+      "enabled": true,
+      "keywords": [
+        "structure",
+        "steps",
+        "weakness",
+        "need",
+        "desire",
+        "opponent",
+        "plan",
+        "battle",
+        "self-revelation",
+        "equilibrium",
+        "truby",
+        "arc"
+      ],
+      "content": "Truby's organic spine (use as the through-line, not a template): 1) WEAKNESS & NEED — a flaw hurting the hero, plus the moral+psychological truth they must learn; 2) DESIRE — the concrete external goal they pursue; 3) OPPONENT — who attacks the weakness while contesting the desire; 4) PLAN — how they pursue it; 5) BATTLE — the final conflict that externalizes the moral argument; 6) SELF-REVELATION — they see the truth about themselves and how they've wronged others; 7) NEW EQUILIBRIUM — the changed (or tragically unchanged) world after. The ending is steps 5-7 fused: choice → revelation → consequence."
+    },
+    {
+      "id": "designing-principle",
+      "title": "The designing principle — one organic seed (Truby)",
+      "facet": "meta",
+      "priority": 6,
+      "enabled": true,
+      "keywords": [
+        "designing principle",
+        "unity",
+        "seed",
+        "organic",
+        "theme",
+        "concept",
+        "spine",
+        "through-line"
+      ],
+      "content": "Truby: find the ONE deep process/metaphor that organically unifies the whole story (e.g. 'a man becomes a king by learning to see' for Lear). Every arc, opponent, and the ending should express this single seed. It keeps the climax from drifting into generic plot — the resolution must pay off the designing principle through the hero's specific transformation."
     }
   ]
 }

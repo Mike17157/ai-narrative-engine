@@ -10,6 +10,10 @@ const LS_ACTIVE_IMAGE = 'loom.activeImage';
 const LS_PERSONAS = 'loom.personas';
 const LS_PERSONAS_MIGRATED = 'loom.personasMigrated';
 const LS_ACTIVE_PERSONA = 'loom.activePersona';
+// Which PLAYABLE character card the human is currently embodying (the "you" puppet).
+// A client selection, persisted like activePersona; the puppet itself is a normal
+// character card flagged `playable`, so it ports across every story.
+const LS_ACTIVE_PLAYER = 'loom.activePlayerChar';
 const ls = (fn, fallback) => { try { return typeof localStorage !== 'undefined' ? fn() : fallback; } catch { return fallback; } };
 
 // User personas — who *you* are in the chat (the {{user}} side), SillyTavern-style.
@@ -35,6 +39,9 @@ export const app = $state({
   activeImage: ls(() => localStorage.getItem(LS_ACTIVE_IMAGE) || '', ''), // last-used workflow, restored across sessions
   personas: loadPersonas(),
   activePersona: ls(() => localStorage.getItem(LS_ACTIVE_PERSONA) || 'you', 'you'),
+  // The playable character card you embody in stories (a key into chars.list). '' = none
+  // (falls back to the legacy persona). Persisted; the puppet ports across all stories.
+  activePlayerChar: ls(() => localStorage.getItem(LS_ACTIVE_PLAYER) || '', ''),
   // Chat conversation lives in the store so it survives route navigation.
   chat: { messages: [], input: '', demoTurn: 0, seededFor: undefined }
 });
@@ -186,6 +193,12 @@ export async function migratePersonas() {
 export function setActivePersona(id) {
   app.activePersona = id;
   ls(() => localStorage.setItem(LS_ACTIVE_PERSONA, id), null);
+}
+
+// Set + persist the playable character the human embodies (the "you" puppet). '' = none.
+export function setActivePlayerChar(key) {
+  app.activePlayerChar = key || '';
+  ls(() => localStorage.setItem(LS_ACTIVE_PLAYER, app.activePlayerChar), null);
 }
 
 export async function refreshHealth() {
