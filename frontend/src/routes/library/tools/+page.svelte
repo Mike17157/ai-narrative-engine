@@ -2,9 +2,10 @@
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
 
-  // Tools catalog — what each tool is, its params, which function books wire it up, and its
-  // SOURCE (the real implementation). Tools are CODE (loom/stories/scripts.py + stage_tools.py);
-  // the modal lets you edit the source — it's parse-checked, and a backend restart applies it.
+  // Tools catalog — what each tool is, its params, and its SOURCE (the real implementation).
+  // Tools are CODE (loom/stories/scripts.py + stage_tools.py); the modal lets you edit the source —
+  // it's parse-checked, and a backend restart applies it. Grouped by the chat MODE that offers each
+  // (read from configs/story_agent.json — the agent's real menu); pipeline-only tools group separately.
 
   let graph = $state([]);
   let stage = $state([]);
@@ -20,13 +21,13 @@
   const match = (t) => !q.trim() ||
     (t.fn + ' ' + (t.describe || '') + ' ' + (t.keywords || []).join(' ')).toLowerCase().includes(q.toLowerCase());
 
-  // Group the catalog by AGENT (the preset a tool's function book binds to). A tool can power
-  // more than one Agent (e.g. storyboard), so it appears under each — accurate, not duplicated
-  // identity. Tools bound to nothing fall into "Unbound". Conversational Agents sort first.
+  // Group the catalog by the chat MODE that offers each tool (from story_agent.json). A tool can be
+  // offered by more than one mode (e.g. generate_image), so it appears under each. Pipeline-only
+  // tools (wired by a function book, not chat-callable) group last; anything else is "Unbound".
   let allTools = $derived([...graph, ...stage]);
-  const rank = (g) => (g === 'Agents' ? 0 : g === 'Pipeline stages' ? 1 : 2);
-  const groupHint = (g) => g === 'Agents' ? 'tools this Agent can call'
-    : g === 'Pipeline stages' ? 'pipeline stage tools an Agent runs' : '';
+  const rank = (g) => (g === 'Modes' ? 0 : g === 'Pipeline' ? 1 : 2);
+  const groupHint = (g) => g === 'Modes' ? 'tools this mode offers in chat'
+    : g === 'Pipeline' ? 'pipeline-only — not chat-callable' : '';
   let groups = $derived.by(() => {
     const by = new Map();
     const unbound = [];
@@ -72,8 +73,8 @@
   <div class="head">
     <div>
       <h1>Tools</h1>
-      <p class="sub">Model-callable tools, grouped by the <b>Agent</b> that can call them. Click one
-        to read or edit its source; wiring lives in a <a href="/library/lorebooks">function book</a>.</p>
+      <p class="sub">Model-callable tools, grouped by the chat <b>mode</b> that offers them (from the
+        story agent config). Click one to read or edit its source.</p>
     </div>
     <input class="search" placeholder="Search tools…" bind:value={q} />
   </div>
@@ -87,7 +88,7 @@
       <section>
         <div class="ghead">
           <h2>{g.name} <span class="cnt">{g.tools.length}</span></h2>
-          <span class="ghint">{g.unbound ? 'not bound to an Agent — attach in a function book' : groupHint(g.group)}</span>
+          <span class="ghint">{g.unbound ? 'not offered by any mode and not wired to the pipeline' : groupHint(g.group)}</span>
         </div>
         <div class="grid">
           {#each g.tools as t (g.id + ':' + t.fn)}
@@ -137,10 +138,10 @@
           <div><h4>Trigger keywords</h4>
             <div class="kws">{#each sel.keywords as k}<span class="kw">{k}</span>{/each}</div></div>
         {/if}
-        <div><h4>Agents</h4>
+        <div><h4>Offered in</h4>
           {#if (sel.agents || []).length}
             <div class="kws">{#each sel.agents as a}<span class="kw">{a.name}</span>{/each}</div>
-          {:else}<span class="none">not bound to an Agent</span>{/if}</div>
+          {:else}<span class="none">no mode offers this; not in the pipeline</span>{/if}</div>
       </div>
 
       <!-- Source: the central element — editable, parse-checked, restart to apply. -->

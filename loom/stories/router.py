@@ -1242,13 +1242,14 @@ def register(app, ctx):
     @app.get("/api/tools")
     def list_tools():
         """Catalog of model-callable TOOLS for the Library ▸ Tools tab. Two kinds, both code
-        (read-only): GRAPH scripts (scripts.py — called as native tools via function books) and
-        pipeline STAGE tools (stage_tools.py — triggered by agents). `used_by` lists which
-        function books reference each tool, so you can see what's wired to what."""
+        (read-only): GRAPH scripts (scripts.py) and pipeline STAGE tools (stage_tools.py). Each
+        tool's `agents` is the chat MODE(s) that offer it (from configs/story_agent.json — the real
+        chat menu), or 'Pipeline' if only a function book wires it. `used_by` lists the function
+        books that reference it (the pipeline wiring)."""
         import inspect
 
         from ..server.services import lorebook_store as LS
-        from ..server.services import presets as P
+        from . import agent_config as AC
         from . import graph_ops as GO
         from . import scripts as S
         from . import stage_tools as ST
@@ -1260,12 +1261,10 @@ def register(app, ctx):
             except (OSError, TypeError):
                 return ""
 
-        # Which function books reference each tool (a function entry names a registered tool),
-        # and which preset (= Agent) each book binds to — so a tool can report the Agents it powers.
+        # Which function books reference each tool — the PIPELINE wiring (a stage step attaches a
+        # function book). Still real for the pipeline; the chat agent no longer routes tools this way.
         used: dict[str, list[str]] = {}
-        book_preset: dict[str, str] = {}
         for b in LS.list_books(ctx.root):
-            book_preset[b["id"]] = b.get("preset") or ""
             for e in LS.load_lorebook(ctx.root, b["id"]):
                 spec = GO._parse_spec(getattr(e, "content", "") or "")
                 fn = (spec or {}).get("fn")
@@ -1274,17 +1273,20 @@ def register(app, ctx):
                     if b["id"] not in used[str(fn)]:
                         used[str(fn)].append(b["id"])
 
-        pmeta = {p["id"]: {"id": p["id"], "name": p.get("name") or p["id"], "group": p.get("group") or ""}
-                 for p in P.load_presets(ctx.root).get("presets", [])}
+        # The chat's REAL menu: which story_agent.json mode(s) offer each tool (its `functions` list).
+        # This is the source of truth now — grouping by it shows what the agent can actually call.
+        modes = (AC.load_config(ctx.root).get("modes") or {})
+        mode_fns = {mid: set(m.get("functions") or []) for mid, m in modes.items()}
+        mode_label = {mid: (m.get("label") or mid) for mid, m in modes.items()}
 
         def _agents(fn: str) -> list[dict]:
-            """The distinct Agents (presets) a tool powers — via the books that reference it."""
-            seen: dict[str, dict] = {}
-            for bid in used.get(fn, []):
-                pid = book_preset.get(bid) or ""
-                if pid and pid in pmeta and pid not in seen:
-                    seen[pid] = pmeta[pid]
-            return list(seen.values())
+            """Where a tool is offered: the chat MODES that list it; else 'Pipeline' if a function
+            book wires it (pipeline-only, not chat-callable); else nothing (Unbound)."""
+            out = [{"id": mid, "name": mode_label[mid], "group": "Modes"}
+                   for mid, fns in mode_fns.items() if fn in fns]
+            if not out and used.get(fn):
+                out.append({"id": "_pipeline", "name": "Pipeline", "group": "Pipeline"})
+            return out
 
         def _pdisplay(params: dict) -> dict:
             # Flatten the rich param specs to {name: description} for the catalog UI; enum/type
