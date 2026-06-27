@@ -816,11 +816,8 @@ _STARTER_BOOKS = [
                             "description": "The storymaster's consolidation tool — turns events into "
                                            "per-character impacts (relationship drift + new exemplars)."},
      _STORYMASTER_TOOLS_ENTRIES),
-    ("_premise_interview", {"name": "Premise Interview", "category": "craft", "rating": "sfw",
-                            "description": "Deterministic question script the premise builder asks IN "
-                                           "ORDER (priority DESC) to draw a story out of you — from "
-                                           "scratch or from a reference card. Edit/reorder the questions."},
-     _PREMISE_INTERVIEW_ENTRIES),
+    # NOTE: _premise_interview (the scripted Q&A) was removed — premise components are now checked
+    # on the overview (POST /api/stories/{key}/premise-coverage), filled in place with the Author.
     ("rpg-sim", {"name": "RPG Simulation", "category": "rpg", "rating": "sfw",
                  "description": "Turn the chat into a lightweight tabletop RPG: skill checks, "
                                 "combat turns, inventory, and consequences."}, [

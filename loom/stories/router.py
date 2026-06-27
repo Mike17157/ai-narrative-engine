@@ -738,179 +738,63 @@ def register(app, ctx):
             return JSONResponse({"error": "model returned nothing"}, status_code=500)
         return {"premise": premise}
 
-    @app.post("/api/stories/premise-chat")
-    async def premise_chat(body: dict):
-        """Interview-style premise builder (STREAMING, MODEL-DRIVEN). The premise is a doc of
-        named SECTIONS defined by a lorebook (default scope `_premise_interview`, editable in the
-        Lorebook manager). Each turn the model drives the flow with a tool-call-shaped emission:
-        `ops` (edits targeting whichever sections the user's words inform) + `ask` (the section to
-        ask next — defaults to the next empty one in order, but the user can redirect via `focus`).
-        The backend applies the ops to the doc it was handed and returns the merged result. Works
-        from scratch (no cards) or seeded by reference card(s); free-form fallback if no questions.
-        Body: { characters?: [key], character?: key, premise?: str, messages?: [{role,content}],
-        fields?: {section→value} (the doc so far), focus?: str (section to revisit), script?: str }.
-        Streams SSE: `delta` (reply tokens, live) then one `result` {reply, premise, fields,
-        sections, active, done, filled, total}, then `done`. The model writes its reply, then a
-        ⟦DOC⟧ marker, then the JSON ({ops, premise, ask}) — the client shows text up to the marker
-        live, builds the right-hand canvas from `fields`, highlights `active`, snaps at end."""
-        import asyncio
-        import threading
+    # The premise's core components — what a strong premise must address. Replaces the old scripted
+    # "premise interview"; the overview checks these against the story instead (premise-coverage).
+    _PREMISE_COMPONENTS = [
+        ("protagonist", "Protagonist", "who the story is about — a specific person, not a type"),
+        ("lie", "The lie they live by", "the false belief / self-deception the story will test"),
+        ("inciting", "Inciting incident", "what breaks the calm and sets the story in motion"),
+        ("opposition", "Opposition", "who or what pushes back against the protagonist"),
+        ("stakes", "Stakes", "what is at risk — what is lost if they fail"),
+        ("texture", "Tone & texture", "the mood, genre and sensory feel of the world"),
+    ]
 
-        from fastapi.concurrency import run_in_threadpool
-        from fastapi.responses import StreamingResponse
-
-        from .pipeline._helpers import _card_context
-        from ..server.services import lorebook_store as LS
-
-        body = body or {}
-        keys = body.get("characters") or ([body["character"]] if body.get("character") else [])
-        cards = [(k, c) for k in keys if (c := ctx.base_settings.characters.get(k)) is not None]
-        # Lorebook-driven SECTIONS: each question entry is a section of the premise doc the canvas
-        # builds. `content` is the section's guiding question; `id`/`title` name the doc field.
-        book = (body.get("script") or "_premise_interview").strip()
-        qentries = [e for e in LS.load_lorebook(ctx.root, book)
-                    if e.enabled and (e.content or e.title).strip()]
-        sections = [{"id": e.id, "label": e.title or e.id, "q": (e.content or e.title).strip()}
-                    for e in qentries]
-        sec_ids = [s["id"] for s in sections]
-        if not cards and not sections:
-            return JSONResponse({"error": "no reference card and no interview questions to start from"},
-                                status_code=400)
-        provider, _systems = ctx.builder_ctx(body, "premise")
+    @app.post("/api/stories/{key}/premise-coverage")
+    def premise_coverage(key: str, body: dict):
+        """Check whether the story's premise addresses each core component (protagonist, lie,
+        inciting, opposition, stakes, texture). Replaces the scripted premise interview — the
+        overview calls this to flag gaps the writer fills in place (with the Author agent). Returns
+        { components: [{id, label, covered, note}] }."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        sd = st.model_dump()
+        sb = sd.get("storyboard") or {}
+        cast = ", ".join(getattr(ctx.base_settings.characters.get(m.get("character")), "name", m.get("character"))
+                         for m in (sd.get("cast") or []) if m.get("character")) or "(none yet)"
+        ctx_text = "\n".join([
+            f"Premise: {sd.get('premise') or '(empty)'}",
+            f"Logline: {sb.get('logline') or ''}",
+            f"Tone: {sd.get('tone') or ''}",
+            f"Themes: {', '.join(sd.get('themes') or [])}",
+            f"Intended ending: {sd.get('intended_ending') or ''}",
+            f"Cast: {cast}",
+        ])
+        comp_lines = "\n".join(f"- {cid} ({label}): {desc}" for cid, label, desc in _PREMISE_COMPONENTS)
+        provider, _systems = ctx.builder_ctx(body or {}, "premise")
         if provider is None:
             return JSONResponse({"error": _systems}, status_code=400)
-
-        cards_text = "\n\n---\n\n".join(
-            _card_context(c.name, c.system, ctx.card_extras(c, k)) for k, c in cards)
-        msgs = body.get("messages") or []
-        transcript = "\n".join(
-            f"{(m.get('role') or 'user').upper()}: {(m.get('content') or '').strip()}"
-            for m in msgs if (m.get("content") or "").strip())
-        current = (body.get("premise") or "").strip()
-        # The doc state the canvas currently shows — the model EDITS this, targeting sections.
-        doc_fields = {k: str(v).strip() for k, v in (body.get("fields") or {}).items()
-                      if k in sec_ids and str(v).strip()}
-        focus = (body.get("focus") or "").strip()       # a section the user clicked to revisit
-        focus = focus if focus in sec_ids else ""
-
-        MARKER = "⟦DOC⟧"
-        if sections:
-            # Model-DRIVEN flow (a tool-call shape): the model decides which section to ask next,
-            # defaulting to the next still-empty one in order, and emits `set` ops for whichever
-            # sections the user's words inform. The user can redirect via `focus`.
-            unfilled = [s for s in sections if not doc_fields.get(s["id"])]
-            state_lines = "\n".join(
-                f'- "{s["id"]}" — {s["label"]}: {doc_fields.get(s["id"]) or "(empty)"}'
-                f'  ·  guiding question: {s["q"]}' for s in sections)
-            system = (
-                "You are interviewing the user to build ONE compelling story PREMISE as a structured "
-                "doc of named SECTIONS. You drive the conversation: each turn, react briefly to the "
-                "user's last message, then ask ONE focused question about a single section. Default to "
-                "the next still-EMPTY section in the listed order — but stay dynamic: if the user "
-                "circles back to or expands a section, follow them there, and EDIT whichever section "
-                "their words inform (not only the one you asked). When every section is filled and the "
-                "user has nothing to add, stop asking and deliver the final premise.")
-            directive = (
-                f'The user asked to revisit the "{focus}" section — ask its guiding question again and '
-                f"edit it from their answer." if focus else
-                (f'Next still-empty section to ask: "{unfilled[0]["id"]}".' if unfilled else
-                 'Every section is filled — you MAY finalize: deliver the polished premise and set ask to "".'))
-            system += (
-                f"\n\nFORMAT — write your conversational reply first (exactly one question, or a "
-                f"confirmation when finalizing). Then on its own line write exactly {MARKER} followed by "
-                f"a JSON object and NOTHING after it:\n"
-                f'{{"ops": [{{"op": "set", "id": "<section id>", "value": "<short phrase capturing what '
-                f'the user told you>"}}], "premise": "<one or two grounded sentences: who, the situation, '
-                f'the central tension — no title, no quotes>", "ask": "<the section id your reply asks '
-                f'about, or empty string when the premise is complete>"}}\n'
-                f"Emit `set` ops ONLY for sections the user's latest message actually informs — edit the "
-                f"RIGHT section even if it isn't the one you just asked. Valid section ids: "
-                f"{', '.join(sec_ids)}.")
-            prompt = ""
-            if cards_text:
-                prompt += f"REFERENCE CHARACTER CARD(S) (seed material — weave in, don't contradict):\n{cards_text}\n\n"
-            prompt += f"PREMISE DOC SO FAR:\n{state_lines}\n\n"
-            if current:
-                prompt += f"CURRENT PREMISE PROSE:\n{current}\n\n"
-            prompt += f"CONVERSATION SO FAR:\n{transcript or '(none yet — open the interview)'}\n\n{directive}"
-        else:
-            # Free-form fallback (no question book): improvise; no structured sections.
-            system = (
-                "You are a story architect helping the user shape ONE compelling story PREMISE seeded "
-                "by the character card(s) below. Reply with a short note on what changed, ending with "
-                "EXACTLY ONE focused question. If the conversation is empty, propose an opening premise "
-                "and ask your first question."
-                f'\n\nFORMAT — reply first, then on its own line write exactly {MARKER} followed by a '
-                f'JSON object: {{"premise": "<one or two grounded sentences>", "ask": "x"}}.')
-            prompt = ""
-            if cards_text:
-                prompt += f"REFERENCE CHARACTER CARD(S):\n{cards_text}\n\n"
-            if current:
-                prompt += f"CURRENT PREMISE:\n{current}\n\n"
-            prompt += f"CONVERSATION SO FAR:\n{transcript or '(none yet — open the interview)'}"
-
-        loop = asyncio.get_running_loop()
-        q: asyncio.Queue = asyncio.Queue()
-        cancel_evt = threading.Event()
-
-        def on_delta(t: str):
-            loop.call_soon_threadsafe(q.put_nowait, {"type": "delta", "text": t})
-
-        async def run():
-            try:
-                res = await run_in_threadpool(lambda: provider.generate_text(
-                    system=system, prompt=prompt, on_delta=on_delta, cancel=cancel_evt.is_set))
-                if not cancel_evt.is_set():
-                    reply, _, rest = (res.text or "").partition(MARKER)
-                    premise = current
-                    new_fields = dict(doc_fields)
-                    ask = None
-                    i, j = rest.find("{"), rest.rfind("}")   # tolerate code fences / stray text
-                    if i >= 0 and j > i:
-                        try:
-                            doc = json.loads(rest[i:j + 1])
-                            premise = (doc.get("premise") or premise or "").strip().strip('"').strip()
-                            for op in (doc.get("ops") or []):     # apply the model's section edits
-                                if isinstance(op, dict) and op.get("id") in sec_ids:
-                                    v = str(op.get("value") or "").strip()
-                                    if v:
-                                        new_fields[op["id"]] = v
-                            if "ask" in doc:
-                                a = str(doc.get("ask") or "").strip()
-                                ask = a if a in sec_ids else ""
-                        except Exception:  # noqa: BLE001 — not JSON; treat the tail as prose
-                            premise = rest.strip().strip('"').strip() or premise
-                    # Resolve the active section + completion. If the model omitted `ask`, fall back to
-                    # the next empty section; only finalize when every section is filled AND ask is "".
-                    if ask is None:
-                        ask = next((s["id"] for s in sections if not new_fields.get(s["id"])), "")
-                    all_filled = bool(sections) and all(new_fields.get(s["id"]) for s in sections)
-                    if ask == "" and not all_filled:
-                        ask = next((s["id"] for s in sections if not new_fields.get(s["id"])), "")
-                    done = all_filled and ask == ""
-                    filled = sum(1 for s in sections if new_fields.get(s["id"]))
-                    loop.call_soon_threadsafe(q.put_nowait, {
-                        "type": "result", "reply": reply.strip(), "premise": premise, "fields": new_fields,
-                        "sections": [{"id": s["id"], "label": s["label"]} for s in sections],
-                        "active": ask, "done": done, "filled": filled, "total": len(sections)})
-            except Exception as exc:  # noqa: BLE001
-                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
-            loop.call_soon_threadsafe(q.put_nowait, None)
-
-        asyncio.create_task(run())
-
-        async def events():
-            try:
-                while True:
-                    ev = await q.get()
-                    if ev is None:
-                        break
-                    yield f"data: {json.dumps(ev)}\n\n"
-            finally:
-                cancel_evt.set()  # client disconnected / cancelled → stop upstream
-            yield 'data: {"type": "done"}\n\n'
-
-        return StreamingResponse(events(), media_type="text/event-stream")
+        schema = {"type": "object", "additionalProperties": False, "required": ["components"],
+                  "properties": {"components": {"type": "array", "items": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["id", "covered", "note"],
+                      "properties": {"id": {"type": "string"}, "covered": {"type": "boolean"},
+                                     "note": {"type": "string", "description": "if covered, one phrase "
+                                              "on how; if not, one concrete suggestion to address it"}}}}}}
+        system = ("You assess whether a story PREMISE addresses each required component. For each, decide "
+                  "if the material below ADDRESSES it (covered=true) or leaves it absent/vague "
+                  "(covered=false). Judge substance, not keywords. Keep each note to one short phrase.")
+        prompt = f"STORY SO FAR:\n{ctx_text}\n\nCOMPONENTS TO CHECK:\n{comp_lines}"
+        try:
+            out = (provider.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"coverage check failed: {exc}"}, status_code=500)
+        by_id = {c.get("id"): c for c in (out.get("components") or []) if isinstance(c, dict)}
+        return {"components": [
+            {"id": cid, "label": label,
+             "covered": bool(by_id.get(cid, {}).get("covered")),
+             "note": str(by_id.get(cid, {}).get("note") or "").strip()}
+            for cid, label, _desc in _PREMISE_COMPONENTS]}
 
     @app.post("/api/stories/extract-scenes")
     def story_extract_scenes(body: dict):

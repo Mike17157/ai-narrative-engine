@@ -49,6 +49,41 @@
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persistCurrent, 600); }
 
+  // ── Premise components: the overview is STRUCTURED by the premise's parts (protagonist, lie,
+  //    inciting, opposition, stakes, texture). Coverage is checked AUTOMATICALLY — on open and after
+  //    premise/logline/tone edits (debounced). Gaps are filled in place via the Author or the fields.
+  //    Replaced the old scripted premise interview. ──
+  const PREMISE_COMPONENTS = [
+    { id: 'protagonist', label: 'Protagonist' },
+    { id: 'lie', label: 'The lie they live by' },
+    { id: 'inciting', label: 'Inciting incident' },
+    { id: 'opposition', label: 'Opposition' },
+    { id: 'stakes', label: 'Stakes' },
+    { id: 'texture', label: 'Tone & texture' },
+  ];
+  let coverage = $state(null);    // [{id,label,covered,note}] | null
+  let covBusy = $state(false);
+  let covErr = $state(null);
+  let covById = $derived(Object.fromEntries((coverage || []).map((c) => [c.id, c])));
+  let covGaps = $derived((coverage || []).filter((c) => !c.covered).length);
+  async function checkCoverage() {
+    if (covBusy || !st) return;
+    covBusy = true; covErr = null;
+    const r = await post(`/stories/${st.key}/premise-coverage`, {});
+    covBusy = false;
+    if (r.ok && r.data?.components) coverage = r.data.components;
+    else covErr = r.data?.error || 'check failed';
+  }
+  // Auto-run: debounced on open + when the premise material changes. Resets on story switch.
+  let covTimer = null, covKey = null;
+  $effect(() => {
+    const key = st?.key; if (!key) return;
+    void (st.premise || ''); void (st.storyboard?.logline || ''); void (st.tone || '');   // track edits
+    if (covKey !== key) { covKey = key; coverage = null; covErr = null; }                   // new story
+    clearTimeout(covTimer);
+    covTimer = setTimeout(checkCoverage, 1200);
+  });
+
   // Themes ↔ comma-string mirror (re-seed when the story changes; avoids array churn per keystroke).
   let themesStr = $state(''); let themesSeed = null;
   $effect(() => { if (st && themesSeed !== st.key) { themesStr = (st.themes || []).join(', '); themesSeed = st.key; } });
@@ -338,6 +373,30 @@
   {/if}
   <textarea class="ip ip-prem" use:autosize={st.premise} bind:value={st.premise} oninput={saveSoon}
             placeholder="Premise — what is this story about?"></textarea>
+
+  <!-- Premise components — the structure of the premise, auto-checked against the story -->
+  <div class="cov">
+    <div class="cov-head">
+      <span class="cov-t">Premise components</span>
+      <span class="cov-status">
+        {#if covBusy}checking…
+        {:else if covErr}<span class="cov-err">{covErr}</span>
+        {:else if coverage}{covGaps ? `${covGaps} to address` : 'all covered ✓'}{/if}
+      </span>
+    </div>
+    <div class="cov-grid">
+      {#each PREMISE_COMPONENTS as comp (comp.id)}
+        {@const c = covById[comp.id]}
+        <div class="cov-item" class:ok={c?.covered} class:gap={c && !c.covered} class:pend={!c}>
+          <span class="cov-mark">{c ? (c.covered ? '✓' : '○') : '·'}</span>
+          <div class="cov-body">
+            <span class="cov-label">{comp.label}</span>
+            {#if c?.note}<span class="cov-note">{c.note}</span>{/if}
+          </div>
+        </div>
+      {/each}
+    </div>
+  </div>
 
   <!-- Tone + themes (edit in place) -->
   <div class="ip-meta">
@@ -673,6 +732,22 @@
   .ip-title   { font-size: 22px; font-weight: 800; margin: 0 0 2px -8px; }
   .ip-logline { font-size: 14.5px; font-style: italic; margin-left: -8px; }
   .ip-prem    { font-size: 13.5px; color: var(--muted); line-height: 1.6; resize: none; margin-left: -8px; }
+  /* ── premise coverage ── */
+  .cov { margin: 4px 0 14px; }
+  .cov-head { display: flex; align-items: baseline; gap: 10px; }
+  .cov-t { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
+  .cov-status { font-size: 11.5px; color: var(--faint); }
+  .cov-err { font-size: 11.5px; color: var(--bad); }
+  .cov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; margin-top: 8px; }
+  .cov-item { display: flex; gap: 8px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border-soft); background: var(--elev); transition: border-color .15s, opacity .15s; }
+  .cov-item.pend { opacity: .5; }
+  .cov-item.gap { border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: color-mix(in srgb, var(--bad) 6%, var(--elev)); }
+  .cov-mark { font-weight: 700; line-height: 1.5; color: var(--faint); }
+  .cov-item.ok .cov-mark { color: var(--accent); }
+  .cov-item.gap .cov-mark { color: var(--bad); }
+  .cov-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+  .cov-label { font-size: 12px; font-weight: 600; color: var(--text); }
+  .cov-note { font-size: 11.5px; color: var(--faint); line-height: 1.4; }
   .ip-meta    { display: flex; flex-wrap: wrap; gap: 8px; margin-left: -8px; }
   .ip-tone    { flex: 0 0 220px; font-size: 12.5px; }
   .ip-themes  { flex: 1; min-width: 200px; font-size: 12.5px; }
