@@ -200,6 +200,34 @@ def _find_lora_file(loras_dir: Path, name: str) -> Path | None:
     return None
 
 
+def local_trigger_words(loras_dir: Path | None, name: str) -> list[str]:
+    """Best-effort trigger words from a LoRA's own safetensors header — the fallback when
+    Civitai has none (local/private LoRAs). Reads the `__metadata__` block (cheap: just the
+    JSON header, not the tensors) and pulls an explicit trigger phrase if the trainer stored
+    one. We do NOT mine `ss_tag_frequency` — those are training tags, too noisy to auto-apply.
+    Returns [] on anything unexpected."""
+    if not loras_dir or not name:
+        return []
+    f = _find_lora_file(loras_dir, name)
+    if not f or f.suffix.lower() != ".safetensors":
+        return []
+    try:
+        import struct
+        with open(f, "rb") as fh:
+            n = struct.unpack("<Q", fh.read(8))[0]
+            if n <= 0 or n > 50_000_000:           # sane header bound
+                return []
+            meta = (json.loads(fh.read(n)) or {}).get("__metadata__") or {}
+    except (OSError, ValueError, struct.error):
+        return []
+    # Keys trainers use for an explicit activation phrase (ai-toolkit/OneTrainer/modelspec).
+    for key in ("modelspec.trigger_phrase", "ss_trigger_words", "trigger_words", "activation_text"):
+        v = meta.get(key)
+        if isinstance(v, str) and v.strip():
+            return [w.strip() for w in v.split(",") if w.strip()]
+    return []
+
+
 def _sha256(path: Path) -> str | None:
     import hashlib
     try:

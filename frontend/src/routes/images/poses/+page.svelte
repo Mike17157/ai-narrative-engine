@@ -145,8 +145,8 @@
 {/if}
 
 <style>
-  .hint { font-size: 12.5px; color: var(--muted); line-height: 1.55; }
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .hint { line-height: 1.55; }
+  .card { border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
   .card h3 { margin: 0 0 10px; font-size: 14px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12px; }
   .rows { display: flex; flex-direction: column; gap: 6px; }
@@ -154,7 +154,7 @@
   .prow { display: grid; grid-template-columns: 150px 1fr; gap: 10px; align-items: center; }
   .nm { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 7px; }
   .badge { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--accent); background: rgba(124,109,255,.14); border-radius: 999px; padding: 1px 7px; }
-  .ok { color: var(--good, #8fc7a0); font-size: 13px; }
+  .ok { font-size: 13px; }
   .sel, .fld { padding: 6px 9px; font-size: 12.5px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); color: var(--text); }
   .fld:focus, .sel:focus { border-color: var(--accent); outline: none; }
   .charrow { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }

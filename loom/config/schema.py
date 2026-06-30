@@ -248,12 +248,69 @@ class Arc(BaseModel):
     themes: list[str] = Field(default_factory=list)  # themes this arc explores (arc-level, not story-level)
     premise: str = ""             # the dramatic situation/tension this arc puts the cast through
     cast: list[str] = Field(default_factory=list)   # character keys active in this arc
+    # Relationship-first cross-refs (GENESIS.md §6): the arc↔character and arc↔graph links.
+    owner: str = ""               # character key whose LIE this arc plots (the arc IS a lie over time)
+    pressures: list[str] = Field(default_factory=list)  # relationship ids this arc rides on / strains
     nodes: dict[str, ArcBeat] = Field(default_factory=dict)  # legacy flat chain
     start: str = ""               # id of the first ArcBeat node (legacy)
     order: int = 0
     timelines: list[ArcTimeline] = Field(default_factory=list)      # parallel timeline tracks
     transitions: list[ArcTransition] = Field(default_factory=list)  # crossover edges
     divergence_axis: str = ""     # the persona dimension timelines diverge along
+
+
+class Chapter(BaseModel):
+    """A NOVEL chapter — a linear, baked unit (vs the VN's branching arc/timeline graph). The Author
+    authors its harness (purpose / pov / beats); the Narrative agent drafts its prose; the Storymaster
+    distills a `recap` that carries forward to the next chapter. Generation is serial + gated."""
+    id: str
+    title: str = ""
+    purpose: str = ""        # what this chapter accomplishes (the harness)
+    pov: str = ""            # character key whose point of view
+    setting: str = ""        # where it happens
+    beats: list[str] = Field(default_factory=list)   # the chapter's internal structure
+    status: str = "outline"  # outline | drafting | drafted
+    draft: str = ""          # generated prose (the manuscript)
+    recap: str = ""          # carry-forward summary (Storymaster), feeds the next chapter
+
+
+class OnStage(BaseModel):
+    """A character present in a VN scene, with the goal + secret that drive how they're played."""
+    char: str
+    goal: str = ""
+    secret: str = ""
+
+
+class DivergenceTrigger(BaseModel):
+    """A condition that can branch a VN scene. `choice` triggers fire on the player's pick;
+    `emergent` triggers fire when a tracked feature crosses a threshold (`condition` like
+    'suspicion >= 4'). A choice fires deterministically; an emergent trigger is only ARMED — the
+    runtime then asks the tool whether it's time to switch (see /scene/{id}/evaluate)."""
+    kind: str = "emergent"   # "choice" | "emergent"
+    condition: str = ""      # choice: the option text; emergent: "<feature> <op> <number>"
+    branch: str = ""         # target scene id
+    intent: str = ""         # what this branch is about
+
+
+class SceneHarness(BaseModel):
+    """A VN scene as a HARNESS, not a script: its dramatic goal, who's on stage (+ their goals/
+    secrets), tone, and the divergence triggers out of it. The runtime GENERATES the dialogue live
+    within this; it is never authored line-by-line. See [[multiformat-story-engine]]."""
+    id: str
+    title: str = ""
+    goal: str = ""
+    setting: str = ""
+    tone: str = ""
+    on_stage: list[OnStage] = Field(default_factory=list)
+    triggers: list[DivergenceTrigger] = Field(default_factory=list)
+
+
+class FeatureVar(BaseModel):
+    """A tracked play variable (trust, suspicion, a route flag) the director advances and that
+    emergent divergence conditions test."""
+    id: str
+    label: str = ""
+    initial: float = 0
 
 
 class LoreEntry(BaseModel):
@@ -285,10 +342,22 @@ class Relationship(BaseModel):
     id: str = ""
     source: str = ""      # character key/name who holds the feeling
     target: str = ""      # who it's toward
-    nature: str = ""      # the KIND of bond: rival / mentor / lover / mother / debtor …
-    dynamic: str = ""     # 2-3 WORDS: how it feels right now ("protective, smothering"); drift edits this
-    stance: str = "neutral"   # categorical, for colour only: devoted/warm/neutral/strained/hostile
+    nature: str = ""      # the KIND of bond (SHARED): rival / mentor / lover / mother / debtor …
+    # ── A bond READS BOTH WAYS — one edge, two sides. `dynamic`/`stance` = how SOURCE regards target;
+    # `target_dynamic`/`target_stance` = how TARGET regards source. The two CAN DIFFER (unrequited love,
+    # one trusts while the other exploits). Empty target_* → symmetric (mirror the source side).
+    dynamic: str = ""     # 2-3 WORDS: how SOURCE feels toward target right now; drift edits this
+    stance: str = "neutral"   # categorical, colour only (source side): devoted/warm/neutral/strained/hostile
+    target_dynamic: str = ""  # 2-3 WORDS: how TARGET feels toward source ("" → mirror source)
+    target_stance: str = ""   # categorical (target side); "" → mirror source's stance
     note: str = ""        # optional extra history
+    # ── The POTENTIAL — the story SEED (relationship-first genesis): what could GROW between them.
+    # `potential` = the hidden COMMON CORE beneath their surface-different backgrounds — the point they
+    # can plausibly build on (works for love OR enmity). `trajectory` = where it could travel + how it
+    # FEELS — a from→to with a tone ("wary strangers → a slow, unrushed first love, strawberry-milk
+    # gentle"). derive_stories engineers the story FROM these. See loom/stories/GENESIS.md.
+    potential: str = ""
+    trajectory: str = ""
     value: int | None = None  # DEPRECATED legacy warmth; kept only so old stories load (migrated below)
 
     @model_validator(mode="after")
@@ -304,6 +373,11 @@ class Relationship(BaseModel):
         if not self.dynamic:
             self.dynamic = self.note or self.nature
         self.dynamic = " ".join(self.dynamic.split()[:6])   # keep it to 2-3 words (backstop)
+        # The reverse side reads both ways: validate its stance, trim its phrase. Empty = mirror source.
+        if self.target_stance and self.target_stance not in _STANCES:
+            self.target_stance = "neutral"
+        if self.target_dynamic:
+            self.target_dynamic = " ".join(self.target_dynamic.split()[:6])
         return self
 
 
@@ -317,6 +391,9 @@ class SceneLink(BaseModel):
 
 class Story(BaseModel):
     name: str
+    # Format profile, FIXED at creation: "novel" (prose, baked chapter-by-chapter) or "vn" (a live,
+    # AI-played harness of branching scenes). Tailors the overview lenses + generation pipeline.
+    type: str = "novel"
     premise: str = ""                        # one-paragraph synopsis
     tone: str = ""
     themes: list[str] = Field(default_factory=list)
@@ -331,8 +408,17 @@ class Story(BaseModel):
     start: str | None = None                 # starting location id
     background: str | None = None            # cover / default background
     fields: dict[str, Any] = Field(default_factory=dict)  # source card key, creator…
-    intended_ending: str = ""     # the agreed book ending (first-class, drives arc generation)
+    # NB: a story has NO single authored ending — that's a VN-ism. Endings live on ARCS (Arc.mini_ending,
+    # the owner's lie resolved or not); the actual outcome EMERGES in play. See [[two-agent-model]].
     arcs: list[Arc] = Field(default_factory=list)
+    # Novel profile: the linear chapter manuscript (authored harness → drafted prose → recap).
+    # VNs use arcs/timelines instead. See Chapter; generation is serial + gated.
+    chapters: list[Chapter] = Field(default_factory=list)
+    # VN profile: scene HARNESSES (played live, not scripted), the tracked feature vars emergent
+    # conditions test, and the opening scene. See SceneHarness; the runtime is detect→ask→act.
+    scenes: list[SceneHarness] = Field(default_factory=list)
+    features: list[FeatureVar] = Field(default_factory=list)
+    start_scene: str = ""
     # Authored baselines (Character/Scene Agents build these); they also seed runtime state.
     relationships: list[Relationship] = Field(default_factory=list)  # the cast's bond web
     connections: list[SceneLink] = Field(default_factory=list)       # the scene/place map

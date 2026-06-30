@@ -29,9 +29,9 @@
   .hm { position: relative; }
   .hmbtn {
     display: inline-flex; align-items: baseline; gap: 9px; padding: 5px 10px 5px 8px;
-    background: none; border: 0; box-shadow: none; color: var(--text); cursor: pointer; border-radius: 8px;
+    background: none; border: 0; color: var(--text); cursor: pointer; border-radius: 8px;
   }
-  .hmbtn:hover { background: var(--elev); filter: none; }
+  .hmbtn:hover { background: var(--elev); }
   .hmtitle { font-size: 15px; font-weight: 660; letter-spacing: .2px; }
   .hmsel { font-size: 13px; font-weight: 600; color: var(--accent); }
   .hmcaret { font-size: 12px; color: var(--muted); transition: transform .15s; transform: translateY(-1px); }
@@ -43,9 +43,9 @@
     box-shadow: var(--shadow); padding: 6px; display: flex; flex-direction: column; gap: 2px;
   }
   .hmitem {
-    text-align: left; padding: 9px 12px; border-radius: 7px; box-shadow: none; border: 0;
+    text-align: left; padding: 9px 12px; border-radius: 7px; border: 0;
     background: none; color: var(--text); font-size: 13.5px; font-weight: 560;
   }
-  .hmitem:hover { background: var(--elev); filter: none; }
+  .hmitem:hover { background: var(--elev); }
   .hmitem.on { background: var(--elev-2); color: #fff; box-shadow: inset 0 0 0 1px var(--accent); }
 </style>

@@ -821,7 +821,7 @@
 
   .fam-row { display: flex; align-items: center; gap: 8px; }
   .fam-row label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .fam-row select { flex: 1; padding: 6px 8px; font-size: 12.5px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); text-transform: capitalize; }
+  .fam-row select { flex: 1; padding: 6px 8px; font-size: 12.5px; border-radius: 8px; background: var(--bg); text-transform: capitalize; }
 
   .prompt-row label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
   .tp { width: 100%; resize: vertical; overflow-y: auto; font: inherit; line-height: 1.4; min-height: 44px; max-height: 260px; box-sizing: border-box; }
@@ -871,7 +871,7 @@
   .ch { position: relative; background: var(--elev); padding: 6px 8px; font-size: 11px; display: flex; flex-direction: column; gap: 2px; justify-content: flex-end; min-height: 50px; min-width: 180px; text-align: left; }
   .save-preset { font-size: 12px; padding: 4px 12px; }
   .reset-btn { font-size: 12px; padding: 4px 12px; }
-  .reset-btn:not(:disabled):hover { color: var(--bad); border-color: rgba(255,90,90,.5); background: rgba(255,90,90,.08); filter: none; }
+  .reset-btn:not(:disabled):hover { color: var(--bad); border-color: rgba(255,90,90,.5); background: rgba(255,90,90,.08); }
   .cn { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .cw { color: var(--accent); font-size: 10.5px; font-weight: 700; }
   .cx { color: var(--muted); font-weight: 600; }
@@ -882,7 +882,7 @@
   .cellpick {
     position: absolute; top: 5px; left: 5px; width: 22px; height: 22px; padding: 0;
     display: grid; place-items: center; font-size: 13px; font-weight: 700; line-height: 1;
-    border-radius: 6px; cursor: pointer; box-shadow: none;
+    border-radius: 6px; cursor: pointer;
     background: rgba(0,0,0,.55); border: 1px solid rgba(255,255,255,.25); color: #fff;
     opacity: 0; transition: opacity .12s;
   }
@@ -895,7 +895,7 @@
   .import-modal { width: 500px; max-width: 92vw; }
   .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
   .modal-head h4 { margin: 0; font-size: 14px; }
-  .close-btn { background: none; border: none; box-shadow: none; font-size: 18px; color: var(--muted); cursor: pointer; padding: 0 4px; line-height: 1; }
+  .close-btn { background: none; border: none; font-size: 18px; color: var(--muted); cursor: pointer; padding: 0 4px; line-height: 1; }
   .close-btn:hover { color: var(--text); }
   .import-sub { font-size: 12px; color: var(--muted); margin: 0 0 14px; }
   .import-sub code { font-family: ui-monospace, monospace; color: var(--text); font-size: 11.5px; }
@@ -947,8 +947,8 @@
   .mlabel:first-of-type { margin-top: 0; }
   .mlabel .lo { text-transform: none; letter-spacing: 0; font-weight: 400; }
   .addl { margin-left: auto; font-size: 11.5px; text-transform: none; letter-spacing: 0; font-weight: 600;
-    padding: 4px 10px; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
-  .addl:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+    padding: 4px 10px; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; }
+  .addl:hover { color: var(--accent); border-color: var(--accent); }
   .moderow { display: flex; gap: 18px; margin-bottom: 12px; }
   .mopt { display: flex; align-items: center; gap: 5px; font-size: 13px; cursor: pointer; }
   .mopt input { width: auto; }
@@ -960,9 +960,9 @@
   .exrow :global(.combo) { flex: 1; min-width: 0; }
   .exrow .fw { width: 70px; flex: none; }
   .exnote { font-size: 12px; margin: 0; }
-  .rm { flex: none; width: 24px; height: 24px; padding: 0; font-size: 16px; line-height: 1; border-radius: 6px; box-shadow: none;
+  .rm { flex: none; width: 24px; height: 24px; padding: 0; font-size: 16px; line-height: 1; border-radius: 6px;
     background: none; border: 1px solid transparent; color: var(--faint); cursor: pointer; }
-  .rm:hover { color: var(--bad); border-color: rgba(255,90,90,.4); background: rgba(255,90,90,.1); filter: none; }
+  .rm:hover { color: var(--bad); border-color: rgba(255,90,90,.4); background: rgba(255,90,90,.1); }
   .preview { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; margin: 14px 0 0; padding: 8px 10px; background: var(--elev); border-radius: 8px; min-height: 36px; }
   .plabel { font-size: 11px; color: var(--muted); }
   .ptag { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--text); }

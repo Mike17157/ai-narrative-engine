@@ -94,6 +94,23 @@ def strip_breaks(graph: dict) -> None:
                     ins[k] = _BREAK_RE.sub(", ", v).strip(" ,")
 
 
+def apply_prompt_suffix(graph: dict, inputs: dict[str, dict], suffix: str) -> None:
+    """Append LoRA trigger words to the POSITIVE prompt so the LoRAs fire.
+
+    The positive node is a CLIPTextEncode whose `text` already holds the (cloud-authored) prompt
+    string — substitute_token / the legacy fallback set it before this runs — so we just append
+    the suffix. No-op when the suffix is empty or the positive node isn't a text encoder."""
+    suffix = (suffix or "").strip()
+    if not suffix:
+        return
+    pos = inputs.get("positive")
+    pos_node = graph.get(str(pos["node"])) if pos else None
+    if isinstance(pos_node, dict) and pos_node.get("class_type") == "CLIPTextEncode":
+        t = pos_node.get("inputs", {}).get("text")
+        if isinstance(t, str):
+            pos_node["inputs"]["text"] = f"{t}, {suffix}" if t.strip() else suffix
+
+
 def apply_breaks(graph: dict) -> None:
     """For each CLIPTextEncode whose text uses BREAK: keep region 1 on the node, add a
     CLIPTextEncode (sharing its clip) per further region, chain them with ConditioningConcat,
@@ -322,9 +339,10 @@ def inject(
     out_prefix: str | None = None,
     latent: tuple[int, int] | None = None,
     flags: dict[str, bool] | None = None,
+    prompt_suffix: str | None = None,
 ) -> dict:
     """Deep-copy `workflow` and return a prepared graph: prompt substituted, optional
-    out_prefix/latent applied, negative set, BREAK regions chained.
+    out_prefix/latent applied, negative set, LoRA trigger suffix appended, BREAK regions chained.
 
     `inputs` is the model's input map, e.g.
     ``{"positive": {"node": "6", "field": "text"}, "negative": {"node": "7", "field": "text"}}``.
@@ -357,6 +375,11 @@ def inject(
             if node_id not in graph:
                 raise ValueError(f"workflow has no node '{node_id}' for input 'positive'")
             graph[node_id].setdefault("inputs", {})[field] = prompt
+
+    # Append the active LoRA preset's trigger words to the positive conditioning (bypasses the
+    # krea2 Gemma optimizer so magic tokens survive verbatim).
+    if prompt_suffix:
+        apply_prompt_suffix(graph, inputs, prompt_suffix)
 
     # Honour `BREAK` region separators by splitting the positive text into separately-encoded
     # regions chained with core ConditioningConcat (so each region conditions independently,

@@ -11,7 +11,7 @@ const STANCE = {
   hostile:  { color: 'rgba(224,122,122,0.95)', width: 3.0 },
 };
 
-// Cast on a ring (focus character pinned to the top), bonds as directional edges.
+// Cast on a ring (focus character pinned to the top), bonds as MUTUAL (undirected) edges.
 export function buildRelationshipGraph(cast = [], relationships = [], focus = '') {
   if (!cast.length) return { nodes: [], edges: [] };
   const ordered = focus && cast.some((c) => c.key === focus)
@@ -34,25 +34,26 @@ export function buildRelationshipGraph(cast = [], relationships = [], focus = ''
   const byName = Object.fromEntries(ordered.map((c) => [(c.name || '').toLowerCase(), c.key]));
   const resolve = (id) => (has.has(id) ? id : byName[(id || '').toLowerCase()] || null);
 
-  // Resolve first so we can detect reciprocal pairs (A→B + B→A) and bow them apart.
   const resolved = (relationships || []).map((r) => {
     const s = resolve(r.source), t = resolve(r.target);
     return s && t && s !== t ? { ...r, s, t } : null;
   }).filter(Boolean);
-  const present = new Set(resolved.map((r) => `${r.s}|${r.t}`));
 
-  const edges = resolved.map((r, i) => {
+  // Bonds are MUTUAL: collapse reciprocal A→B / B→A into ONE undirected edge (prefer the one carrying
+  // a picked potential), gentle bow, NO arrowhead — the line reads as a shared bond, not a direction.
+  const byPair = new Map();
+  for (const r of resolved) {
+    const k = [r.s, r.t].sort().join('|');
+    const cur = byPair.get(k);
+    if (!cur || ((r.potential || r.trajectory) && !(cur.potential || cur.trajectory))) byPair.set(k, r);
+  }
+
+  const edges = [...byPair.values()].map((r, i) => {
     const sc = STANCE[r.stance] ? r.stance : 'neutral';
-    // Reciprocal? Give BOTH the SAME bow sign — the reverse edge's direction is already flipped,
-    // so its perpendicular points the other way and the two arcs land on OPPOSITE sides. (Opposite
-    // signs would cancel the flip and stack the curves on top of each other.) Lone edges: gentle bow.
-    const reciprocal = present.has(`${r.t}|${r.s}`);
-    const bow = reciprocal ? 1 : 0.35;
     return {
       id: `re${i}-${r.s}-${r.t}`, source: r.s, target: r.t, sourceHandle: 's', targetHandle: 't',
-      type: 'rel', label: r.dynamic || r.nature || '', data: { bow },
+      type: 'rel', label: r.dynamic || r.nature || '', data: { bow: 0.35 },
       style: `stroke:${STANCE[sc].color};stroke-width:${STANCE[sc].width}`,
-      markerEnd: { type: 'arrowclosed', color: STANCE[sc].color, width: 16, height: 16 },
     };
   });
 

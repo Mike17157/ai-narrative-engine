@@ -188,7 +188,7 @@
   .title { margin: 0; font-size: 16px; font-weight: 680; color: var(--text); flex: 1; }
   /* segmented control — shared by kind toggle + content tabs */
   .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
-  .seg button { background: var(--elev); border: 0; color: var(--muted); padding: 5px 13px; font-size: 12px; box-shadow: none; cursor: pointer; }
+  .seg button { background: var(--elev); border: 0; color: var(--muted); padding: 5px 13px; font-size: 12px; cursor: pointer; }
   .seg button.on { background: var(--accent); color: #fff; }
   .seclabel { font-size: 10.5px; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); margin: 0 2px 5px; }
   .lo { color: var(--faint); font-size: 11.5px; text-transform: none; letter-spacing: 0; }
@@ -196,8 +196,8 @@
     border-radius: 10px; background: var(--bg); min-height: 44px; max-height: 18vh; overflow: auto; }
   .chip { display: inline-flex; align-items: center; border: 1px solid var(--border-soft); background: var(--elev-2); border-radius: 8px; overflow: hidden; }
   .chip.target { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
-  .chip .lbl { background: none; border: 0; color: var(--text); font-size: 12.5px; padding: 3px 4px 3px 9px; box-shadow: none; cursor: pointer; }
-  .chip .x { background: none; border: 0; color: var(--muted); font-size: 15px; padding: 0 7px 0 3px; box-shadow: none; cursor: pointer; }
+  .chip .lbl { background: none; border: 0; color: var(--text); font-size: 12.5px; padding: 3px 4px 3px 9px; cursor: pointer; }
+  .chip .x { background: none; border: 0; color: var(--muted); font-size: 15px; padding: 0 7px 0 3px; cursor: pointer; }
   .chip .x:hover { color: #ff8a8a; }
   .empty { color: var(--faint); font-size: 12.5px; align-self: center; padding: 2px 4px; }
   .toolbar { display: flex; align-items: center; gap: 14px; margin-top: 12px; }
@@ -206,16 +206,16 @@
   .slbl b { color: var(--text); font-variant-numeric: tabular-nums; }
   .slider { width: 100%; accent-color: var(--accent); }
   .aibtn { margin-left: auto; font-size: 12.5px; padding: 6px 12px; border-radius: 8px; white-space: nowrap;
-    background: rgba(109,140,255,.16); border: 1px solid rgba(109,140,255,.4); color: #cdd8ff; box-shadow: none; }
-  .aibtn:hover:not(:disabled) { background: rgba(109,140,255,.28); filter: none; }
+    background: rgba(109,140,255,.16); border: 1px solid rgba(109,140,255,.4); color: #cdd8ff; }
+  .aibtn:hover:not(:disabled) { background: rgba(109,140,255,.28); }
   .aibtn:disabled { opacity: .55; }
   .tabs { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
   .repl { font-size: 12px; color: var(--muted); }
   .repl b { color: var(--text); }
-  .link { background: none; border: 0; color: var(--accent); box-shadow: none; cursor: pointer; font-size: 12px; padding: 0 2px; }
+  .link { background: none; border: 0; color: var(--accent); cursor: pointer; font-size: 12px; padding: 0 2px; }
   .content { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; margin: 10px 0; }
   .describe { display: flex; gap: 8px; }
-  .describe input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 13px; }
+  .describe input { flex: 1; min-width: 0; background: var(--bg); padding: 8px 11px; font-size: 13px; }
   .describe input:focus { border-color: var(--accent); outline: none; }
   .describe button { font-size: 12.5px; padding: 0 12px; border-radius: 9px; white-space: nowrap; }
   .cbody { flex: 1; min-height: 0; display: flex; }

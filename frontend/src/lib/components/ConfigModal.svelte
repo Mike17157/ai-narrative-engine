@@ -287,19 +287,19 @@
 <style>
   .head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border-soft); }
   .tabs { display: flex; gap: 3px; flex: 1; }
-  .tab { background: none; border: 0; box-shadow: none; color: var(--muted); font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 8px; cursor: pointer; }
-  .tab:hover { color: var(--text); background: var(--elev); filter: none; }
+  .tab { background: none; border: 0; color: var(--muted); font-size: 13px; font-weight: 600; padding: 7px 13px; border-radius: 8px; cursor: pointer; }
+  .tab:hover { color: var(--text); background: var(--elev); }
   .tab.on { color: #fff; background: var(--elev-2); }
-  .x { background: none; border: 0; box-shadow: none; color: var(--muted); font-size: 14px; cursor: pointer; padding: 4px 8px; }
-  .x:hover { color: var(--text); filter: none; }
+  .x { background: none; border: 0; color: var(--muted); font-size: 14px; cursor: pointer; padding: 4px 8px; }
+  .x:hover { color: var(--text); }
   .body { padding: 16px 18px; overflow-y: auto; display: flex; flex-direction: column; gap: 14px; }
 
-  .card { background: var(--bg); border: 1px solid var(--border-soft); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+  .card { background: var(--bg); border-radius: 12px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
   .card h4 { margin: 0 0 2px; font-size: 13px; font-weight: 660; color: var(--text); }
   .card h4 .sub { font-size: 11px; color: var(--faint); font-weight: 400; margin-left: 8px; }
   .card :global(label) { text-transform: none; letter-spacing: 0; }
-  .hint { font-size: 12px; color: var(--muted); line-height: 1.5; margin: 0; }
-  .link { background: none; border: 0; box-shadow: none; color: var(--accent); cursor: pointer; padding: 0; font: inherit; }
+  .hint { font-size: 12px; line-height: 1.5; margin: 0; }
+  .link { background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0; font: inherit; }
   .msg { font-size: 12px; color: var(--muted); } .msg.ok { color: var(--good); } .msg.err { color: var(--bad); }
 
   /* Rows (preset picker header + augment fields) */
@@ -320,15 +320,14 @@
   .pgroup { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); margin-top: 6px; }
   .prow-wrap { display: flex; flex-wrap: wrap; gap: 5px; }
   .prow { display: inline-flex; align-items: center; gap: 6px; padding: 6px 11px; border-radius: 999px; cursor: pointer;
-    background: var(--bg); border: 1px solid var(--border-soft); color: var(--text); box-shadow: none; font-size: 12.5px; }
-  .prow:hover { background: var(--elev); filter: none; }
+    background: var(--bg); border: 1px solid var(--border-soft); color: var(--text); font-size: 12.5px; }
+  .prow:hover { background: var(--elev); }
   .prow.on { border-color: var(--accent); background: rgba(109,140,255,.12); color: var(--accent); }
   .pname { font-weight: 600; }
 
   .fld { width: 100%; padding: 8px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); box-sizing: border-box; }
   .fld:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px var(--accent-glow); }
   .ta { resize: vertical; line-height: 1.5; font-family: inherit; }
-  .primary { background: var(--accent); border: 0; color: #fff; }
   .sm { font-size: 12px; padding: 6px 12px; border-radius: 8px; }
 
   /* Augment */

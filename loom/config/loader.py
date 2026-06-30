@@ -52,12 +52,21 @@ def load_settings(root: str | Path) -> Settings:
         for path in sorted(persona_dir.glob("*.yaml")):
             personas[path.stem] = Persona(**_read_yaml(path))
 
-    # stories/*.yaml — multi-scene story experiences authored by the Story Builder.
+    # stories — ONE self-contained libSQL <key>.db per story (the only story-data system). A story DB
+    # EMBEDS its characters and is AUTHORITATIVE for them: merge those into the character library,
+    # overriding any global file of the same key. See loom/stories/story_db.py + [[per-story-database]].
+    from ..stories import story_db as _SDB
     stories: dict[str, Story] = {}
     story_dir = configs / "stories"
     if story_dir.is_dir():
-        for path in sorted(story_dir.glob("*.yaml")):
-            stories[path.stem] = Story(**_read_yaml(path))
+        for path in sorted(story_dir.glob("*.db")):
+            sdata, embedded = _SDB.load_story(path)
+            stories[path.stem] = Story(**sdata)
+            for ck, cdoc in embedded.items():
+                try:
+                    characters[ck] = Character(**cdoc)   # story DB authoritative for its cast
+                except Exception:  # noqa: BLE001 — a bad embedded card never sinks the load
+                    pass
 
     pipelines: dict[str, Pipeline] = {}
     pipe_dir = configs / "pipelines"

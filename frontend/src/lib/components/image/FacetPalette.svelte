@@ -26,7 +26,7 @@
   .facet { margin-bottom: 10px; }
   .fname { font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 5px; }
   .pills { display: flex; flex-wrap: wrap; gap: 6px; }
-  .pill { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); box-shadow: none; cursor: pointer; }
-  .pill:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .pill { font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .pill:hover { border-color: var(--accent); color: var(--accent); }
   .lo { color: var(--faint); font-size: 12px; }
 </style>

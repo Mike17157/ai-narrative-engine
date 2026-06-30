@@ -298,10 +298,10 @@
   .allrow { padding: 4px 6px 2px; }
   .allbtn {
     width: 100%; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-    background: none; box-shadow: none; padding: 6px 8px; border-radius: 7px;
+    background: none; padding: 6px 8px; border-radius: 7px;
     font-size: 12px; color: var(--muted); font-weight: 600; text-align: left;
   }
-  .allbtn:hover, .allbtn.on { background: var(--elev); color: var(--text); filter: none; }
+  .allbtn:hover, .allbtn.on { background: var(--elev); color: var(--text); }
   .allbtn.on { color: var(--accent); }
 
   /* ── Drill mode ── */
@@ -311,20 +311,20 @@
     background: color-mix(in srgb, var(--dc) 12%, var(--panel));
   }
   .backbtn {
-    background: none; box-shadow: none; padding: 5px 9px; font-size: 12px; font-weight: 600;
+    background: none; padding: 5px 9px; font-size: 12px; font-weight: 600;
     color: var(--muted); border-radius: 6px; white-space: nowrap;
   }
-  .backbtn:hover { color: var(--text); background: var(--elev); filter: none; }
+  .backbtn:hover { color: var(--text); background: var(--elev); }
   .drill-title { font-size: 12px; font-weight: 700; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
   /* ── Section overview ── */
   .sec-row {
     width: 100%; display: flex; align-items: center; gap: 7px; padding: 10px 10px;
-    background: none; box-shadow: none; text-align: left; color: var(--text);
+    background: none; text-align: left; color: var(--text);
     border-top: 1px solid var(--border-soft);
   }
   .sec-row:first-of-type { border-top: none; }
-  .sec-row:hover { background: var(--elev); filter: none; }
+  .sec-row:hover { background: var(--elev); }
   .sec-nm { flex: 1; font-size: 13px; font-weight: 600; }
   .darr { color: var(--faint); font-size: 12px; }
   .sec-row:hover .darr { color: var(--text); }
@@ -335,13 +335,13 @@
   .lhrow { display: flex; align-items: center; }
   .lh {
     display: flex; align-items: center; gap: 6px; flex: 1; min-width: 0; text-align: left;
-    background: none; box-shadow: none; padding: 7px 10px; color: var(--muted);
+    background: none; padding: 7px 10px; color: var(--muted);
     font-size: 11px; text-transform: uppercase; letter-spacing: .4px; font-weight: 700;
   }
-  .lh:hover { color: var(--text); filter: none; background: var(--elev); }
+  .lh:hover { color: var(--text); background: var(--elev); }
   .active .lh { color: var(--text); }
-  .collbtn { flex: none; background: none; box-shadow: none; color: var(--faint); font-size: 11px; padding: 0 6px; }
-  .collbtn:hover { color: var(--text); filter: none; }
+  .collbtn { flex: none; background: none; color: var(--faint); font-size: 11px; padding: 0 6px; }
+  .collbtn:hover { color: var(--text); }
   .chainbtn { flex: none; margin-right: 6px; padding: 3px 8px; font-size: 11px; border-radius: 6px; }
   .nempty { padding: 4px 10px 8px 28px; font-size: 12px; color: var(--faint); }
 
@@ -353,29 +353,29 @@
 
   .nrow { display: flex; align-items: center; gap: 6px; padding: 0 10px 0 18px; height: 27px; }
   .nrow:hover { background: var(--elev); }
-  .tt { flex: 1; min-width: 0; text-align: left; background: none; box-shadow: none; padding: 0; color: var(--text); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .tt:hover { filter: none; color: var(--accent); }
-  .del { background: none; box-shadow: none; padding: 0 3px; color: var(--faint); font-size: 12px; flex: none; opacity: 0; }
+  .tt { flex: 1; min-width: 0; text-align: left; background: none; padding: 0; color: var(--text); font-size: 12.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tt:hover { color: var(--accent); }
+  .del { background: none; padding: 0 3px; color: var(--faint); font-size: 12px; flex: none; opacity: 0; }
   .nrow:hover .del { opacity: 1; }
-  .del:hover { color: var(--bad); filter: none; }
+  .del:hover { color: var(--bad); }
   .tempty { padding: 12px; color: var(--muted); font-size: 12.5px; }
 
   /* ── Workflow I/O pane ── */
   .io-panel { border-top: 1px solid var(--border-soft); margin-top: 4px; }
   .io-hd {
     width: 100%; display: flex; align-items: center; gap: 6px;
-    background: none; box-shadow: none; padding: 8px 10px;
+    background: none; padding: 8px 10px;
     font-size: 11px; text-transform: uppercase; letter-spacing: .4px;
     font-weight: 700; color: var(--muted); text-align: left;
   }
-  .io-hd:hover { color: var(--text); filter: none; }
+  .io-hd:hover { color: var(--text); }
   .io-sec { padding: 2px 0 6px; border-top: 1px solid var(--border-soft); }
   .io-sec-hd {
     display: block; width: 100%; text-align: left; padding: 5px 10px;
-    background: none; box-shadow: none; font-size: 11px; font-weight: 700;
+    background: none; font-size: 11px; font-weight: 700;
     text-transform: uppercase; letter-spacing: .4px;
   }
-  .io-sec-hd:hover { filter: none; opacity: .8; }
+  .io-sec-hd:hover { opacity: .8; }
   .io-node { padding: 2px 10px 4px; }
   .io-cls { display: block; font-size: 10.5px; color: var(--faint); font-style: italic; margin-bottom: 1px; }
   .io-row { display: flex; gap: 6px; align-items: baseline; padding: 1px 0; }

@@ -6,7 +6,7 @@
   import { formatChat } from '$lib/chat-format.js';
 
   let { storyKey } = $props();
-  const exitPlay = () => goto(`/stories/${storyKey}/overview`);
+  const exitPlay = () => goto(`/stories/${storyKey}/structure`);
 
   // Lorebooks attached to THIS play thread (world/RPG/etc. books from the manager).
   // Persisted under a dedicated `play-<key>` session so it survives reloads and never
@@ -71,6 +71,9 @@
   let busy = $state(false);
   let input = $state('');
   let err = $state(null);
+  // The storymaster's FEVER-DREAM: when the player sleeps, the cast's latent pressures surface as a
+  // single foreboding, oblique portent (not options) — shown as a dream overlay until dismissed.
+  let dream = $state('');
 
   // Who YOU are this playthrough. A "puppet" is any character card flagged `playable`;
   // you embody it (its backstory + lorebook flow into the director's context) and drive
@@ -144,6 +147,7 @@
     if (d.state?.state) worldState = d.state.state;
     if (typeof d.state?.revision === 'number') stateRev = d.state.revision;
     lastGuard = d.guard || null;
+    if (d.consolidation?.dream) dream = d.consolidation.dream;   // the player slept → a fever-dream rises
     if (showState) loadState();   // refresh sibling-level counts (facts/sim grow as you play)
   }
   async function send() {
@@ -177,6 +181,15 @@
 </script>
 
 <div class="player">
+  {#if dream}
+    <!-- The fever-dream: a foreboding portent that rises when the player sleeps. Tap to wake. -->
+    <div class="dreamveil" role="button" tabindex="0" onclick={() => (dream = '')}
+         onkeydown={(e) => (e.key === 'Enter' || e.key === 'Escape') && (dream = '')}>
+      <div class="dreamlabel">a dream</div>
+      <p class="dreamtext">{dream}</p>
+      <div class="dreamwake">tap to wake</div>
+    </div>
+  {/if}
   <div class="topbar">
     <button class="ghost sm" onclick={exitPlay}>← Exit</button>
     <span class="title">{story?.name || 'Story'}</span>
@@ -349,9 +362,9 @@
   .puppet-btn {
     display: flex; align-items: center; gap: 7px; padding: 3px 9px 3px 4px; height: 30px;
     border: 1px solid var(--border-soft); border-radius: 999px; background: var(--elev);
-    color: var(--muted); cursor: pointer; box-shadow: none; font-size: 12.5px;
+    color: var(--muted); cursor: pointer; font-size: 12.5px;
   }
-  .puppet-btn:hover { color: var(--text); border-color: var(--border); filter: none; }
+  .puppet-btn:hover { color: var(--text); border-color: var(--border); }
   .puppet-btn.embodied { color: var(--text); border-color: color-mix(in srgb, var(--accent) 50%, transparent); }
   .pp-av { width: 22px; height: 22px; border-radius: 50%; object-fit: cover; flex: none; }
   .pp-av.ph { display: grid; place-items: center; font-size: 12px; background: var(--elev-2); }
@@ -366,9 +379,9 @@
   .pm-head { font-size: 10.5px; text-transform: uppercase; letter-spacing: .5px; color: var(--faint); padding: 4px 8px 6px; }
   .pm-item {
     display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 8px;
-    background: none; border: none; box-shadow: none; color: var(--text); font-size: 13px; cursor: pointer; text-align: left;
+    background: none; border: none; color: var(--text); font-size: 13px; cursor: pointer; text-align: left;
   }
-  .pm-item:hover { background: var(--elev); filter: none; }
+  .pm-item:hover { background: var(--elev); }
   .pm-item.on { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .pm-av { width: 28px; height: 28px; border-radius: 6px; object-fit: cover; flex: none; }
   .pm-av.ph { display: grid; place-items: center; font-size: 14px; background: var(--elev-2); }
@@ -377,9 +390,9 @@
   .pm-empty { font-size: 12px; color: var(--muted); padding: 8px; line-height: 1.45; }
   .pm-clear {
     margin-top: 4px; font-size: 12px; color: var(--muted); background: none; border: none;
-    border-top: 1px solid var(--border-soft); border-radius: 0; padding: 8px 8px 4px; text-align: left; cursor: pointer; box-shadow: none;
+    border-top: 1px solid var(--border-soft); border-radius: 0; padding: 8px 8px 4px; text-align: left; cursor: pointer;
   }
-  .pm-clear:hover { color: var(--text); filter: none; }
+  .pm-clear:hover { color: var(--text); }
 
   .statepanel {
     position: absolute; z-index: 5; top: 10px; right: 10px; width: 290px; max-height: calc(100% - 90px);
@@ -395,7 +408,7 @@
   }
   .pphead { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
   .pphead b { flex: 1; font-size: 12.5px; }
-  .pphead .x { width: 22px; height: 22px; padding: 0; border-radius: 6px; background: none; border: 1px solid var(--border); color: var(--muted); box-shadow: none; font-size: 11px; }
+  .pphead .x { width: 22px; height: 22px; padding: 0; border-radius: 6px; background: none; border: 1px solid var(--border); color: var(--muted); font-size: 11px; }
   .ppplace { margin-bottom: 10px; }
   .ppname { font-size: 12px; font-weight: 700; color: #fff; }
   .ppyou { font-weight: 400; color: var(--accent); font-size: 11px; }
@@ -403,9 +416,9 @@
   .ppscenes { display: flex; flex-direction: column; gap: 4px; }
   .ppscene {
     display: flex; align-items: center; gap: 8px; padding: 4px; border-radius: 8px; text-align: left;
-    background: rgba(255,255,255,.04); border: 1px solid transparent; color: #e7ecf5; cursor: pointer; box-shadow: none;
+    background: rgba(255,255,255,.04); border: 1px solid transparent; color: #e7ecf5; cursor: pointer;
   }
-  .ppscene:hover:not(:disabled) { background: rgba(255,255,255,.09); filter: none; }
+  .ppscene:hover:not(:disabled) { background: rgba(255,255,255,.09); }
   .ppscene.on { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 16%, transparent); }
   .ppscene:disabled { opacity: .5; cursor: default; }
   .ppthumb { width: 40px; height: 30px; flex: none; border-radius: 5px; object-fit: cover; }
@@ -417,7 +430,7 @@
   .sphead { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
   .sphead b { flex: 1; font-size: 12.5px; }
   .sphead .sprev { color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
-  .sphead .reset, .sphead .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; box-shadow: none; }
+  .sphead .reset, .sphead .x { background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 13px; padding: 0 2px; }
   .sphead .reset:hover, .sphead .x:hover { color: #fff; }
   .splevels { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
   .splevel { font-size: 10px; padding: 1px 6px; border-radius: 999px; background: rgba(255,255,255,.06);
@@ -448,12 +461,24 @@
   }
   .narr { margin: 0; font-size: 14.5px; line-height: 1.55; color: #f0f3f9; white-space: pre-wrap; min-height: 1.5em;
           max-height: 30vh; overflow: auto; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
-  .err { color: var(--bad); font-size: 12.5px; }
+  .err { font-size: 12.5px; }
   .choices { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .clab { font-size: 12px; color: var(--muted); }
   .choice { font-size: 12.5px; padding: 6px 12px; border-radius: 999px; background: rgba(124,109,255,.18);
-            border: 1px solid var(--accent); color: #fff; box-shadow: none; }
-  .choice:hover:not(:disabled) { background: var(--accent); color: #0b0e14; filter: none; }
+            border: 1px solid var(--accent); color: #fff; }
+  .choice:hover:not(:disabled) { background: var(--accent); color: #0b0e14; }
+  /* the storymaster's fever-dream — a foreboding portent on sleep, not options */
+  .dreamveil { position: fixed; inset: 0; z-index: 60; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 22px; padding: 8vh 10vw; cursor: pointer;
+    background: radial-gradient(120% 120% at 50% 40%, rgba(20,8,30,.86), rgba(4,2,10,.97));
+    backdrop-filter: blur(7px); animation: dreamin 1.4s ease both; }
+  .dreamlabel { font-size: 10px; text-transform: uppercase; letter-spacing: 5px; color: rgba(200,180,230,.5); }
+  .dreamtext { max-width: 620px; text-align: center; font-family: var(--serif, Georgia, serif);
+    font-style: italic; font-size: clamp(17px, 2.4vw, 24px); line-height: 1.7; color: rgba(226,216,240,.92);
+    text-shadow: 0 0 26px rgba(150,110,200,.45); animation: dreamdrift 9s ease-in-out infinite alternate; }
+  .dreamwake { font-size: 11px; letter-spacing: 2px; color: rgba(200,180,230,.4); }
+  @keyframes dreamin { from { opacity: 0; } to { opacity: 1; } }
+  @keyframes dreamdrift { from { transform: translateY(-4px); } to { transform: translateY(4px); } }
   .inputrow { display: flex; gap: 8px; }
   .say { flex: 1; padding: 9px 12px; font-size: 13.5px; border-radius: 9px; background: rgba(20,24,34,.85);
          border: 1px solid var(--border); color: var(--text); }

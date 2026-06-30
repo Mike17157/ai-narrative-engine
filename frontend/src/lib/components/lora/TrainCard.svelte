@@ -211,18 +211,17 @@
 {/if}
 
 <style>
-  .hint { font-size: 12.5px; color: var(--muted); }
   .hint code, code { background: var(--elev); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
   .lo { color: var(--faint); }
   .row { display: flex; gap: 10px; align-items: center; }
-  .ok { color: var(--good); font-size: 12.5px; } .err { color: var(--bad); }
+  .ok { font-size: 12.5px; }
   .msg { font-size: 12.5px; margin-top: 8px; }
 
   .setup { max-width: 580px; }
   .warn { color: var(--bad); font-weight: 600; margin-bottom: 8px; }
   .issues { margin: 0 0 12px; padding-left: 18px; }
   .issues li { font-size: 12.5px; color: var(--bad); margin: 2px 0; }
-  .linkbtn { background: none; box-shadow: none; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; }
+  .linkbtn { background: none; padding: 0; color: var(--accent); font: inherit; text-decoration: underline; }
   .linkbtn:hover { filter: brightness(1.2); }
 
   .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }

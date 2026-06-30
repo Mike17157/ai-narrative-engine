@@ -41,8 +41,8 @@
   .search:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px var(--accent-glow); }
   .rows { display: flex; flex-direction: column; gap: 2px; overflow-y: auto; min-height: 0; flex: 1; }
   .row { display: flex; align-items: center; gap: 9px; text-align: left; padding: 8px 10px; border-radius: 8px;
-    background: none; border: 1px solid transparent; color: var(--text); cursor: pointer; box-shadow: none; }
-  .row:hover { background: var(--elev); filter: none; }
+    background: none; border: 1px solid transparent; color: var(--text); cursor: pointer; }
+  .row:hover { background: var(--elev); }
   .row.on { background: var(--elev-2); border-color: var(--border-soft); }
   .box { width: 17px; height: 17px; flex: none; border-radius: 5px; border: 1px solid var(--border);
     display: grid; place-items: center; font-size: 11px; color: #fff; }

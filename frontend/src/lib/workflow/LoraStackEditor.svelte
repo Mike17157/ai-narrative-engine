@@ -162,7 +162,7 @@
     flex: 1; min-width: 0;
     font-size: 11.5px; font-family: ui-monospace, monospace;
     color: var(--text); text-align: left;
-    background: none; box-shadow: none; border: 1px solid transparent;
+    background: none; border: 1px solid transparent;
     border-radius: 5px; padding: 1px 6px; margin-left: -6px;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     cursor: pointer;
@@ -170,7 +170,7 @@
   .lname:hover {
     background: color-mix(in srgb, var(--accent) 12%, transparent);
     border-color: color-mix(in srgb, var(--accent) 35%, transparent);
-    color: var(--text); filter: none;
+    color: var(--text);
   }
 
   .wt {
@@ -184,19 +184,19 @@
 
   .rm {
     flex: none; width: 20px; height: 20px; padding: 0; font-size: 14px; line-height: 1;
-    background: none; border: 1px solid transparent; border-radius: 4px; box-shadow: none;
+    background: none; border: 1px solid transparent; border-radius: 4px;
     color: var(--faint); display: grid; place-items: center;
   }
-  .rm:hover { color: var(--bad); border-color: rgba(255,122,122,.4); filter: none; background: rgba(255,122,122,.1); }
+  .rm:hover { color: var(--bad); border-color: rgba(255,122,122,.4); background: rgba(255,122,122,.1); }
 
   /* Picker */
   .picker-anchor { position: relative; padding: 4px 10px 6px; }
   .addlora {
-    font-size: 11.5px; font-weight: 600; color: var(--accent); background: none; box-shadow: none;
+    font-size: 11.5px; font-weight: 600; color: var(--accent); background: none;
     border: 1px dashed color-mix(in srgb, var(--accent) 40%, transparent);
     border-radius: 6px; padding: 4px 10px; width: 100%;
   }
-  .addlora:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); filter: none; }
+  .addlora:hover { background: color-mix(in srgb, var(--accent) 10%, transparent); }
 
   .picker {
     position: absolute; bottom: calc(100% + 4px); left: 0; right: 0; z-index: 60;
@@ -215,22 +215,22 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1;
   }
   .phd-close {
-    flex: none; background: none; box-shadow: none; border: none;
+    flex: none; background: none; border: none;
     color: var(--faint); font-size: 13px; padding: 0 3px; line-height: 1;
   }
-  .phd-close:hover { color: var(--text); filter: none; }
+  .phd-close:hover { color: var(--text); }
 
   .picker input {
     border: 0; border-bottom: 1px solid var(--border-soft); border-radius: 0;
     background: var(--elev); font-size: 12px;
   }
-  .picker input:focus { box-shadow: none; border-color: var(--border-soft); }
+  .picker input:focus { border-color: var(--border-soft); }
   .plist { max-height: 200px; overflow-y: auto; padding: 4px; }
   .prow {
     width: 100%; text-align: left; padding: 5px 9px; font-size: 12px;
-    background: none; box-shadow: none; border-radius: 6px; color: var(--text);
+    background: none; border-radius: 6px; color: var(--text);
     font-family: ui-monospace, monospace; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .prow:hover { background: var(--elev-2); filter: none; }
+  .prow:hover { background: var(--elev-2); }
   .pempty { padding: 10px; color: var(--muted); font-size: 12px; text-align: center; }
 </style>

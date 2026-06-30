@@ -1,0 +1,203 @@
+{
+  "1": {
+    "class_type": "UNETLoader",
+    "_meta": {
+      "title": "Render UNet (Klein; swap to krea2_turbo when downloaded)"
+    },
+    "inputs": {
+      "unet_name": "fluxdev/fluxKlein4BPro_v10.safetensors",
+      "weight_dtype": "default"
+    }
+  },
+  "2": {
+    "class_type": "CLIPLoaderGGUF",
+    "_meta": {
+      "title": "Render Text Encoder (Klein flux2)"
+    },
+    "inputs": {
+      "clip_name": "Klein/flux2-klein-4b-uncensored-q8_0.gguf",
+      "type": "flux2"
+    }
+  },
+  "3": {
+    "class_type": "VAELoader",
+    "_meta": {
+      "title": "Render VAE"
+    },
+    "inputs": {
+      "vae_name": "flux2-vae.safetensors"
+    }
+  },
+  "4": {
+    "class_type": "CLIPTextEncode",
+    "_meta": {
+      "title": "Positive prompt"
+    },
+    "inputs": {
+      "text": "{{image}}",
+      "clip": [
+        "31",
+        1
+      ]
+    }
+  },
+  "5": {
+    "class_type": "FluxGuidance",
+    "_meta": {
+      "title": "Flux Guidance"
+    },
+    "inputs": {
+      "conditioning": [
+        "4",
+        0
+      ],
+      "guidance": 4.0
+    }
+  },
+  "6": {
+    "class_type": "EmptyFlux2LatentImage",
+    "_meta": {
+      "title": "Empty Latent"
+    },
+    "inputs": {
+      "width": 1024,
+      "height": 1024,
+      "batch_size": 1
+    }
+  },
+  "7": {
+    "class_type": "Flux2Scheduler",
+    "_meta": {
+      "title": "Flux2 Scheduler"
+    },
+    "inputs": {
+      "steps": 20,
+      "width": 1024,
+      "height": 1024
+    }
+  },
+  "8": {
+    "class_type": "KSamplerSelect",
+    "_meta": {
+      "title": "Sampler"
+    },
+    "inputs": {
+      "sampler_name": "euler"
+    }
+  },
+  "9": {
+    "class_type": "RandomNoise",
+    "_meta": {
+      "title": "Noise"
+    },
+    "inputs": {
+      "noise_seed": 0
+    }
+  },
+  "10": {
+    "class_type": "BasicGuider",
+    "_meta": {
+      "title": "Guider"
+    },
+    "inputs": {
+      "model": [
+        "31",
+        0
+      ],
+      "conditioning": [
+        "5",
+        0
+      ]
+    }
+  },
+  "11": {
+    "class_type": "SamplerCustomAdvanced",
+    "_meta": {
+      "title": "Sampler (Custom Advanced)"
+    },
+    "inputs": {
+      "noise": [
+        "9",
+        0
+      ],
+      "guider": [
+        "10",
+        0
+      ],
+      "sampler": [
+        "8",
+        0
+      ],
+      "sigmas": [
+        "7",
+        0
+      ],
+      "latent_image": [
+        "6",
+        0
+      ]
+    }
+  },
+  "12": {
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode"
+    },
+    "inputs": {
+      "samples": [
+        "11",
+        0
+      ],
+      "vae": [
+        "3",
+        0
+      ]
+    }
+  },
+  "13": {
+    "class_type": "SaveImage",
+    "_meta": {
+      "title": "Save Image"
+    },
+    "inputs": {
+      "images": [
+        "12",
+        0
+      ],
+      "filename_prefix": "krea2"
+    }
+  },
+  "30": {
+    "class_type": "easy loraStack",
+    "_meta": {
+      "title": "LoRA stack (configure up to 10)"
+    },
+    "inputs": {
+      "toggle": false,
+      "mode": "simple",
+      "num_loras": 1,
+      "lora_1_name": "None",
+      "lora_1_strength": 1.0
+    }
+  },
+  "31": {
+    "class_type": "easy loraStackApply",
+    "_meta": {
+      "title": "Apply LoRA stack"
+    },
+    "inputs": {
+      "lora_stack": [
+        "30",
+        0
+      ],
+      "model": [
+        "1",
+        0
+      ],
+      "optional_clip": [
+        "2",
+        0
+      ]
+    }
+  }
+}

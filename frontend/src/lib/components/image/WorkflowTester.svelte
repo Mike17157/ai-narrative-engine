@@ -189,10 +189,10 @@
   .who strong { font-family: var(--mono, monospace); }
   .tag { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); background: var(--elev); border: 1px solid var(--border); border-radius: 6px; padding: 2px 6px; }
   .modeseg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
-  .modeseg button { flex: 1; border: 0; border-radius: 0; background: var(--elev); color: var(--muted); padding: 9px 0; font-size: 13px; font-weight: 600; box-shadow: none; }
+  .modeseg button { flex: 1; border: 0; border-radius: 0; background: var(--elev); color: var(--muted); padding: 9px 0; font-size: 13px; font-weight: 600; }
   .modeseg button.on { color: #fff; background: var(--accent); }
   .fld { display: flex; flex-direction: column; gap: 5px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .fld textarea, .fld input { text-transform: none; letter-spacing: 0; font-weight: 400; padding: 8px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); width: 100%; box-sizing: border-box; }
+  .fld textarea, .fld input { text-transform: none; letter-spacing: 0; font-weight: 400; padding: 8px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); }
   .fld textarea { resize: vertical; line-height: 1.45; font-family: inherit; }
   .srcrow { display: flex; gap: 12px; align-items: flex-start; }
   .srcimg { width: 110px; flex: none; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); background: var(--elev); }
@@ -201,12 +201,12 @@
   .upbtn { display: inline-block; cursor: pointer; font-size: 12.5px; font-weight: 600; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); background: var(--accent); color: #fff; }
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .grid label { display: flex; flex-direction: column; gap: 4px; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .grid input { padding: 6px 8px; font-size: 12.5px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  .grid input { padding: 6px 8px; font-size: 12.5px; border-radius: 7px; background: var(--bg); }
   .go { padding: 11px; font-size: 14px; font-weight: 700; }
   .bar { height: 6px; border-radius: 999px; background: var(--elev); overflow: hidden; }
   .fill { height: 100%; background: var(--accent); transition: width .2s; }
   .stage { font-size: 12px; color: var(--accent); }
-  .err { font-size: 12.5px; color: var(--bad); white-space: pre-wrap; }
+  .err { font-size: 12.5px; white-space: pre-wrap; }
   .stage-out { flex: 1; min-width: 0; aspect-ratio: 1; max-height: 70vh; border: 1px solid var(--border-soft); border-radius: 14px; background: var(--panel); display: grid; place-items: center; overflow: hidden; }
   .stage-out video { max-width: 100%; max-height: 100%; border-radius: 12px; }
   .ph { color: var(--faint); font-size: 13px; }

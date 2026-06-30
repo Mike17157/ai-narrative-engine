@@ -45,7 +45,7 @@
   const nav = [
     { id: 'chat',       label: 'Chat',       icon: '💬', href: '/chat' },
     { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
-    { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories' },
+    { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories', home: true },
     { id: 'library',    label: 'Library',    icon: '🗂', href: '/library/presets' },
     { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/graph' },
     { id: 'training',   label: 'Training',   icon: '🎓', href: '/training' },
@@ -66,7 +66,9 @@
     }
   });
 
-  function go(n) { goto(lastRoute[n.id] || n.href); }
+  // `home: true` sections always land on their root (Stories → the library, never a resumed deep route);
+  // others resume where you left off.
+  function go(n) { goto(n.home ? n.href : (lastRoute[n.id] || n.href)); }
 
   // Programmatic deep-link from child components (e.g. Train → Settings).
   $effect(() => { if (app.nav.screen) { const s = app.nav.screen; app.nav.screen = null; goto(`/${s}`); } });
@@ -124,7 +126,7 @@
 
 <svelte:window onclick={closeMenus} />
 
-<div class="shell">
+<div class="shell" style:--chrome-top={tree.length ? '86px' : '48px'}>
 
   <!-- ── top bar: section switcher + status tools ── -->
   <header class="topbar">

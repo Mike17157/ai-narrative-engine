@@ -6,14 +6,14 @@
   // 3D coverflow is pure CSS so the cards stay live/interactive. See [[character-catalogue]].
   import { get, post } from '$lib/api.js';
   import { startJob, limitedPost } from '$lib/app.svelte.js';
-  import GenStream from '$lib/components/shared/GenStream.svelte';
 
-  let { storyKey, cast = [], locations = [], onChanged = () => {} } = $props();
+  let { storyKey, cast = [], locations = [], onChanged = () => {}, onCharacter = () => {}, onAsk = () => {} } = $props();
 
   // ── Character rotation ───────────────────────────────────────────────────────
   let center = $state(0);
   $effect(() => { if (cast.length && center > cast.length - 1) center = 0; });
   let charKey = $derived(cast[center]?.character || '');
+  $effect(() => { onCharacter(charKey); });   // tell the parent who's on stage (for the outfit agent)
   let charName = $derived(cast[center]?.name || charKey);
   function go(d) { if (cast.length) center = (center + d + cast.length) % cast.length; }
   function onKey(e) { if (e.key === 'ArrowLeft') go(-1); else if (e.key === 'ArrowRight') go(1); }
@@ -29,7 +29,6 @@
   let bust = $state(0);
   let busy = $state(false);
   let err = $state('');
-  let planJob = $state(null);          // scene-based wardrobe planning (whole cast)
 
   async function loadAll(members) {
     for (const c of members) {
@@ -40,6 +39,8 @@
     }
   }
   $effect(() => { loadAll(cast); });
+  // After the agent builds/edits outfits, the parent calls this to pull fresh portraits.
+  export function refresh() { fetched.clear(); portraits = {}; bust++; return loadAll(cast); }
   $effect(() => { charKey; outfitIdx = 0; });        // reset outfit when switching character
 
   let data = $derived(portraits[charKey] || null);
@@ -68,19 +69,47 @@
   const cardImg = (c, i) =>
     (i === center ? (shownImg || spriteOf(charKey) || c.img) : (spriteOf(c.character) || c.img)) || null;
 
-  // ── Coverflow geometry (wrap-around so rotation feels circular) ───────────────
+  // ── Coverflow geometry + drag/swipe (wrap-around so rotation feels circular) ───
   const ANGLE = 50, SPREAD = 205, DEPTH = 270;
+  // Drag to rotate (mouse + touch): `drag` px drives a live follow via the continuous `pos`; release
+  // snaps to the nearest card. A tap (tiny movement) falls through to the card's click-to-select.
+  let drag = $state(0);
+  let dragging = $state(false);
+  let pos = $derived(center - drag / SPREAD);
+  let startX = 0, moved = 0, downIdx = -1;
+  function pdown(e) {
+    dragging = true; startX = e.clientX; moved = 0;
+    // remember the card pressed — pointer capture redirects the later click to .flow, so we resolve
+    // tap-to-select here instead of via the card's onclick.
+    const card = e.target?.closest?.('.card');
+    downIdx = card ? Number(card.dataset.i) : -1;
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* noop */ }
+  }
+  function pmove(e) { if (!dragging) return; drag = e.clientX - startX; moved = Math.max(moved, Math.abs(drag)); }
+  function pend() {
+    if (!dragging) return;
+    dragging = false;
+    if (cast.length) {
+      if (moved <= 6) {                                  // a TAP → select the pressed card
+        if (downIdx >= 0 && downIdx !== center) center = downIdx;
+      } else {                                           // a DRAG → snap to the nearest card
+        const steps = Math.round(-drag / SPREAD);
+        center = ((center + steps) % cast.length + cast.length) % cast.length;
+      }
+    }
+    drag = 0; downIdx = -1;
+  }
   function cardStyle(i) {
     const n = cast.length || 1;
-    let off = i - center;
+    let off = i - pos;                                              // continuous → smooth drag
     if (off > n / 2) off -= n; else if (off < -n / 2) off += n;   // shortest way round
     const a = Math.abs(off);
     const tx = off * SPREAD;
     const ry = Math.max(-ANGLE, Math.min(ANGLE, -off * ANGLE));
     const tz = -a * DEPTH;
-    const sc = a === 0 ? 1 : Math.max(0.58, 1 - a * 0.15);
-    const op = a === 0 ? 1 : Math.max(0.45, 1 - a * 0.32);
-    return `transform: translate(-50%,-50%) translateX(${tx}px) translateZ(${tz}px) rotateY(${ry}deg) scale(${sc}); opacity:${op}; z-index:${100 - a};`;
+    const sc = Math.max(0.58, 1 - a * 0.15);
+    const op = Math.max(0.45, 1 - a * 0.32);
+    return `transform: translate(-50%,-50%) translateX(${tx}px) translateZ(${tz}px) rotateY(${ry}deg) scale(${sc}); opacity:${op}; z-index:${Math.round(100 - a)};`;
   }
 
   // ── Regenerate the centered outfit's base; add a standard outfit ──────────────
@@ -99,17 +128,12 @@
       } else { err = r.data?.error || 'render failed'; job.status = 'error'; }
     } finally { busy = false; }
   }
-  // Outfits aren't a fixed list — the wardrobe AGENT derives them from the story's SCENE TYPES
-  // (one pass per scene/location, a costume change only where an event warrants it). Whole-cast,
-  // scene-based, saved. The catalogue just shows the result.
-  async function planWardrobe() {
-    if (planJob) return;
-    err = '';
-    const r = await post(`/stories/${storyKey}/plan-wardrobe-all`, {});
-    if (r.ok && r.data?.job) planJob = r.data.job;
-    else err = r.data?.error || 'could not start (is the backend restarted?)';
+  // Outfits aren't a fixed list — you build them by TALKING to the outfit agent (the bottom dock).
+  // This just seeds it with a starting message; the first outfit is keyed to the opening scene.
+  function seedOutfit() {
+    const verb = outfits.length ? 'Add another outfit for' : "Design a first outfit for";
+    onAsk(`${verb} ${charName}${outfits.length ? '' : ", based on the story's opening scene"}.`);
   }
-  async function planDone() { planJob = null; fetched.clear(); portraits = {}; await loadAll(cast); onChanged(); }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -131,10 +155,11 @@
     {#if !cast.length}
       <div class="empty">No cast yet.</div>
     {:else}
-      <div class="flow">
+      <div class="flow" class:dragging onpointerdown={pdown} onpointermove={pmove}
+           onpointerup={pend} onpointercancel={pend}>
         {#each cast as c, i (c.character)}
           <div class="card" class:center={i === center} style={cardStyle(i)}
-               onclick={() => (i === center ? null : (center = i))} role="button" tabindex="-1" aria-label={c.name}>
+               data-i={i} role="button" tabindex="-1" aria-label={c.name}>
             <div class="sprite">
               {#if cardImg(c, i)}<img src={cardImg(c, i)} alt={c.name} />{:else}<div class="noimg">🎭</div>{/if}
               {#if i === center && busy}<div class="cardspin"><span class="spin"></span></div>{/if}
@@ -155,22 +180,24 @@
   <!-- Outfit rail for the centered character -->
   {#if charKey}
     <div class="rail">
-      {#if planJob}
-        <GenStream jobId={planJob} title="Planning scene wardrobes" onError={(m) => { err = m; planJob = null; }} onDone={planDone} />
+      {#each outfits as o, i (o.id)}
+        <button class="orow" class:on={i === outfitIdx} onclick={() => outfitIdx = i} title={o.name}>
+          {#if o.base}<img src={`${o.base}?b=${bust}`} alt="" />{:else}<span class="oph">·</span>{/if}
+          <span class="onm">{o.name}</span>
+        </button>
       {:else}
-        {#each outfits as o, i (o.id)}
-          <button class="orow" class:on={i === outfitIdx} onclick={() => outfitIdx = i} title={o.name}>
-            {#if o.base}<img src={`${o.base}?b=${bust}`} alt="" />{:else}<span class="oph">·</span>{/if}
-            <span class="onm">{o.name}</span>
-          </button>
-        {:else}
-          <span class="hint">No outfits yet — the wardrobe agent builds them from the story's scenes.</span>
-        {/each}
-        <span class="sp"></span>
-        <button class="plan" onclick={planWardrobe} title="The agent designs outfits per scene type, for the whole cast">✦ Plan wardrobe</button>
-        {#if outfit}
-          <button class="regen" disabled={busy} onclick={regen}>{busy ? 'rendering…' : (outfit.base ? '↻ Regenerate' : '🎨 Render')}</button>
-        {/if}
+        <span class="hint">No outfits yet — ask the agent below to design one from the opening scene.</span>
+      {/each}
+      <span class="sp"></span>
+      {#if outfit}
+        <button class="plan" onclick={() => onAsk(`Compose the "${outfit.name}" outfit prompt for everyone in the cast who has it but hasn't generated it yet.`)}
+                title="Have the agent write this outfit's prompt for the rest of the cast who wear it">✦ Apply to cast</button>
+      {/if}
+      <button class="plan" onclick={seedOutfit} title="Hand off to the outfit agent below">
+        {outfits.length ? '✦ Add outfit' : '✦ Outfit from opening scene'}
+      </button>
+      {#if outfit}
+        <button class="regen" disabled={busy} onclick={regen}>{busy ? 'rendering…' : (outfit.base ? '↻ Regenerate' : '🎨 Render')}</button>
       {/if}
     </div>
   {/if}
@@ -184,8 +211,8 @@
   .blbl { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); margin-right: 4px; }
   .chip { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; border-radius: 999px;
           background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); font-size: 12px;
-          cursor: pointer; box-shadow: none; white-space: nowrap; }
-  .chip:hover { color: var(--text); border-color: var(--border); filter: none; }
+          cursor: pointer; white-space: nowrap; }
+  .chip:hover { color: var(--text); border-color: var(--border); }
   .chip.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--elev)); }
   .chip img { width: 30px; height: 20px; border-radius: 5px; object-fit: cover; flex: none; }
 
@@ -197,7 +224,10 @@
                   background: linear-gradient(180deg, rgba(0,0,0,.16), rgba(0,0,0,.46)); }
   .empty { color: #fff; font-size: 14px; text-shadow: 0 1px 4px rgba(0,0,0,.6); z-index: 2; }
 
-  .flow { position: absolute; inset: 0; transform-style: preserve-3d; z-index: 1; }
+  .flow { position: absolute; inset: 0; transform-style: preserve-3d; z-index: 1;
+          cursor: grab; touch-action: pan-y; user-select: none; }
+  .flow.dragging { cursor: grabbing; }
+  .flow.dragging .card { transition: none; }
   .card { position: absolute; left: 50%; top: 50%; width: 300px; height: 78%;
           transition: transform .45s cubic-bezier(.22,.61,.36,1), opacity .45s; cursor: pointer; }
   .sprite { position: relative; width: 100%; height: 100%; display: grid; place-items: end center; }
@@ -216,8 +246,8 @@
 
   .nav { position: absolute; top: 50%; transform: translateY(-50%); z-index: 10; width: 42px; height: 42px;
          border-radius: 50%; font-size: 24px; line-height: 1; background: rgba(20,22,31,.7);
-         border: 1px solid rgba(255,255,255,.18); color: #fff; cursor: pointer; box-shadow: none; }
-  .nav:hover { background: rgba(20,22,31,.92); filter: none; }
+         border: 1px solid rgba(255,255,255,.18); color: #fff; cursor: pointer; }
+  .nav:hover { background: rgba(20,22,31,.92); }
   .nav.prev { left: 18px; } .nav.next { right: 18px; }
   .err { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 10;
          background: var(--bad, #b54); color: #fff; font-size: 12px; padding: 5px 12px; border-radius: 8px; }
@@ -227,15 +257,15 @@
           border-top: 1px solid var(--border-soft); background: var(--panel); }
   .orow { display: inline-flex; align-items: center; gap: 7px; padding: 4px 11px 4px 4px; border-radius: 9px;
           background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); font-size: 12.5px;
-          cursor: pointer; box-shadow: none; }
-  .orow:hover { color: var(--text); border-color: var(--border); filter: none; }
+          cursor: pointer; }
+  .orow:hover { color: var(--text); border-color: var(--border); }
   .orow.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--elev)); }
   .orow img { width: 30px; height: 38px; border-radius: 6px; object-fit: cover; flex: none; }
   .oph { width: 30px; height: 38px; border-radius: 6px; display: grid; place-items: center; background: var(--elev-2); color: var(--faint); flex: none; }
   .hint { font-size: 12px; color: var(--faint); font-style: italic; }
   .plan { font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 9px; background: none;
-          border: 1px dashed var(--accent); color: var(--accent); cursor: pointer; box-shadow: none; }
-  .plan:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); filter: none; }
+          border: 1px dashed var(--accent); color: var(--accent); cursor: pointer; }
+  .plan:hover { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .sp { flex: 1; }
   .regen { font-size: 12.5px; font-weight: 600; padding: 7px 15px; border-radius: 9px; background: var(--accent);
            color: #fff; border: none; cursor: pointer; box-shadow: 0 3px 12px rgba(0,0,0,.3); }

@@ -50,10 +50,10 @@
   .ic-b {
     width: 24px; height: 24px; padding: 0; border-radius: 6px; font-size: 12px; line-height: 1;
     background: rgba(10, 12, 20, .72); border: 1px solid rgba(255,255,255,.14); color: #fff;
-    backdrop-filter: blur(4px); box-shadow: none; cursor: pointer;
+    backdrop-filter: blur(4px); cursor: pointer;
     display: grid; place-items: center;
   }
-  .ic-b:hover:not(:disabled) { background: rgba(30, 38, 60, .92); filter: none; }
+  .ic-b:hover:not(:disabled) { background: rgba(30, 38, 60, .92); }
   .ic-b:disabled { opacity: .45; cursor: not-allowed; }
 
   /* Prominent (empty-slot) regen button is slightly larger */

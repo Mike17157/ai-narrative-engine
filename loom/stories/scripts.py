@@ -305,23 +305,40 @@ def set_start(doc, *, _id, id):
 
 # ── Cast (a {cast:[…]} artifact — the wizard's characters step) ───────────────────
 
-@script("add_character", describe="Add a character to the cast.",
+@script("add_character", describe="Add a character to the cast (or to a draft queue). For a DRAFT "
+        "harness the name may be blank — give the role plus the psychology (temperament, want, lie, "
+        "wound, secret); name comes at commit. For a committed cast, prefer the richer create_character.",
         keywords=["add a character", "new character", "another character", "add npc", "new npc",
                   "add a cast member", "introduce a character"],
-        params={"name": "the character's name", "role": "their role in the story (e.g. mentor, rival)",
-                "persona": "who they are — personality, voice, wants (a paragraph)"})
-def add_character(doc, *, _id, name="", role="", persona=""):
-    doc.setdefault("cast", []).append(
-        {"id": _id, "name": name, "role": role, "persona": persona,
-         "appearance": "", "base_prompt": "", "primary": False})
+        params={"name": "the character's name (optional — blank for a draft harness)",
+                "role": "their role in the story (e.g. mentor, rival)",
+                "persona": "who they are — personality, voice, wants (a paragraph) (optional)",
+                "temperament": "psychology in a phrase — Big Five markers, attachment style, defenses (optional)",
+                "want": "what they consciously pursue (optional)",
+                "lie": "the false belief they act on (optional)",
+                "wound": "the formative hurt under the lie (optional)",
+                "secret": "what they hide from the others (optional)",
+                "group": "the social group/clique they belong to (e.g. 'the crew') — members of one "
+                         "group are friends by default (optional)"})
+def add_character(doc, *, _id, name="", role="", persona="", temperament="",
+                  want="", lie="", wound="", secret="", group=""):
+    entry = {"id": _id, "name": name, "role": role, "persona": persona,
+             "appearance": "", "base_prompt": "", "primary": False}
+    for k, v in (("temperament", temperament), ("want", want), ("lie", lie),
+                 ("wound", wound), ("secret", secret), ("group", group)):
+        if v:
+            entry[k] = v
+    doc.setdefault("cast", []).append(entry)
 
 
-@script("set_character_field", describe="Set a field on an existing character.",
+@script("set_character_field", describe="Set a field on an existing character (or draft harness).",
         keywords=["rename character", "change the character", "edit character", "set the character",
-                  "update character", "change their role", "rewrite the persona"],
+                  "update character", "change their role", "rewrite the persona", "their want",
+                  "their lie", "their wound", "their secret", "temperament"],
         params={"id": "character id",
                 "field": {"desc": "which field to set", "required": True,
-                          "enum": ["name", "role", "persona", "appearance", "base_prompt"]},
+                          "enum": ["name", "role", "persona", "appearance", "base_prompt",
+                                   "temperament", "want", "lie", "wound", "secret", "group"]},
                 "value": "new text"})
 def set_character_field(doc, *, _id, id, field, value=""):
     _require(_by_id(doc.get("cast"), id), f"no character with id {id!r}")[field] = value
@@ -336,9 +353,42 @@ def remove_character(doc, *, _id, id):
     doc["cast"] = [c for c in doc.get("cast", []) if str(c.get("id")) != str(id)]
 
 
+@script("set_world_field", describe="Set one field of the story's WORLD frame (the stage: genre/tone/"
+        "setting/situation). Use when the writer asks to change the world, setting, era, genre, or tone.",
+        keywords=["the world", "the setting", "the genre", "the tone", "change the setting", "set the world",
+                  "make the world", "the era", "rewrite the setting", "different setting", "shift the era"],
+        params={"field": {"desc": "which world field", "required": True,
+                          "enum": ["genre", "tone", "setting", "situation"]},
+                "value": {"desc": "the new text for that field", "required": True}})
+def set_world_field(doc, *, _id, field, value=""):
+    field = str(field or "").strip().lower()
+    if field not in ("genre", "tone", "setting", "situation"):
+        raise ValueError(f"unknown world field {field!r}")
+    w = doc.get("world")
+    if not isinstance(w, dict):
+        w = {}
+        doc["world"] = w
+    w[field] = str(value or "").strip()
+
+
 # ── Relationships (the cast's web: doc["relationships"]:[…]) ──────────────────────
 # Authored at build time (Character Agent) AND drift-able at runtime — the same shape the
 # world-state engine tracks (entities[name].relationships[target]); `value` seeds that.
+
+def _resolve_actor(doc, ref):
+    """Map a relationship endpoint to a cast id: exact id wins; else match by name or role (the draft
+    queue). Returns `ref` unchanged when there's no cast or no match (committed-story keys pass through)."""
+    cast = doc.get("cast") or []
+    if any(str(c.get("id")) == str(ref) for c in cast if isinstance(c, dict)):
+        return ref
+    low = str(ref).strip().lower()
+    if low:
+        for c in cast:
+            if isinstance(c, dict) and low in (str(c.get("name", "")).strip().lower(),
+                                               str(c.get("role", "")).strip().lower()):
+                return str(c.get("id"))
+    return ref
+
 
 @script("set_relationship",
         describe="Create or update how one character relates to another (rival, mentor, lover…). "
@@ -348,28 +398,49 @@ def remove_character(doc, *, _id, id):
         params={"source": "id or name of the character who holds the feeling",
                 "target": "id or name of the other character",
                 "nature": "the KIND of bond (e.g. rival, mentor, lover, sibling, estranged)",
-                "dynamic": "2-3 WORDS for how source feels about target right now — terse and "
+                "dynamic": "2-3 WORDS for how SOURCE feels about target right now — terse and "
                            "evocative, never a sentence (e.g. 'protective, smothering', 'old grudge', "
                            "'wary respect', 'quiet devotion')",
-                "stance": {"desc": "coarse feeling, for the graph colour only",
+                "stance": {"desc": "coarse feeling SOURCE→target, for the graph colour only",
                            "enum": ["devoted", "warm", "neutral", "strained", "hostile"]},
-                "note": "optional extra history"})
-def set_relationship(doc, *, _id, source, target, nature="", dynamic="", stance="", note=""):
+                "target_dynamic": "2-3 WORDS for how the TARGET feels back toward source (a bond reads "
+                                  "BOTH WAYS and the two sides may DIFFER — unrequited, one-sided trust). "
+                                  "Omit if it's symmetric (same as source).",
+                "target_stance": {"desc": "coarse feeling TARGET→source; omit if symmetric",
+                                  "enum": ["devoted", "warm", "neutral", "strained", "hostile"]},
+                "note": "optional extra history",
+                "potential": "the story SEED — the hidden COMMON CORE they share beneath their "
+                             "surface-different backgrounds, the point they can plausibly build on "
+                             "(love or enmity) (optional)",
+                "trajectory": "where the bond could TRAVEL + how it FEELS — a from→to with a tone "
+                              "('wary strangers → a slow, sweet first love, strawberry-milk gentle') (optional)"})
+def set_relationship(doc, *, _id, source, target, nature="", dynamic="", stance="", note="",
+                     potential="", trajectory="", target_dynamic="", target_stance=""):
+    # Resolve a name/role to a cast id when the doc carries a cast (the draft queue, where the agent
+    # creates + relates in one turn so it refers to actors by NAME, not the yet-unassigned id). A no-op
+    # for a committed story (endpoints are already character keys; ids match, names don't resolve).
+    source, target = _resolve_actor(doc, source), _resolve_actor(doc, target)
     if str(source) == str(target):
         raise ValueError("a character can't have a relationship with themselves")
     rels = doc.setdefault("relationships", [])
     cur = next((r for r in rels if r.get("source") == source and r.get("target") == target), None)
     if cur is None:
         cur = {"id": _id, "source": source, "target": target, "nature": "",
-               "dynamic": "", "stance": "neutral", "note": ""}
+               "dynamic": "", "stance": "neutral", "note": "", "potential": "", "trajectory": ""}
         rels.append(cur)
     if dynamic:
         dynamic = " ".join(str(dynamic).split()[:6])   # 2-3 words; backstop a sentence
-    for k, v in (("nature", nature), ("dynamic", dynamic), ("note", note)):
+    if target_dynamic:
+        target_dynamic = " ".join(str(target_dynamic).split()[:6])
+    for k, v in (("nature", nature), ("dynamic", dynamic), ("note", note),
+                 ("potential", potential), ("trajectory", trajectory),
+                 ("target_dynamic", target_dynamic)):
         if v:
             cur[k] = v
     if stance in ("devoted", "warm", "neutral", "strained", "hostile"):
         cur["stance"] = stance
+    if target_stance in ("devoted", "warm", "neutral", "strained", "hostile"):
+        cur["target_stance"] = target_stance
 
 
 @script("remove_relationship", describe="Remove the relationship between two characters.",

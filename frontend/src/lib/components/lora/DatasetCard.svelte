@@ -219,12 +219,11 @@
 {/if}
 
 <style>
-  .hint { font-size: 12.5px; color: var(--muted); }
   code { background: var(--elev); padding: 1px 5px; border-radius: 5px; font-size: 12px; }
   .bar2 { display: flex; gap: 10px; align-items: flex-end; margin: 14px 0; flex-wrap: wrap; }
   .methods { display: flex; gap: 4px; margin: 12px 0 12px; }
-  .methods button { background: none; color: var(--muted); box-shadow: none; border: 1px solid var(--border); border-radius: 8px; padding: 7px 13px; font-weight: 560; font-size: 13px; }
-  .methods button:hover { color: var(--text); background: var(--elev); filter: none; }
+  .methods button { background: none; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 7px 13px; font-weight: 560; font-size: 13px; }
+  .methods button:hover { color: var(--text); background: var(--elev); }
   .methods button.on { color: #fff; background: var(--elev-2); box-shadow: inset 0 0 0 1px var(--accent); }
   .wdrow { display: grid; grid-template-columns: 1fr 160px 160px; gap: 12px; align-items: end; }
   .wdrow label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 4px; }
@@ -235,15 +234,14 @@
   .chead strong { font-size: 14px; }
   .cfg textarea { width: 100%; resize: vertical; font: 12.5px/1.5 ui-monospace, monospace; }
   .save { font-size: 12px; color: var(--muted); margin-top: 6px; }
-  .ok { color: var(--good); } .err { color: var(--bad); }
 
   .prog { display: flex; align-items: center; gap: 10px; margin: 6px 0 14px; }
   .pmeta { font-size: 12px; color: var(--muted); white-space: nowrap; }
 
   .grid { display: grid; gap: 12px; margin-top: 6px; padding-bottom: 72px; }
-  .card { margin: 0; background: var(--panel); border: 1px solid var(--border-soft); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
+  .card { margin: 0; border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; }
   .card img { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: var(--elev); }
-  .card textarea { width: 100%; height: var(--cap-h, 56px); border: 0; border-top: 1px solid var(--border-soft); background: transparent; resize: vertical; font: 11px/1.45 ui-monospace, monospace; color: var(--text); padding: 7px 8px; }
+  .card textarea { height: var(--cap-h, 56px); border: 0; border-top: 1px solid var(--border-soft); background: transparent; resize: vertical; font: 11px/1.45 ui-monospace, monospace; padding: 7px 8px; }
   .card textarea:focus { outline: none; background: var(--elev); }
 
   /* floating card-size slider */

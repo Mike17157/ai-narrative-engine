@@ -161,22 +161,21 @@
 {/if}
 
 <style>
-  .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 14px; }
+  .hint { margin-bottom: 14px; }
   .center { display: grid; place-items: center; height: 24vh; color: var(--muted); font-size: 13px; }
-  .err { color: var(--bad); font-size: 12.5px; }
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .err { font-size: 12.5px; }
+  .card { margin-bottom: 16px; }
   .chead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
   .chead h3 { margin: 0; font-size: 15px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
-  .row { display: flex; align-items: center; gap: 8px; }
   .search { width: 200px; }
 
   .list { display: flex; flex-direction: column; gap: 3px; }
   .lrow { display: grid; grid-template-columns: 70px 90px 1fr 80px 24px; gap: 10px; align-items: center; padding: 6px 8px; border-bottom: 1px solid var(--border-soft); font-size: 12.5px; }
-  .del { width: 22px; height: 22px; padding: 0; font-size: 15px; line-height: 1; border-radius: 6px; box-shadow: none;
+  .del { width: 22px; height: 22px; padding: 0; font-size: 15px; line-height: 1; border-radius: 6px;
     background: none; border: 1px solid transparent; color: var(--faint); cursor: pointer; opacity: 0; transition: opacity .12s; }
   .lrow:hover .del { opacity: 1; }
-  .del:hover { color: var(--bad); border-color: rgba(255,90,90,.4); background: rgba(255,90,90,.1); filter: none; }
+  .del:hover { color: var(--bad); border-color: rgba(255,90,90,.4); background: rgba(255,90,90,.1); }
   .kind { font-size: 11px; color: var(--muted); }
   .rel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 12px; }
   .rel .top { color: var(--faint); }

@@ -90,10 +90,10 @@
     flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .x {
-    width: 28px; height: 28px; flex: none; padding: 0; border-radius: 7px; box-shadow: none;
+    width: 28px; height: 28px; flex: none; padding: 0; border-radius: 7px;
     background: var(--elev); border: 1px solid var(--border); color: var(--muted); font-size: 11px;
   }
-  .x:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .x:hover { color: var(--text); background: var(--elev-2); }
 
   .body { padding: 14px 16px; overflow: auto; flex: 1; }
   .fields { display: flex; flex-direction: column; gap: 10px; }
@@ -117,9 +117,9 @@
   .sp { flex: 1; }
   .regen-btn {
     font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: 8px;
-    background: var(--elev-2); border: 1px solid var(--border); color: var(--text); cursor: pointer; box-shadow: none;
+    background: var(--elev-2); border: 1px solid var(--border); color: var(--text); cursor: pointer;
   }
-  .regen-btn:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .regen-btn:hover { border-color: var(--accent); color: var(--accent); }
   .accept-btn {
     font-size: 13px; font-weight: 700; padding: 7px 18px; border-radius: 8px;
     background: var(--accent); border: 0; color: #fff; cursor: pointer;

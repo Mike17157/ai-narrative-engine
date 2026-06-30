@@ -43,8 +43,8 @@
   .chip { display: inline-flex; align-items: center; gap: 4px; font-size: 11.5px; padding: 2px 4px 2px 8px;
     border-radius: 7px; border: 1px solid var(--border-soft); background: var(--elev-2); color: var(--text); }
   .chip.nsfw { border-color: rgba(230,120,160,.4); }
-  .rm { background: none; border: 0; color: inherit; opacity: .55; cursor: pointer; padding: 0 1px; font-size: 12px; box-shadow: none; }
+  .rm { background: none; border: 0; color: inherit; opacity: .55; cursor: pointer; padding: 0 1px; font-size: 12px; }
   .rm:hover { opacity: 1; }
-  .add { font-size: 11.5px; padding: 2px 8px; border-radius: 7px; background: var(--elev); border: 1px dashed var(--border); color: var(--muted); box-shadow: none; }
+  .add { font-size: 11.5px; padding: 2px 8px; border-radius: 7px; background: var(--elev); border: 1px dashed var(--border); color: var(--muted); }
   .add:hover { color: var(--accent); border-color: var(--accent); }
 </style>

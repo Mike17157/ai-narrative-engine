@@ -310,13 +310,12 @@
     flex: none;
     padding: 0;
     border-radius: 7px;
-    box-shadow: none;
     background: var(--elev);
     border: 1px solid var(--border);
     color: var(--muted);
     font-size: 11px;
   }
-  .x:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .x:hover { color: var(--text); background: var(--elev-2); }
 
   .body {
     padding: 14px 16px;
@@ -362,8 +361,8 @@
   .bg-cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 8px; }
   .bg-cand { display: flex; flex-direction: column; gap: 4px; }
   .bg-cand img { width: 100%; border-radius: 8px; border: 1px solid var(--border); display: block; }
-  .bg-cand .use { font-size: 11px; padding: 4px 6px; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
-  .bg-cand .use:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .bg-cand .use { font-size: 11px; padding: 4px 6px; border-radius: 6px; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); cursor: pointer; }
+  .bg-cand .use:hover { border-color: var(--accent); color: var(--accent); }
   .bg-note { font-size: 12px; color: var(--faint); border: 1px dashed var(--border); border-radius: 8px; padding: 8px 11px; }
 
   /* Stream viewer */
@@ -397,7 +396,7 @@
   .ser { color: var(--bad, #ff7a7a); }
   .sdl { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, monospace; font-size: 11px; color: var(--muted); }
 
-  .err { font-size: 12.5px; color: var(--bad, #ff7a7a); }
+  .err { font-size: 12.5px; }
 
   .foot {
     display: flex;
@@ -417,9 +416,8 @@
     border: 1px solid var(--border);
     color: var(--text);
     cursor: pointer;
-    box-shadow: none;
   }
-  .regen-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); filter: none; }
+  .regen-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .regen-btn:disabled { opacity: .45; cursor: not-allowed; }
   .accept-btn {
     font-size: 13px;

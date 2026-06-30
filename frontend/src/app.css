@@ -1,23 +1,25 @@
 :root {
   color-scheme: dark;
-  --bg: #0e1014;
-  --panel: #151821;
-  --elev: #1b1f2a;
-  --elev-2: #222734;
-  --border: #272c38;
-  --border-soft: #1e2330;
-  --text: #e8eaed;
-  --muted: #8b93a3;
-  --faint: #5e6675;
-  --accent: #6d8cff;
-  --accent-600: #5575f0;
-  --accent-glow: rgba(109, 140, 255, .22);
-  --good: #57d9a3;
-  --bad: #ff7a7a;
-  --warn: #f5c451;
-  --radius: 10px;
-  --radius-lg: 14px;
-  --shadow: 0 12px 34px rgba(0, 0, 0, .42);
+  /* Clean minimalist dark — neutral surfaces (no blue cast), hairline borders, flat. */
+  --bg: #0d0e10;
+  --panel: #141519;
+  --elev: #191a1f;
+  --elev-2: #212329;
+  --border: #2a2c33;
+  --border-soft: #1e2025;
+  --border-strong: #3a3d46;
+  --text: #e9eaec;
+  --muted: #8a8f99;
+  --faint: #5c606b;
+  --accent: #9aa0ac;
+  --accent-600: #595e69;
+  --accent-glow: rgba(154, 160, 172, .16);
+  --good: #5fd3a0;
+  --bad: #f08a8a;
+  --warn: #e7c069;
+  --radius: 9px;
+  --radius-lg: 12px;
+  --shadow: 0 10px 30px rgba(0, 0, 0, .38);
 }
 
 * { box-sizing: border-box; }
@@ -35,24 +37,29 @@ body {
 *::-webkit-scrollbar { width: 9px; height: 9px; }
 *::-webkit-scrollbar-thumb { background: #2c3340; border-radius: 6px; border: 2px solid transparent; background-clip: padding-box; }
 
-/* buttons — solid background, no glow, no inset highlight (those caused the nav artifacts) */
+/* buttons — flat. Default is a SECONDARY surface button (hairline border); `.primary` is the one
+   accented CTA; `.ghost` is the quietest (transparent). Color is reserved for meaning, not chrome. */
 button {
-  font: inherit; font-weight: 540; cursor: pointer;
-  background: var(--accent-600);
-  color: #fff; border: 0; padding: 8px 14px; border-radius: var(--radius);
-  transition: background .12s, transform .05s;
+  font: inherit; font-weight: 500; cursor: pointer;
+  background: var(--elev-2); color: var(--text);
+  border: 1px solid var(--border); padding: 7px 13px; border-radius: var(--radius);
+  transition: background .12s, border-color .12s, transform .05s;
 }
-button:hover:not(:disabled) { background: var(--accent); }
+button:hover:not(:disabled) { background: var(--elev); border-color: var(--border-strong); }
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { opacity: .45; cursor: default; }
-button.ghost {
-  background: var(--elev); color: #d4d8e0; border: 1px solid var(--border);
-  font-weight: 500;
-}
-button.ghost:hover:not(:disabled) { background: var(--elev-2); }
-button.sm { padding: 4px 9px; font-size: 12.5px; border-radius: 8px; }
+button.primary { background: var(--accent-600); color: #fff; border-color: transparent; font-weight: 540; }
+button.primary:hover:not(:disabled) { background: var(--accent); border-color: transparent; }
+button.ghost { background: transparent; color: var(--muted); border-color: transparent; }
+button.ghost:hover:not(:disabled) { background: var(--elev); color: var(--text); border-color: transparent; }
+/* `.soft` = quieter bordered secondary (hairline-soft border, muted text); `.outline` = the
+   default bordered button but transparent. Both inherit the default button's padding/radius. */
+button.soft { background: var(--elev); border-color: var(--border-soft); color: var(--muted); }
+button.soft:hover:not(:disabled) { color: var(--text); }
+button.outline { background: transparent; }
+button.sm { padding: 4px 9px; font-size: 12.5px; }
 button.icon { padding: 4px 8px; background: none; color: var(--muted); border: 0; }
-button.icon:hover { color: var(--text); }
+button.icon:hover { color: var(--text); background: none; }
 
 /* form controls */
 input, select, textarea {
@@ -90,7 +97,9 @@ label { display: block; font-size: 11.5px; letter-spacing: .3px; text-transform:
 .item.sel { background: var(--elev); border-color: var(--accent); }
 .item .kind { font-size: 11.5px; color: var(--muted); margin-left: auto; }
 
-.card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: var(--radius-lg); padding: 14px; }
+/* Standard content card — matches the de-facto house card used across routes/components.
+   Stacking margin is layout-specific; add `margin-bottom` at the use site, don't bake it here. */
+.card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; }
 .divider { height: 1px; background: var(--border-soft); margin: 16px 0; }
 
 /* route page shells (used by the file-based routes under src/routes/) */

@@ -65,7 +65,7 @@
   {#if browse.multi}
     <div class="foot">
       <span class="cnt">{local.length} selected</span>
-      <button class="ghost" onclick={closeBrowse}>Cancel</button>
+      <button class="soft" onclick={closeBrowse}>Cancel</button>
       <button class="primary" onclick={confirm}>Confirm</button>
     </div>
   {/if}
@@ -76,13 +76,11 @@
   .head h3 { margin: 0; font-size: 14px; font-weight: 660; flex: 1; }
   .manage { font-size: 12px; color: var(--accent); text-decoration: none; }
   .manage:hover { text-decoration: underline; }
-  .x { background: none; border: 0; box-shadow: none; color: var(--muted); font-size: 14px; cursor: pointer; padding: 2px 6px; }
-  .x:hover { color: var(--text); filter: none; }
+  .x { background: none; border: 0; color: var(--muted); font-size: 14px; cursor: pointer; padding: 2px 6px; }
+  .x:hover { color: var(--text); }
   .body { padding: 12px 16px; display: flex; flex-direction: column; min-height: 0; flex: 1; }
   .foot { display: flex; align-items: center; gap: 10px; padding: 11px 16px; border-top: 1px solid var(--border-soft); }
   .cnt { font-size: 12px; color: var(--muted); flex: 1; }
-  .ghost { font-size: 12.5px; padding: 7px 14px; border-radius: 8px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
-  .ghost:hover { color: var(--text); filter: none; }
-  .primary { font-size: 12.5px; padding: 7px 16px; border-radius: 8px; background: var(--accent); border: 0; color: #fff; cursor: pointer; font-weight: 600; }
+  .primary { font-size: 12.5px; padding: 7px 16px; border-radius: 8px; font-weight: 600; }
   .primary:hover { filter: brightness(1.08); }
 </style>

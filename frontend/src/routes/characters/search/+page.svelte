@@ -81,16 +81,16 @@
     position: relative;
     display: flex; flex-direction: column; text-align: left; padding: 0; overflow: hidden;
     background: var(--elev); border: 1px solid var(--border-soft); border-radius: 12px;
-    box-shadow: none; cursor: pointer; transition: border-color .12s, background .12s;
+ cursor: pointer; transition: border-color .12s, background .12s;
   }
   .pcard .del {
     position: absolute; top: 6px; right: 6px; z-index: 3; width: 26px; height: 26px; padding: 0;
     display: grid; place-items: center; font-size: 12px; border-radius: 7px; opacity: .5;
-    background: rgba(10,12,18,.7); border: 1px solid var(--border); color: var(--muted); box-shadow: none;
+    background: rgba(10,12,18,.7); border: 1px solid var(--border); color: var(--muted);
   }
   .pcard:hover .del { opacity: 1; }
-  .pcard .del:hover { color: var(--bad); border-color: rgba(255,122,122,.5); background: rgba(255,122,122,.16); filter: none; }
-  .pcard:hover { background: var(--elev-2); border-color: #323847; filter: none; }
+  .pcard .del:hover { color: var(--bad); border-color: rgba(255,122,122,.5); background: rgba(255,122,122,.16); }
+  .pcard:hover { background: var(--elev-2); border-color: #323847; }
   .pcard.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
   /* Image scales with the card WIDTH (fixed portrait ratio), so the width slider grows it. */
   .pav { width: 100%; aspect-ratio: 3 / 4; object-fit: cover; display: block; }

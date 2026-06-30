@@ -312,7 +312,6 @@
   .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 
   .card {
-    background: var(--panel); border: 1px solid var(--border-soft);
     border-radius: var(--radius-lg); padding: 20px 22px;
     display: flex; flex-direction: column; gap: 0;
     min-width: 0;
@@ -368,7 +367,7 @@
   .kv { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
   .kv span { font-size: 12.5px; color: var(--muted); width: 52px; flex: none; }
   .kv b { font-size: 13px; font-weight: 560; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .muted { color: var(--muted); font-weight: 400; }
+  .muted { font-weight: 400; }
 
   /* Trainer */
   .pill { font-size: 11px; font-weight: 600; padding: 2px 10px; border-radius: 999px; }
@@ -382,7 +381,7 @@
   label { display: block; font-size: 12px; color: var(--muted); margin: 12px 0 4px; }
   .dim { color: var(--faint, var(--muted)); }
   input { width: 100%; }
-  select { width: 100%; padding: 8px 10px; border-radius: 8px; background: var(--elev); color: var(--text); border: 1px solid var(--border); }
+  select { padding: 8px 10px; border-radius: 8px; }
   .actions { display: flex; align-items: center; gap: 10px; margin-top: 12px; }
 
   .run { margin-top: 16px; }
@@ -396,12 +395,10 @@
          padding: 10px 12px; font: 11.5px/1.5 ui-monospace, monospace; color: #b9c2d0; white-space: pre-wrap; word-break: break-word; margin: 0; }
 
   /* shared */
-  .hint { font-size: 12px; color: var(--muted); margin: 10px 0 0; line-height: 1.55; }
+  .hint { font-size: 12px; margin: 10px 0 0; line-height: 1.55; }
   .hint.mt0 { margin-top: 6px; }
   .hint code, code { background: var(--elev); padding: 1px 5px; border-radius: 4px; font-size: 11.5px; }
   .msg { font-size: 12.5px; margin-top: 4px; }
-  .ok  { color: var(--good); }
-  .err { color: var(--bad); }
   .nsfwrow { display: flex; align-items: flex-start; gap: 10px; cursor: pointer; }
   .nsfwrow input { width: 16px; height: 16px; margin-top: 2px; flex: none; }
   .nsfwlabel { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--text); }

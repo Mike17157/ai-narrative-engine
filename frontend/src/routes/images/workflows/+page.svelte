@@ -59,7 +59,7 @@
   .list { width: 240px; flex: none; display: flex; flex-direction: column; gap: 2px; }
   .search { width: 100%; box-sizing: border-box; padding: 8px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); margin-bottom: 8px; }
   .grp { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); margin: 12px 0 3px; padding: 0 4px; }
-  .row { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: none; color: var(--text); padding: 7px 10px; border-radius: 8px; font-size: 13px; box-shadow: none; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; text-align: left; border: 1px solid transparent; background: none; color: var(--text); padding: 7px 10px; border-radius: 8px; font-size: 13px; }
   .row:hover { background: var(--elev); }
   .row.on { background: var(--elev-2); border-color: var(--border); }
   .key { font-family: var(--mono, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -134,7 +134,7 @@
 
   .meta { display: flex; justify-content: space-between; align-items: center; font-size: 11.5px; color: var(--muted); margin-top: 4px; }
   .acts { display: flex; gap: 10px; }
-  .lnk { background: none; box-shadow: none; padding: 0; color: var(--accent); font: inherit; font-size: 11.5px; }
+  .lnk { background: none; padding: 0; color: var(--accent); font: inherit; font-size: 11.5px; }
   .lnk:hover { filter: brightness(1.2); }
   .lnk.danger { color: var(--bad); }
 </style>

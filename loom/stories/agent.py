@@ -25,14 +25,59 @@ def _story_context(ctx, skey: str, fields: list) -> str:
     vals = {
         "title": sd.get("name"), "premise": sd.get("premise"), "tone": sd.get("tone"),
         "themes": ", ".join(sd.get("themes") or []), "logline": sb.get("logline"), "heart": sb.get("heart"),
-        "intended_ending": sd.get("intended_ending"),
         "arcs": "; ".join(a.get("name", "") for a in (sd.get("arcs") or []) if a.get("name")),
         "cast": ", ".join(n for n in cast_names if n),
     }
     labels = {"title": "Title", "premise": "Premise", "tone": "Tone", "themes": "Themes",
-              "logline": "Logline", "heart": "Heart", "intended_ending": "Intended ending",
+              "logline": "Logline", "heart": "Heart",
               "arcs": "Arcs", "cast": "Cast"}
-    return "\n".join(f"{labels.get(k, k)}: {vals[k]}" for k in (fields or []) if vals.get(k))
+    block = "\n".join(f"{labels.get(k, k)}: {vals[k]}" for k in (fields or []) if vals.get(k))
+
+    # The relationship MAP — always fed so the builder agent (and the human conversing with it) can
+    # reason about scenes from the cast's web. We supply the map; the user selects the scene. No
+    # auto-weighting — the human drives. See loom/stories/GENESIS.md.
+    rels = sd.get("relationships") or []
+    if rels:
+        kname = {m.get("character"): getattr(ctx.base_settings.characters.get(m.get("character")),
+                                              "name", m.get("character"))
+                 for m in (sd.get("cast") or [])}
+        lines = []
+        for r in rels:
+            s = kname.get(r.get("source"), r.get("source"))
+            t = kname.get(r.get("target"), r.get("target"))
+            nat = f" ({r['nature']})" if r.get("nature") else ""
+            dyn = r.get("dynamic") or r.get("stance") or ""
+            lines.append(f"- {s} → {t}{nat}: {dyn}".rstrip(": ").rstrip())
+        block = (block + "\n" if block else "") + "Relationship map:\n" + "\n".join(lines)
+    return block
+
+
+def _propose_label(fn: str, params: dict, graph: dict | None = None) -> str:
+    """A short title for an option/approval card (the action + its key nouns). Resolves id-valued
+    params (e.g. remove_character's `id`, a relationship's source/target) to the entity's name via
+    `graph`, so a removal reads 'remove character: Leo Vance', not a bare verb or an opaque id."""
+    verb = fn.replace("_", " ")
+    names: dict[str, str] = {}
+    if isinstance(graph, dict):
+        for c in graph.get("cast") or []:
+            if c.get("id"):
+                names[str(c["id"])] = str(c.get("name") or c.get("role") or c["id"])
+        for l in graph.get("locations") or []:
+            if l.get("id"):
+                names[str(l["id"])] = str(l.get("name") or l["id"])
+    show = lambda v: names.get(str(v), str(v))
+    parts = [show(params[k]) for k in ("name", "title", "value", "nature", "role", "id", "source", "target")
+             if params.get(k)]
+    return (verb + (": " + " · ".join(parts[:3]) if parts else ""))[:160]
+
+
+def _propose_detail(params: dict) -> str:
+    """The descriptive body of an option card — so a SERIES of options is choosable, not just labels."""
+    for k in ("persona", "premise", "description", "note", "value"):
+        v = params.get(k)
+        if isinstance(v, str) and v.strip():
+            return v.strip()[:800]   # show the whole sketch — a runaway guard only, not a clip
+    return ""
 
 
 def run_turn(ctx, body: dict) -> dict:
@@ -94,11 +139,23 @@ def run_turn(ctx, body: dict) -> dict:
     pol = cfg.get("tool_policy") or {}
     cap = pol.get("all_tools_cap", 40) if body.get("all_tools") else pol.get("attached_cap", 12)
     off = fns if (body.get("offer_all") or body.get("all_tools")) else GO.offered(fns, transcript, cap=cap)
+
+    # ── Edit TARGET: where approved doc-ops land + how they persist. The universal suggest→approve
+    # loop is artifact-agnostic; `target` is the only per-surface knob. See [[two-agent-model]].
+    #   • "draft"            → mutate the CLIENT-HELD doc only; persist nothing (a pre-commit queue).
+    #   • "character:<key>"  → write the single edited character's fields back to its YAML.
+    #   • "story" (default)  → the original story-field persist.
+    # A draft also drops ACTION tools (no disk writes / image-gen on a doc the client still owns). ──
+    target = (body.get("target") or "story").strip()
+    draft = (target == "draft") or (body.get("commit", True) is False)
+    if draft:
+        off = [f for f in off if f.kind != "action"]
     if not off:
         return {"ok": True, "graph": graph, "applied": [], "offered": []}
 
-    # ── Model/connection from a single chat preset (NOT a persona). ──
-    preset = _P.preset_for_books(root, preset_books)
+    # ── Model/connection from a single chat preset (NOT a persona). An explicit per-request `model`
+    # (e.g. the genesis flow's model toggle) OVERRIDES the preset → routes through builder_ctx's override. ──
+    preset = None if (body.get("model") or "").strip() else _P.preset_for_books(root, preset_books)
     if preset is not None:
         provider = ctx.text_provider_for((preset.get("model") or "").strip() or None,
                                          preset.get("params") or {}, connection=preset.get("connection") or None)
@@ -131,14 +188,133 @@ def run_turn(ctx, body: dict) -> dict:
         f"\nCURRENT {label} (the editable graph):\n" + json.dumps(graph, ensure_ascii=False),
         (f"\n{cfg.get('tool_rules', '')}" if cfg.get("tool_rules") else ""),
     ] if p)
+
+    # If a WORLD frame is set (genesis authored the stage), make it AUTHORITATIVE — every character the
+    # chat proposes or edits must belong to it; the writer can also reshape it via set_world_field.
+    from .genesis import world_brief as _world_brief
+    _wbrief = _world_brief(graph.get("world")) if isinstance(graph, dict) else ""
+    if _wbrief:
+        system += ("\n\nESTABLISHED WORLD — the stage is ALREADY set. Every character you propose or edit MUST "
+                   "plausibly belong to THIS world (its genre, era, setting, situation); do NOT invent a "
+                   "different setting. Use it as the cast's common world. To change the world itself, call "
+                   "set_world_field.\n" + _wbrief)
+
+    # DRAFT mode: a pre-commit, client-held artifact (the cast queue) — only the pure doc-tools are
+    # offered (create_character/image-gen are filtered out), so override the mode persona's "prefer the
+    # rich create_character" steer toward the draft tool, and ask for the full psychology.
+    if draft:
+        system += (
+            "\n\nDRAFT CAST QUEUE — propose characters the writer ratifies then refines; names are "
+            "assigned at commit. EVERY add_character call MUST carry a vivid PROSE `persona` of 3-4 full "
+            "sentences — NEVER propose a bare role with a thin or empty persona. GROUND each character in "
+            "REAL psychology — privately decide their disposition, how they attach to people, and the "
+            "defense they hit under stress to keep them coherent, but that is your INTERNAL scaffold ONLY. "
+            "Write the persona as NATURAL PROSE that reveals them ENTIRELY through concrete, specific, "
+            "idiosyncratic behaviour: a real habit, the exact thing they're into, how they actually talk, "
+            "what they avoid. NEVER name a personality trait, facet, or framework in the prose — no "
+            "'extraversion', 'gregariousness', 'neuroticism', 'conscientiousness', 'openness', "
+            "'agreeableness', 'attachment', 'high/low ___'. SHOW the person; never diagnose them. Weave "
+            "in, in the same prose, how they relate to EACH OTHER and to "
+            "the established main characters. Set `role` to a short plain RELATIONAL tag (e.g. 'Mara's "
+            "friend', 'one of the crew') — never a personality label; leave `name` blank unless the writer "
+            "gave one. Do NOT call set_relationship or fill the structured want/lie/wound/secret/"
+            "temperament params — the system formalizes those AFTER each character is ratified. "
+            "(create_character is unavailable here.) Revise an existing entry with set_character_field. "
+            "Propose 2-5 distinct characters as cards. When the writer's prompt is terse, INVENT the depth "
+            "— never echo a generic stub like 'the boy'; give a real, particular person."
+            "\n\nONE CONNECTED CAST — they share a story. Give the cast a COMMON WORLD (the same school, "
+            "town, band, workplace, neighbourhood) and make sure they plausibly belong together with REAL "
+            "reasons to cross paths. Weave a concrete CONNECTION into each persona — how they know each "
+            "other, what throws them together, who they orbit. NEVER hand back isolated sketches that don't "
+            "reference one another (a boy who only games + an idol who only rehearses, with nothing between "
+            "them, is a non-starter). Even a two-person prompt needs the link spelled out: he's a fan, "
+            "they're lab partners, she keeps catching him watching. Compatibility isn't optional — design "
+            "them to fit ONE web, and lean toward a shared setting that makes the connection inevitable."
+            "\n\nWRITE TO THE BRIEF, FAITHFULLY. Match the exact register and tone the writer asked for. If "
+            "they want crude, horny, silly, low-brow, or trashy kids, give them good-natured kids with bad "
+            "TASTE — not cautionary figures who 'cross the line', 'cause harm', or 'don't realize the harm'. "
+            "Bad taste is not bad character. Never sanitize, moralize, soften, or elevate the request into "
+            "something more respectable or more dramatic than what was asked."
+            "\n\nORDINARY, NOT ARCHETYPES — BUT NEVER BLAND. Make specific, real, mostly-unremarkable "
+            "people, not TV stock types ('class clown', 'gossip queen', 'brooding loner artist', 'dumb "
+            "jock', 'shy nerd', 'mean girl' are ARCHETYPES — do not produce them). But 'ordinary' means "
+            "GROUNDED, not thin: an ordinary person is RICH in concrete idiosyncratic detail (the exact "
+            "dumb thing they're into, what they actually joke about, a small telling habit). The depth "
+            "lives in that specificity, not in a dramatic wound or one grand defining trait — so make them "
+            "specific and textured, never a generic label."
+            "\n\nA GROUP IS A GROUP. When the writer asks for a friend group / class / crew / clique, the "
+            "members SHARE the requested sensibility and obviously belong together — distinguished by small "
+            "real differences, not by being contrasting archetypes. Build the group, not a type parade. And "
+            "do NOT slot them by their FUNCTION in the group either ('the ringleader', 'the loud one', 'the "
+            "deadpan one', 'the wild card', 'the chaos gremlin') — that's the same archetype trap in a "
+            "different outfit. Each is a whole ordinary kid FIRST — their own specific interests, home life, "
+            "and habits — who happens to share the crew's humor. Two of them can even be alike, like real "
+            "friends are."
+            "\n\nRELATE THEM, WITH VARIED STANCES. Wire each new character both to EACH OTHER and to the "
+            "established main characters — a real social world has an opinion about its notable people. But "
+            "VARY that opinion hard: do NOT make everyone admire, fancy, or fixate on the same lead — a "
+            "uniform reaction is the tell of a fake world. Spread the feelings across the full range: warm/"
+            "friendly with some, plainly INDIFFERENT (neutral) to others, and some who look DOWN on, resent, "
+            "envy, or are wary of a lead. A popstar should have admirers AND people who think she's overrated "
+            "AND people who just don't care; a quiet kid should have a friend AND someone who ignores him. "
+            "Give each new character a DIFFERENT mix of stances — not the same feeling toward the same person."
+            "\n\nSOCIAL GROUPS — assign them PROACTIVELY. Whenever 2+ characters form a genuine social "
+            "cluster (a friend group, a clique, a band, a family, a regular lunch table), set the SAME "
+            "`group` name on every member (e.g. group='the crew') WITHOUT waiting to be asked — never leave "
+            "a natural clique ungrouped. Members of one group are FRIENDS by default (the system auto-links "
+            "them), so don't narrate every intra-group friendship; spend the prose on each kid's individual "
+            "texture and their VARIED feelings about people OUTSIDE the group. Use distinct group names for "
+            "distinct cliques. (Only a loose pairing or a deliberately-fractured cast needs no group — but "
+            "they still need the CONNECTION above.)")
+
+    # PROPOSE mode (the Structure creation step): nothing applies until the writer approves, so be
+    # generous — when they wonder/explore/ask for options, offer a SERIES of distinct options as cards.
+    if body.get("propose"):
+        system += ("\n\nPROPOSE MODE — the writer is BUILDING and will APPROVE before anything takes "
+                   "effect (every tool call you make is shown as a card; nothing is applied until they "
+                   "accept it). So be generous and concrete: when they wonder, explore, or ask for "
+                   "options/ideas, propose a SERIES of 2-4 DISTINCT, story-grounded options by calling "
+                   "the richest matching tool ONCE PER OPTION (e.g. several create_character calls) — "
+                   "they surface as option cards to choose from. For a specific single change, propose "
+                   "just that one. Each option must be specific to THIS story, distinct from the others, "
+                   "and not already present.")
     prompt = transcript or f"Apply the appropriate tools to the {label.lower()}."
-    try:
-        res = provider.generate_text(system=system, prompt=prompt, tools=GO.tools_spec(off))
-    except Exception as exc:  # noqa: BLE001
-        return {"ok": False, "error": f"graph-ops failed: {exc}", "_status": 500}
+
+    # Two opt-in flows gate tool application for a suggest→approve UX (the client sets the flag):
+    #   • apply_calls=[…]  → skip the model and APPLY exactly these (a proposal the user approved).
+    #   • propose=true     → run the model but DON'T apply; return the calls as `proposed` cards.
+    # Neither flag (Overview/Cast) = the original auto-apply behaviour, untouched.
+    reply_text = ""
+    approved = body.get("apply_calls")
+    if approved is not None:
+        calls = [c for c in approved if isinstance(c, dict)]
+    else:
+        try:
+            res = provider.generate_text(system=system, prompt=prompt, tools=GO.tools_spec(off))
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "error": f"graph-ops failed: {exc}", "_status": 500}
+        calls = res.tool_calls or []
+        reply_text = (getattr(res, "text", "") or "").strip()
+        if body.get("propose"):
+            specs = {f.name for f in off}
+            # In a DRAFT the relationships are described IN PROSE and formalized on ratify — never
+            # surfaced as their own cards (the writer tracks them grouped under each character).
+            rel_fns = {"set_relationship", "remove_relationship"} if draft else set()
+            proposed = []
+            for c in calls:
+                if not isinstance(c, dict) or str(c.get("fn", "")) not in specs:
+                    continue
+                fn = str(c.get("fn", ""))
+                if fn in rel_fns:
+                    continue
+                pp = GO._call_params(c)
+                proposed.append({"fn": fn, "params": pp,
+                                 "label": _propose_label(fn, pp, graph), "detail": _propose_detail(pp)})
+            return {"ok": True, "graph": graph, "proposed": proposed, "reply": reply_text,
+                    "offered": [f.name for f in off], "active_behavior": behavior_sig,
+                    "context_cut": context_cut}
 
     # ── Apply: DOC tools mutate the artifact; ACTION tools run with ctx and yield artifacts. ──
-    calls = res.tool_calls or []
     action = {f.name: f for f in off if f.kind == "action"}
     doc_fns = [f for f in off if f.kind != "action"]
     doc_calls = [c for c in calls if isinstance(c, dict) and str(c.get("fn")) not in action]
@@ -159,22 +335,33 @@ def run_turn(ctx, body: dict) -> dict:
         except Exception as exc:  # noqa: BLE001 — one bad action never sinks the batch
             log.append({"fn": f.name, "ok": False, "error": str(exc)})
 
-    # ── Persist story-field-shaped doc keys straight to the story YAML (same as the frontend PUT). ──
-    skey = (body.get("story") or "").strip()
-    if skey and ctx.base_settings.stories.get(skey) is not None:
-        _PERSIST = ("locations", "places", "start", "relationships", "connections")
-        fields = {k: new_graph[k] for k in _PERSIST if k in new_graph}
-        if isinstance(new_graph.get("cast"), list):
-            fields["cast"] = ctx.cast_doc_to_members(new_graph["cast"])
-        if fields:
-            try:
-                ctx.update_story_fields(skey, fields)
-                log.append({"fn": "·persist", "ok": True, "saved": sorted(fields)})
-            except Exception as exc:  # noqa: BLE001 — a save failure never sinks the response
-                log.append({"fn": "·persist", "ok": False, "error": str(exc)})
+    # ── Persist by TARGET (draft persists nothing — the client owns the returned doc). ──
+    if draft:
+        pass
+    elif target.startswith("character:"):
+        ckey = target.split(":", 1)[1].strip()
+        try:
+            ctx.persist_character_entry(ckey, new_graph)
+            log.append({"fn": "·persist", "ok": True, "saved": [f"character:{ckey}"]})
+        except Exception as exc:  # noqa: BLE001 — a save failure never sinks the response
+            log.append({"fn": "·persist", "ok": False, "error": str(exc)})
+    else:
+        # Story-field-shaped doc keys straight to the story YAML (same as the frontend PUT).
+        skey = (body.get("story") or "").strip()
+        if skey and ctx.base_settings.stories.get(skey) is not None:
+            _PERSIST = ("locations", "places", "start", "relationships", "connections")
+            fields = {k: new_graph[k] for k in _PERSIST if k in new_graph}
+            if isinstance(new_graph.get("cast"), list):
+                fields["cast"] = ctx.cast_doc_to_members(new_graph["cast"])
+            if fields:
+                try:
+                    ctx.update_story_fields(skey, fields)
+                    log.append({"fn": "·persist", "ok": True, "saved": sorted(fields)})
+                except Exception as exc:  # noqa: BLE001 — a save failure never sinks the response
+                    log.append({"fn": "·persist", "ok": False, "error": str(exc)})
 
     out = {"ok": True, "graph": new_graph, "applied": log, "artifacts": artifacts,
-           "offered": [f.name for f in off], "reply": (getattr(res, "text", "") or "").strip(),
+           "offered": [f.name for f in off], "reply": reply_text,
            "active_behavior": behavior_sig, "context_cut": context_cut}
     if not calls and not out["reply"]:
         out["warning"] = ("the model returned neither a reply nor a tool call — it may not support "

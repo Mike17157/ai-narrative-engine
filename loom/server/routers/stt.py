@@ -22,9 +22,10 @@ def register(app, ctx):
         data = await request.body()
         if not data:
             return JSONResponse({"error": "no audio"}, status_code=400)
+        hints = request.query_params.get("hints", "")[:300]   # cast names → name-biased decoding
         from fastapi.concurrency import run_in_threadpool
         try:
-            text = await run_in_threadpool(_stt.transcribe, data)
+            text = await run_in_threadpool(_stt.transcribe, data, "en", hints)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"stt failed: {exc}"}, status_code=500)
         return {"text": text}

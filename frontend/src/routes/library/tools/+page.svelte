@@ -151,7 +151,7 @@
           {#if checkMsg}<span class="chk" class:bad={msgBad}>{checkMsg === 'ok' ? '✓ parses' : checkMsg}</span>{/if}
           <span class="spacer"></span>
           <button class="sbtn" onclick={checkSrc}>Check</button>
-          <button class="sbtn go" onclick={saveSrc} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
+          <button class="sbtn primary" onclick={saveSrc} disabled={saving}>{saving ? 'Saving…' : 'Save'}</button>
         </div>
         <textarea class="srcedit" bind:value={editSrc} spellcheck="false"
           placeholder={sel.source ? '' : '(source unavailable)'}></textarea>
@@ -216,8 +216,6 @@
   .chk.bad { color: var(--bad, #e88); }
   .sbtn { font-size: 12px; padding: 4px 12px; border-radius: 7px; border: 1px solid var(--border); background: var(--elev); color: var(--muted); cursor: pointer; }
   .sbtn:hover { border-color: var(--accent); color: var(--text); }
-  .sbtn.go { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .sbtn.go:disabled { opacity: .5; }
   .srcedit { width: 100%; min-height: 340px; resize: vertical; font-family: ui-monospace, monospace; font-size: 12.5px;
     line-height: 1.55; tab-size: 4; background: var(--elev); border: 1px solid var(--border); border-radius: 8px;
     padding: 10px 12px; color: var(--text); white-space: pre; overflow: auto; }

@@ -171,18 +171,17 @@
 <style>
   .head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border); }
   .head h3 { margin: 0; font-size: 16px; }
-  .head .x { background: none; box-shadow: none; color: var(--faint); padding: 4px 8px; font-size: 15px; }
-  .head .x:hover { color: var(--text); filter: none; }
+  .head .x { background: none; color: var(--faint); padding: 4px 8px; font-size: 15px; }
+  .head .x:hover { color: var(--text); }
   .body { overflow-y: auto; padding: 16px 20px; }
 
   .center { display: grid; place-items: center; height: 18vh; color: var(--muted); font-size: 13px; }
-  .err { color: var(--bad); font-size: 12.5px; }
-  .card { background: var(--elev); border: 1px solid var(--border-soft); border-radius: 14px; padding: 14px 16px; margin-bottom: 14px; }
+  .err { font-size: 12.5px; }
+  .card { background: var(--elev); padding: 14px 16px; margin-bottom: 14px; }
   .card:last-child { margin-bottom: 0; }
   .chead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
   .chead h4 { margin: 0; font-size: 14px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
-  .row { display: flex; align-items: center; gap: 8px; }
   .search { width: 180px; }
 
   .warn { font-size: 12px; color: var(--warn, #e6b800); background: rgba(230,184,0,.07); border: 1px solid rgba(230,184,0,.25); border-radius: 8px; padding: 8px 11px; margin-bottom: 12px; }

@@ -140,7 +140,7 @@
         {/if}
         <div class="nav">
           <span class="sp"></span>
-          <button class="go" onclick={() => goto(1)} disabled={!descDone}>Continue → Base image</button>
+          <button class="go primary" onclick={() => goto(1)} disabled={!descDone}>Continue → Base image</button>
         </div>
 
       {:else if step === 1}
@@ -167,7 +167,7 @@
         {/if}
         <div class="nav">
           <button class="ghost sm" onclick={() => goto(2)}>Skip</button>
-          <button class="go" onclick={() => goto(2)} disabled={baseBusy}>Continue → Outfits & expressions</button>
+          <button class="go primary" onclick={() => goto(2)} disabled={baseBusy}>Continue → Outfits & expressions</button>
         </div>
 
       {:else if step === 2}
@@ -177,7 +177,7 @@
           screen={`stories/${storyKey}/cast`} />
         <div class="nav">
           <span class="sp"></span>
-          <button class="go" onclick={finish}>Done</button>
+          <button class="go primary" onclick={finish}>Done</button>
         </div>
       {/if}
     </div>
@@ -187,9 +187,9 @@
   .dhead { display: flex; align-items: center; justify-content: space-between; gap: 12px;
     padding: 16px 18px 10px; border-bottom: 1px solid var(--border-soft); }
   .title { margin: 0; font-size: 16px; font-weight: 680; color: var(--text); }
-  .x { width: 30px; height: 30px; flex: none; padding: 0; border-radius: 8px; box-shadow: none;
+  .x { width: 30px; height: 30px; flex: none; padding: 0; border-radius: 8px;
     background: var(--elev); border: 1px solid var(--border); color: var(--muted); font-size: 12px; }
-  .x:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .x:hover { color: var(--text); background: var(--elev-2); }
   .crumbs { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 10px 18px 0; }
   .crumb { font-size: 11.5px; font-weight: 600; color: var(--faint); padding: 3px 9px; border-radius: 999px;
     background: var(--elev); border: 1px solid var(--border-soft); }
@@ -210,12 +210,12 @@
     border: 1px dashed var(--border-soft); }
   .qa-info { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
   .entry { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; text-align: left;
-    padding: 11px 13px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); box-shadow: none; }
-  .entry:hover { border-color: var(--accent); background: var(--elev); filter: none; }
+    padding: 11px 13px; border-radius: 10px; background: var(--bg); border: 1px solid var(--border); }
+  .entry:hover { border-color: var(--accent); background: var(--elev); }
   .el { font-size: 13px; font-weight: 650; color: var(--text); }
   .eh { font-size: 11px; color: var(--faint); line-height: 1.4; }
-  .err { font-size: 12.5px; color: var(--bad); margin: 6px 0; }
-  .ok { font-size: 12px; color: var(--good, #8fc7a0); }
+  .err { font-size: 12.5px; margin: 6px 0; }
+  .ok { font-size: 12px; }
   .genrow { display: flex; align-items: center; gap: 12px; margin: 4px 0 8px; }
   .cin { margin: 0 0 10px; } .cin summary { font-size: 12px; color: var(--muted); cursor: pointer; }
   .pre { white-space: pre-wrap; word-break: break-word; font-size: 11.5px; color: var(--text); background: var(--bg);
@@ -223,12 +223,12 @@
   .cands { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; margin: 6px 0; }
   .cand { display: flex; flex-direction: column; gap: 5px; }
   .cand :global(.zoom-inline), .cand :global(img) { border-radius: 8px; }
-  .use { font-size: 11px; padding: 4px 6px; border-radius: 6px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); }
-  .use:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .use { font-size: 11px; padding: 4px 6px; border-radius: 6px; background: var(--elev-2); border: 1px solid var(--border); color: var(--text); }
+  .use:hover { border-color: var(--accent); color: var(--accent); }
   .nav { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-top: 16px;
     padding-top: 12px; border-top: 1px solid var(--border-soft); }
   .nav .sp { flex: 1; }
-  .go { font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 9px; background: var(--accent); color: #fff; border: 0; }
+  .go { font-size: 13px; font-weight: 600; padding: 8px 16px; border-radius: 9px; }
   .go:hover:not(:disabled) { filter: brightness(1.08); }
   .go:disabled { opacity: .45; }
 </style>

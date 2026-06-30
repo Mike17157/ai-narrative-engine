@@ -128,7 +128,7 @@
 </section>
 
 <style>
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .card { margin-bottom: 16px; }
   .card h3 { margin: 0 0 12px; font-size: 15px; }
   .lo { color: var(--faint); text-transform: none; letter-spacing: 0; }
   .trow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 10px; }
@@ -138,7 +138,7 @@
   .scenerow input { flex: 1; min-width: 0; }
   .trow2 { display: flex; gap: 10px; align-items: center; margin-top: 10px; }
   .m { font-size: 12.5px; color: var(--muted); }
-  .err { color: var(--bad); font-size: 12.5px; }
+  .err { font-size: 12.5px; }
   .resolved { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
   .chip { font-size: 11.5px; border-radius: 999px; padding: 2px 9px; border: 1px solid var(--border-soft); background: var(--elev); color: var(--muted); }
   .chip.detail { color: #8fcaff; } .chip.theme { color: #c9a6ff; } .chip.identity { color: var(--good); } .chip.state { color: var(--accent); }

@@ -335,7 +335,29 @@ const NODE_MODEL = {
   SAMLoader: ['model_name', 'sam'], UltralyticsDetectorProvider: ['model_name', 'ultralytics'],
 };
 
-export function nodeTakesModel(classType) { return !!NODE_MODEL[classType]; }
+// Multi-slot LoRA nodes (easy loraStack) hold up to 10 lora_N_name slots instead of a single
+// lora_name, so a dropped file goes into the next free slot rather than one fixed field.
+const LORA_STACK_NODES = new Set(['easy loraStack']);
+
+export function nodeTakesModel(classType) { return !!NODE_MODEL[classType] || LORA_STACK_NODES.has(classType); }
+
+// Place a resolved LoRA into the next empty slot of an `easy loraStack`, activating it.
+// Returns the slot's name-field (for the status message), or null if full.
+function dropLoraIntoStack(n, rel) {
+  n.inputs ||= {};
+  let slot = 0;
+  for (let k = 1; k <= 10; k++) {
+    const v = n.inputs[`lora_${k}_name`];
+    if (v === undefined || v === null || v === '' || v === 'None') { slot = k; break; }
+  }
+  if (!slot) return null;                                   // all 10 slots taken
+  n.inputs[`lora_${slot}_name`] = rel;
+  if (n.inputs[`lora_${slot}_strength`] == null) n.inputs[`lora_${slot}_strength`] = 1.0;
+  const num = Number(n.inputs.num_loras || 1);
+  if (slot > num) n.inputs.num_loras = slot;               // grow the visible slot count
+  if (n.inputs.toggle === false) n.inputs.toggle = true;   // the stack is off by default — turn it on so the drop applies
+  return `lora_${slot}_name`;
+}
 
 // Heuristic CLIP/text-encoder ↔ model-architecture check. Best-effort by filename
 // — catches the clear mismatches (Anima needs Qwen, Flux needs t5/clip_l).
@@ -372,9 +394,10 @@ export function clipCompatWarning(wf, clipName) {
 export async function dropModelOnNode(nodeId, file) {
   const n = img.workflow?.[nodeId];
   if (!n || !file) return;
+  const isStack = LORA_STACK_NODES.has(n.class_type);
   const map = NODE_MODEL[n.class_type];
-  if (!map) { img.msg = { err: true, text: `“${n.class_type}” doesn't take a model file` }; return; }
-  const [field, kind] = map;
+  if (!map && !isStack) { img.msg = { err: true, text: `“${n.class_type}” doesn't take a model file` }; return; }
+  const kind = isStack ? 'lora' : map[1];
   img.msg = { text: `Adding ${file.name}…` };
   try {
     // already installed for this kind? reference it instead of re-uploading.
@@ -388,7 +411,14 @@ export async function dropModelOnNode(nodeId, file) {
       if (!d.ok) { img.msg = { err: true, text: d.error || 'upload failed' }; return; }
       rel = d.rel;
     }
-    (n.inputs ||= {})[field] = rel;
+    let field;
+    if (isStack) {
+      field = dropLoraIntoStack(n, rel);
+      if (!field) { img.msg = { err: true, text: 'LoRA stack is full (10 slots)' }; return; }
+    } else {
+      field = map[0];
+      (n.inputs ||= {})[field] = rel;
+    }
     await loadObjectInfo();   // refresh the combo so the new file is selectable
     img.layoutNonce++;
     const warn = kind === 'clip' ? clipCompatWarning(img.workflow, rel) : null;

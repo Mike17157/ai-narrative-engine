@@ -1,19 +1,18 @@
 <script>
-  // The story library — a searchable, filterable grid of authored (finished) stories,
-  // the experiences that actually play. Wizard drafts in progress live on their own
-  // tab at /stories/drafts.
+  // The story library — a searchable, filterable grid of authored stories, the experiences
+  // that actually play. "New story" goes to the single create flow (/stories/genesis).
   import { goto } from '$app/navigation';
   import { chars } from '$lib/characters.svelte.js';
-  import { stories, deleteStory, startWizard } from '$lib/stories.svelte.js';
+  import { stories, deleteStory, clearDraft } from '$lib/stories.svelte.js';
 
-  function newStory() {
-    const c = chars.list.find((x) => !x.story) || chars.list[0];
-    startWizard(c?.key || '', c?.name || '');
-  }
-  const open = (key) => goto(`/stories/${key}/overview`);
+  const newStory = () => goto('/stories/genesis');   // resumes the cached draft, or starts fresh
+  const open = (key) => goto(`/stories/${key}/structure`);
 
-  let drafts = $derived((stories.list || []).filter((s) => s.draft));
   let complete = $derived((stories.list || []).filter((s) => !s.draft));
+  // The single cached in-progress story (client-held until built). Shown as a "New story" card.
+  let draft = $derived(stories.draft);
+  let draftCast = $derived(draft?.harnesses?.length || 0);
+  let draftPremise = $derived(draft?.candidates?.[0]?.logline || 'Work in progress — open to keep building.');
 
   // ── search + filters ──
   let q = $state('');
@@ -62,17 +61,25 @@
 
   {#if stories.msg}<div class="msg" class:ok={stories.msg.ok} class:err={stories.msg.err}>{stories.msg.text}</div>{/if}
 
-  {#if drafts.length}
-    <a class="resume-banner" href="/stories/drafts">
-      <span class="rb-dot"></span>
-      {drafts.length} stor{drafts.length === 1 ? 'y' : 'ies'} in progress — continue building →
-    </a>
-  {/if}
-
   <div class="sechead">
     <span class="sectitle">Finished{complete.length ? ` · ${complete.length}` : ''}</span>
     <button onclick={newStory}>＋ New story</button>
   </div>
+
+  {#if draft}
+    <div class="grid draftgrid">
+      <div class="card story-card draft-card" onclick={newStory} role="button" tabindex="0">
+        <span class="draftbadge">Draft · in progress</span>
+        <div class="cname">{draft.newName || 'New story'}</div>
+        <p class="cprem">{draftPremise}</p>
+        <div class="cmeta">
+          <span class="badge">{draftCast} character{draftCast === 1 ? '' : 's'}</span>
+          <span class="tone">not yet named & saved</span>
+        </div>
+        <button class="del" title="Discard draft" onclick={(e) => { e.stopPropagation(); clearDraft(); }}>🗑</button>
+      </div>
+    </div>
+  {/if}
 
   {#if complete.length}
     <!-- toolbar: search + filter button -->
@@ -114,11 +121,11 @@
         <button class="ghost sm" onclick={() => { q = ''; clearFilters(); }}>Clear filters</button>
       </div>
     {/if}
-  {:else if !drafts.length}
+  {:else}
     <div class="empty">
       <div class="emk">📖</div>
       <p>No stories yet.</p>
-      <span>Storyboard a plausible story from a character, then extract its scenes and cast.</span>
+      <span>Generate a cast from a premise and build a story from the tension between them.</span>
       <button onclick={newStory}>＋ New story</button>
     </div>
   {/if}
@@ -176,23 +183,14 @@
   .msg { margin: 10px 0; font-size: 13px; }
   .msg.ok { color: var(--good); } .msg.err { color: var(--bad); }
 
-  /* link to the In progress tab */
-  .resume-banner { display: flex; align-items: center; gap: 9px; margin-bottom: 16px;
-    padding: 10px 14px; border-radius: 10px; font-size: 13px; font-weight: 550; text-decoration: none;
-    color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
-    background: color-mix(in srgb, var(--accent) 8%, transparent); }
-  .resume-banner:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); }
-  .rb-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none;
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
-
   /* toolbar */
   .toolbar { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   .search { flex: 1; min-width: 220px; position: relative; display: flex; align-items: center; }
   .search .sico { position: absolute; left: 11px; font-size: 13px; opacity: .6; pointer-events: none; }
-  .search input { width: 100%; padding: 8px 32px 8px 32px; border-radius: 9px; background: var(--elev); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 13px; }
+  .search input { padding: 8px 32px 8px 32px; font-size: 13px; }
   .search input:focus { outline: none; border-color: var(--accent); }
   .search .clear { position: absolute; right: 8px; background: none; border: 0; color: var(--muted); cursor: pointer; font-size: 12px; padding: 4px; }
-  select { padding: 8px 10px; border-radius: 9px; background: var(--elev); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 13px; cursor: pointer; }
+  select { padding: 8px 10px; font-size: 13px; cursor: pointer; }
 
   /* filter button */
   .filterbtn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: 9px;
@@ -223,9 +221,14 @@
 
   /* grids */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
+  .draftgrid { margin-bottom: 16px; }
+  .draft-card { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+  .draft-card:hover { border-color: var(--accent); }
+  .draftbadge { align-self: flex-start; display: inline-block; margin-bottom: 6px; font-size: 10.5px;
+    font-weight: 600; padding: 2px 9px; border-radius: 999px;
+    background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
   .card {
-    position: relative; background: var(--panel); border: 1px solid var(--border-soft);
-    border-radius: 14px; padding: 14px; cursor: pointer;
+    position: relative; padding: 14px; cursor: pointer;
   }
   .card:hover { border-color: var(--border); background: var(--elev); }
 
@@ -242,14 +245,14 @@
 
   .del, .playbtn {
     position: absolute; top: 8px; width: 26px; height: 26px; padding: 0;
-    border-radius: 7px; box-shadow: none; background: rgba(10,12,18,.6);
+    border-radius: 7px; background: rgba(10,12,18,.6);
     border: 1px solid var(--border); font-size: 12px; opacity: 0;
   }
   .del { right: 8px; color: var(--muted); }
   .playbtn { right: 40px; color: #fff; font-size: 11px; }
   .card:hover .del, .card:hover .playbtn { opacity: 1; }
-  .del:hover { color: var(--bad); filter: none; }
-  .playbtn:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .del:hover { color: var(--bad); }
+  .playbtn:hover { color: var(--accent); border-color: var(--accent); }
 
   .no-match, .empty { margin: 50px auto; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 8px; }
   .no-match p, .empty p { margin: 0; }

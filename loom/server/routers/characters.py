@@ -204,22 +204,17 @@ def register(app, ctx):
     def set_character_image(key: str, body: dict):
         """Persist a character's portrait preset (checkpoint + base LoRAs + an
         optional named routing stack) into its YAML, then reload settings."""
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = ctx.char_dir() / f"{safe}.yaml"
-        if not path.is_file():
+        data = ctx._read_character_data(key)   # owning story DB (embedded) or global YAML
+        if data is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             loras = [{"name": l["name"], "weight": float(l.get("weight", 1.0))}
                      for l in (body.get("loras") or []) if l.get("name")]
             data["image"] = {"checkpoint": (body.get("checkpoint") or None),
                              "loras": loras, "stack": (body.get("stack") or None)}
-            from ...config.schema import Character
-            Character(**data)  # validate
-            path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            ctx._write_character_data(key, data)   # validates + routes + reloads
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
-        ctx.reload_settings()
         return {"ok": True}
 
     @app.get("/api/characters/{key}/avatar")
@@ -243,7 +238,7 @@ def register(app, ctx):
     async def set_character_reference(key: str, file: UploadFile = File(...)):
         """Upload/replace a dedicated reference image (<key>.ref.png) for img2img."""
         safe = re.sub(r"[^\w\-]+", "", key)
-        if not (ctx.char_dir() / f"{safe}.yaml").is_file():
+        if key not in ctx.base_settings.characters:   # embedded (DB) or global — not a YAML-file check
             return JSONResponse({"error": "no such character"}, status_code=404)
         data = await file.read()
         # normalize whatever was uploaded to PNG via Pillow if available; else store raw
@@ -546,13 +541,11 @@ def register(app, ctx):
         + any extra fields), persist to its YAML, and reload settings."""
         if key not in ctx.base_settings.characters:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = ctx.char_dir() / f"{safe}.yaml"
-        if not path.is_file():
+        data = ctx._read_character_data(key)   # owning story DB or global library
+        if data is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
         body = body or {}
         try:
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
             if "name" in body:
                 data["name"] = (body.get("name") or "").strip() or data.get("name") or key
             if "system" in body:
@@ -565,12 +558,9 @@ def register(app, ctx):
                 data["home_scenes"] = body["home_scenes"]
             if isinstance(body.get("fields"), dict):
                 data["fields"] = {**(data.get("fields") or {}), **body["fields"]}
-            from ...config.schema import Character
-            Character(**data)  # validate
-            path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            ctx._write_character_data(key, data)   # validates + routes (DB or YAML) + reloads
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
-        ctx.reload_settings()
         return {"ok": True}
 
     @app.post("/api/characters/create")
@@ -602,7 +592,7 @@ def register(app, ctx):
         import httpx
 
         safe = re.sub(r"[^\w\-]+", "", key)
-        if not (ctx.char_dir() / f"{safe}.yaml").is_file():
+        if key not in ctx.base_settings.characters:   # embedded (DB) or global — not a YAML-file check
             return JSONResponse({"error": "no such character"}, status_code=404)
         url = (body or {}).get("url", "")
         if not re.match(r"^https?://", url):
@@ -905,16 +895,10 @@ def register(app, ctx):
         height_cm = (out.get("features") or {}).get("height_cm")
         if height_cm:
             try:
-                from ...config.schema import Character
-                safe = re.sub(r"[^\w\-]+", "", key)
-                path = ctx.char_dir() / f"{safe}.yaml"
-                if path.is_file():
-                    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                data = ctx._read_character_data(key)   # owning story DB (embedded) or global YAML
+                if data is not None:
                     data.setdefault("fields", {})["height_cm"] = int(height_cm)
-                    Character(**data)  # validate
-                    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-                                    encoding="utf-8")
-                    ctx.reload_settings()
+                    ctx._write_character_data(key, data)
             except Exception:  # noqa: BLE001 — never sink the response over a metadata write
                 pass
         return out
@@ -952,7 +936,7 @@ def register(app, ctx):
         """Set the character's reference/base image from a base64 data URI (used to
         accept a chosen base-image candidate)."""
         safe = re.sub(r"[^\w\-]+", "", key)
-        if not (ctx.char_dir() / f"{safe}.yaml").is_file():
+        if key not in ctx.base_settings.characters:   # embedded (DB) or global — not a YAML-file check
             return JSONResponse({"error": "no such character"}, status_code=404)
         uri = (body or {}).get("data", "")
         b64 = uri.split(",", 1)[1] if "," in uri else uri
@@ -972,10 +956,8 @@ def register(app, ctx):
         """Rewrite a character's persona into a THOROUGH, labelled background
         (Identity / History / Personality / Relationships / Voice). Works for any
         character (incl. imported); uses the character's attached story as context."""
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = ctx.char_dir() / f"{safe}.yaml"
         ch = ctx.base_settings.characters.get(key)
-        if ch is None or not path.is_file():
+        if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
         provider = ctx.author_provider((body or {}).get("model"))
         if provider is None or not hasattr(provider, "generate_text"):
@@ -1000,33 +982,31 @@ def register(app, ctx):
             return JSONResponse({"error": str(exc)}, status_code=500)
         if not bg:
             return JSONResponse({"error": "model returned nothing"}, status_code=500)
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = ctx._read_character_data(key) or {}
         data["system"] = bg
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        ctx.reload_settings()
+        ctx._write_character_data(key, data)   # owning story DB (embedded) or global YAML
         return {"ok": True, "system": bg}
 
     @app.delete("/api/characters/{key}")
     def delete_character(key: str):
-        """Delete a character (yaml + avatar/ref + portraits). First strips it from
-        every story cast so the config still validates on reload."""
+        """Delete a character: strip it from every story cast, drop its embedded record from the
+        owning story DB (+ any global YAML), and remove its avatar/ref/portraits."""
         import shutil
-        safe = re.sub(r"[^\w\-]+", "", key)
-        cdir = ctx.char_dir()
-        if not (cdir / f"{safe}.yaml").is_file():
+
+        from ...stories import story_db as _SDB
+        if key not in ctx.base_settings.characters:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        # remove cast references in stories (don't delete those files)
-        d = ctx.story_dir()
-        if d.is_dir():
-            for p in d.glob("*.yaml"):
-                try:
-                    doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-                except Exception:  # noqa: BLE001
-                    continue
-                cast = doc.get("cast")
-                if isinstance(cast, list) and any(isinstance(m, dict) and m.get("character") == key for m in cast):
-                    doc["cast"] = [m for m in cast if not (isinstance(m, dict) and m.get("character") == key)]
-                    p.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        safe = re.sub(r"[^\w\-]+", "", key)
+        # strip cast references across stories (routed: DB or YAML) + drop the embedded record
+        for skey, st in list(ctx.base_settings.stories.items()):
+            kept = [m for m in st.cast if m.character != key]
+            if len(kept) != len(st.cast):
+                ctx.update_story_fields(skey, {"cast": [m.model_dump() for m in kept]})
+            db = ctx._story_db(skey)
+            if db is not None and key in _SDB.character_keys(db):
+                _SDB.delete_character(db, key)
+        # global library YAML (if any) + the on-disk binaries
+        cdir = ctx.char_dir()
         for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
             f = cdir / fn
             if f.is_file():

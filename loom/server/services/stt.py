@@ -36,9 +36,14 @@ def _get_model():
     return _model
 
 
-def transcribe(data: bytes, language: str = "en") -> str:
+def transcribe(data: bytes, language: str = "en", hints: str = "") -> str:
     """Audio blob → text. `vad_filter` trims silence (Silero, via onnxruntime — already present).
-    Raises if faster-whisper isn't installed."""
+    `hints` (comma-separated proper nouns — the cast names) is fed as Whisper's `initial_prompt` so
+    the decoder biases toward them instead of mangling names ('Eli' → 'early'). Raises if
+    faster-whisper isn't installed."""
     model = _get_model()
-    segments, _info = model.transcribe(io.BytesIO(data), language=language or None, vad_filter=True)
+    hints = (hints or "").strip()
+    prompt = f"The speakers may mention these names: {hints}." if hints else None
+    segments, _info = model.transcribe(io.BytesIO(data), language=language or None,
+                                       vad_filter=True, initial_prompt=prompt)
     return " ".join(s.text.strip() for s in segments).strip()

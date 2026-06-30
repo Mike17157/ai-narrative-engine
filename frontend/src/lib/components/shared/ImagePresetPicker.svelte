@@ -35,9 +35,9 @@
   .prow {
     display: inline-flex; align-items: center; gap: 7px; text-align: left;
     padding: 7px 11px; border-radius: 9px; background: var(--bg);
-    border: 1px solid var(--border-soft); color: var(--text); cursor: pointer; box-shadow: none;
+    border: 1px solid var(--border-soft); color: var(--text); cursor: pointer;
   }
-  .prow:hover { background: var(--elev); filter: none; }
+  .prow:hover { background: var(--elev); }
   .prow.on { border-color: var(--accent); background: var(--elev-2); }
   .pname { font-size: 13px; font-weight: 600; }
   .pc { font-size: 10.5px; color: var(--faint); }

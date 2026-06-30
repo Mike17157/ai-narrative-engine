@@ -19,6 +19,6 @@
   .msg { margin: 0 0 16px; font-size: 13.5px; line-height: 1.55; color: var(--muted); }
   .acts { display: flex; justify-content: flex-end; gap: 10px; }
   .acts button { padding: 8px 16px; font-size: 13.5px; border-radius: 9px; }
-  .acts .danger { background: var(--bad); color: #fff; box-shadow: none; }
+  .acts .danger { background: var(--bad); color: #fff; }
   .acts .danger:hover { filter: brightness(1.08); }
 </style>

@@ -189,7 +189,7 @@
   .nav { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; }
   .pm { font-size: 12.5px; color: var(--muted); }
   .pm.ok { color: var(--good); } .pm.err { color: var(--bad); }
-  .err { color: var(--bad); font-size: 12.5px; margin: 10px 0 0; }
+  .err { font-size: 12.5px; margin: 10px 0 0; }
 
   .done h3 { margin: 0 0 6px; font-size: 16px; font-weight: 700; }
   .done > p { margin: 0 0 4px; font-size: 13px; color: var(--muted); line-height: 1.5; }

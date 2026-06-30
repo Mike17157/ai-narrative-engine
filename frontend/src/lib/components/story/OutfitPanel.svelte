@@ -73,14 +73,14 @@
 
 <style>
   .op { display: flex; flex-direction: column; gap: 12px; }
-  .muted { color: var(--muted); font-size: 13px; }
+  .muted { font-size: 13px; }
   .describe { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; color: var(--muted); font-size: 13px; }
   .describe button, .add button { padding: 8px 14px; border-radius: 9px; background: var(--accent); color: #fff; border: 0; cursor: pointer; font-size: 13px; white-space: nowrap; }
   .describe button:disabled, .add button:disabled { opacity: .45; cursor: default; }
   .add { display: flex; gap: 8px; flex-wrap: wrap; }
-  .add input { flex: 1; min-width: 160px; padding: 8px 11px; border-radius: 9px; background: var(--elev); border: 1px solid var(--border); color: var(--text); font: inherit; font-size: 13px; }
+  .add input { flex: 1; min-width: 160px; padding: 8px 11px; font-size: 13px; }
   .add input:focus { outline: none; border-color: var(--accent); }
-  .err { color: var(--bad); font-size: 12.5px; }
+  .err { font-size: 12.5px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
   .outfit { display: flex; flex-direction: column; gap: 5px; }
   .outfit img { width: 100%; aspect-ratio: 2/3; object-fit: cover; border-radius: 10px; background: var(--elev-2); border: 1px solid var(--border-soft); }

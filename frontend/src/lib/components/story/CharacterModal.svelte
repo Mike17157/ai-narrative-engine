@@ -69,8 +69,8 @@
   .ci-title b { font-size: 17px; color: var(--text); }
   .ci-role { font-size: 12px; color: var(--accent); }
   .ci-x { width: 28px; height: 28px; flex: none; border-radius: 7px; background: var(--elev);
-          border: 1px solid var(--border); color: var(--muted); font-size: 11px; cursor: pointer; box-shadow: none; }
-  .ci-x:hover { color: var(--text); background: var(--elev-2); filter: none; }
+          border: 1px solid var(--border); color: var(--muted); font-size: 11px; cursor: pointer; }
+  .ci-x:hover { color: var(--text); background: var(--elev-2); }
 
   .ci-body { padding: 14px 16px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 12px; }
   .ci-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; }

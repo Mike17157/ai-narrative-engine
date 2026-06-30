@@ -67,8 +67,7 @@
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
   .card {
     position: relative; display: flex; flex-direction: column; align-items: center; gap: 10px;
-    padding: 18px 14px 14px; background: var(--panel); border: 1px solid var(--border-soft);
-    border-radius: 14px; cursor: pointer; text-align: center; transition: border-color .12s, background .12s;
+    padding: 18px 14px 14px; cursor: pointer; text-align: center; transition: border-color .12s, background .12s;
   }
   .card:hover { border-color: var(--border); background: var(--elev); }
   .card.active { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent-glow); }
@@ -91,11 +90,11 @@
   }
   .edit {
     position: absolute; top: 6px; right: 6px; width: 26px; height: 26px; padding: 0; display: grid;
-    place-items: center; font-size: 12px; border-radius: 7px; opacity: 0; box-shadow: none;
+    place-items: center; font-size: 12px; border-radius: 7px; opacity: 0;
     background: rgba(10,12,18,.7); border: 1px solid var(--border); color: var(--muted);
   }
   .card:hover .edit { opacity: 1; }
-  .edit:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .edit:hover { color: var(--accent); border-color: var(--accent); }
 
   .empty {
     margin: 50px auto; text-align: center; color: var(--muted); display: flex; flex-direction: column;

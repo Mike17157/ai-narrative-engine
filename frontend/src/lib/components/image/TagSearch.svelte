@@ -56,9 +56,9 @@
   .search { position: relative; }
   .srow { display: flex; gap: 8px; align-items: stretch; }
   .scope { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; flex: none; }
-  .scope button { background: var(--elev); border: 0; color: var(--muted); padding: 0 11px; font-size: 12px; box-shadow: none; cursor: pointer; }
+  .scope button { background: var(--elev); border: 0; color: var(--muted); padding: 0 11px; font-size: 12px; cursor: pointer; }
   .scope button.on { background: var(--accent); color: #fff; }
-  .search input { flex: 1; min-width: 0; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 11px; color: var(--text); font-size: 13px; }
+  .search input { flex: 1; min-width: 0; background: var(--bg); padding: 8px 11px; font-size: 13px; }
   .search input:focus { border-color: var(--accent); outline: none; }
   .pop { position: absolute; z-index: 5; left: 0; right: 0; top: 100%; margin-top: 5px; background: var(--elev);
     border: 1px solid var(--border); border-radius: 10px; box-shadow: var(--shadow); max-height: 240px; overflow: auto; padding: 4px; }

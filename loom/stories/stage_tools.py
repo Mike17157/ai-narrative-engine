@@ -598,6 +598,62 @@ def _design_wardrobe(ctx, body: dict) -> dict:
 
 
 @stage_tool(
+    "plan_cast_outfit",
+    describe="Compose the detailed outfit PROMPT (the attire layer that stacks on each character's "
+             "face/body description before image-gen) for ONE named outfit ACROSS THE CAST — for "
+             "every cast member who already HAS that outfit but whose prompt hasn't been written "
+             "yet. Skips anyone whose prompt is already composed. Use to roll a shared wardrobe "
+             "staple (a uniform, the current outfit) out to everyone who wears it.",
+    keywords=["outfit for everyone", "outfit for the cast", "rest of the cast", "for all characters",
+              "this outfit for all", "same outfit for", "compose the outfit", "fill in the outfit",
+              "everyone who wears", "across the cast", "whole cast outfit"],
+    produces="wardrobe",
+    params={"outfit": "the outfit NAME to compose across the cast (e.g. 'Casual', 'Gala gown', "
+                      "'School uniform') — matched against each character's existing outfits"},
+)
+def _plan_cast_outfit(ctx, body: dict) -> dict:
+    from loom.server.services.prompts import _regionize_prompt, _safe_image_tags, _snap_prompt
+
+    from .pipeline import compose_outfit_prompt
+    name = (body.get("outfit") or "").strip()
+    if not name:
+        raise ValueError("need an outfit name to compose across the cast")
+    skey = (body.get("story") or "").strip()
+    st = ctx.base_settings.stories.get(skey) if skey else None
+    if st is None:
+        raise ValueError("plan_cast_outfit needs a saved story (pass its key)")
+    prov, _p = _as_agent(ctx, "wardrobe_stylist")   # the Wardrobe agent composes the prose
+    if prov is None:
+        raise RuntimeError("no chat connection for the wardrobe agent")
+
+    target = name.lower()
+    composed, skipped = [], []
+    for m in st.cast:
+        ch = ctx.base_settings.characters.get(m.character)
+        if ch is None:
+            continue
+        man = ctx.portrait_manifest(m.character)
+        outfit = next((o for o in man.get("outfits", [])
+                       if (o.get("name") or "").strip().lower() == target), None)
+        if outfit is None:
+            continue                                   # doesn't possess this outfit → not ours to plan
+        if (outfit.get("attire_prompt") or "").strip():
+            skipped.append(ch.name)                     # already generated → leave it
+            continue
+        appearance = (ch.fields or {}).get("appearance", "")
+        attire = (compose_outfit_prompt(prov, ch.system or "", appearance, outfit.get("name") or name,
+                                        (outfit.get("concept") or "").strip()) or {}).get("attire", "")
+        if not attire:
+            continue
+        attire = _regionize_prompt(_snap_prompt(_safe_image_tags(attire)))
+        outfit["attire_prompt"] = outfit["prompt"] = attire
+        outfit["unified"] = True
+        ctx.save_portrait_manifest(m.character, man)
+        composed.append(ch.name)
+    return {"outfit": name, "composed": composed, "skipped": skipped}
+
+
+@stage_tool(
     "set_story_title",
     describe="Set AND SAVE the story's title (persists to the story).",
     keywords=["title", "call it", "name the story", "story title", "rename the story", "titled"],
@@ -768,13 +824,17 @@ _IMPACT_SCHEMA = {
             "summary": {"type": "string", "description": "how the events landed on them (your read — may twist)"},
             "relationship_changes": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
-                "required": ["toward", "dynamic", "stance"],
+                "required": ["toward", "nature", "dynamic", "stance", "retire"],
                 "properties": {
                     "toward": {"type": "string", "description": "EXACT name of the other cast member"},
+                    "nature": {"type": "string", "description": "the KIND of bond NOW — set only when it "
+                               "CHANGES (e.g. ally→rival, stranger→lover); '' to leave the nature as-is"},
                     "dynamic": {"type": "string", "description": "2-3 WORDS for how they now feel after "
                                 "this (may twist resonantly) — never a sentence"},
                     "stance": {"type": "string", "enum": ["devoted", "warm", "neutral", "strained", "hostile"],
                                "description": "coarse feeling now (graph colour only)"},
+                    "retire": {"type": "boolean", "description": "true ONLY if this bond is SEVERED / ended "
+                               "by the events — removes the relationship entirely"},
                 }}},
             "new_exemplar": {
                 "type": "object", "additionalProperties": False,
@@ -789,11 +849,53 @@ _IMPACT_SCHEMA = {
 }
 
 
+def apply_rel_changes(rels, idx, ck, raw_changes, bykey, present, new_id):
+    """Pure: apply one character `ck`'s storymaster relationship_changes to the web `rels`/`idx`
+    under the CO-PRESENCE INVARIANT (GENESIS.md §7) — drift, create, flip nature, or retire, but
+    ONLY between characters both in `present`. Returns (rels, changes, blocked). `rels` is returned
+    because a retire rebuilds the list. Unit-tested in test_consolidate.py."""
+    changes, blocked = [], []
+    for rc in raw_changes:
+        tk = bykey.get(str(rc.get("toward", "")).strip().lower())
+        if not tk or tk == ck:
+            continue
+        # You can't form, reforge, or sever a bond with someone the scene never put you with.
+        if ck not in present or tk not in present:
+            blocked.append({"source": ck, "target": tk, "why": "not co-present in events"})
+            continue
+        dyn = _short(rc.get("dynamic")).strip()
+        stance = rc.get("stance") if rc.get("stance") in _STANCES else None
+        nature = (rc.get("nature") or "").strip()
+        retire = bool(rc.get("retire"))
+        if not (dyn or stance or nature or retire):
+            continue
+        if retire:                       # RESTRUCTURE — sever the bond
+            if (ck, tk) in idx:
+                dead = idx.pop((ck, tk))
+                rels = [x for x in rels if x is not dead]
+                changes.append({"toward": tk, "retired": True})
+            continue
+        r = idx.get((ck, tk))
+        if r is None:                    # RESTRUCTURE — a NEW bond forms
+            r = {"id": new_id(), "source": ck, "target": tk, "nature": "", "dynamic": "", "stance": "neutral"}
+            rels.append(r)
+            idx[(ck, tk)] = r
+        if nature:                       # RESTRUCTURE — the KIND of bond flips
+            r["nature"] = nature
+        if dyn:                          # DRIFT rewrites the prose dynamic
+            r["dynamic"] = dyn
+        if stance:
+            r["stance"] = stance
+        changes.append({"toward": tk, "nature": r["nature"], "dynamic": dyn, "stance": r["stance"]})
+    return rels, changes, blocked
+
+
 @stage_tool(
     "consolidate",
     describe="STORYMASTER consolidation: read what happened and decide how it lands on each "
-             "character — relationships drift, new exemplars form. The storymaster may TWIST how "
-             "consequences ripple. One interpretive pass; applies the structured changes to the story.",
+             "character — relationships drift, reform (new bond), flip (ally→rival) or sever, and "
+             "new exemplars form. Edges only change between characters the scene put together. The "
+             "storymaster may TWIST how consequences ripple. One pass; applies the changes to the story.",
     keywords=["consolidate", "what happened", "aftermath", "the fallout", "process events",
               "reflect on", "the events", "while they sleep"],
     produces="consolidation",
@@ -823,45 +925,38 @@ def _consolidate(ctx, body: dict) -> dict:
         "you may TWIST how consequences ripple, in resonant but unexpected ways.")
     prompt = (f"CAST: {', '.join(c['name'] for c in cast)}\n\nWHAT HAPPENED:\n{events}\n\n"
               "For EACH affected character, give a short impact summary, any relationship shifts "
-              "(toward whom, the NEW dynamic in prose, and a coarse stance — never a number), and "
-              "optionally ONE new exemplar the events reveal (type 'none' + empty content if there "
-              "isn't one). You may twist how it lands. Output structured JSON only.")
+              "(toward whom, the NEW dynamic in prose, a coarse stance — never a number; set `nature` "
+              "only if the KIND of bond changed, e.g. ally→rival; set `retire` true only if the bond is "
+              "severed), and optionally ONE new exemplar the events reveal (type 'none' + empty content "
+              "if there isn't one). You may twist how it lands. Output structured JSON only.")
     data = (prov.generate_text(system=system, prompt=prompt, emits=_IMPACT_SCHEMA).data) or {}
 
-    # APPLY deterministically — relationship drift (merge by source→target) + new exemplars.
+    # APPLY deterministically — relationship drift / restructure (create · flip nature · retire) +
+    # new exemplars. CO-PRESENCE INVARIANT (GENESIS.md §7): an edge may only be created or changed in
+    # a scene BOTH characters were present for. `present` = cast whose name appears in the events.
+    import re
     from . import scripts as _S
     from ..server.services import lorebook_store as _LS
     from .pipeline.character_scaffold import facet_to_entry
     bykey = {c["name"].strip().lower(): c["key"] for c in cast}
+    _ev = events.lower()
+    def _present(nm: str) -> bool:
+        toks = [t for t in re.split(r"\s+", (nm or "").lower()) if len(t) > 2]
+        return any(re.search(rf"\b{re.escape(t)}\b", _ev) for t in toks)
+    present = {c["key"] for c in cast if _present(c["name"])}
     rels = [r.model_dump() for r in st.relationships]
     idx = {(r["source"], r["target"]): r for r in rels}
     applied = []
+    blocked = []
     for imp in data.get("impacts", []):
         if not isinstance(imp, dict):
             continue
         ck = bykey.get(str(imp.get("character", "")).strip().lower())
         if not ck:
             continue
-        changes = []
-        for rc in imp.get("relationship_changes", []):
-            tk = bykey.get(str(rc.get("toward", "")).strip().lower())
-            if not tk or tk == ck:
-                continue
-            dyn = _short(rc.get("dynamic")).strip()
-            stance = rc.get("stance") if rc.get("stance") in _STANCES else None
-            if not dyn and not stance:
-                continue
-            r = idx.get((ck, tk))
-            if r is None:
-                r = {"id": _S.new_id(), "source": ck, "target": tk, "nature": "",
-                     "dynamic": "", "stance": "neutral"}
-                rels.append(r)
-                idx[(ck, tk)] = r
-            if dyn:                          # DRIFT REWRITES the prose dynamic
-                r["dynamic"] = dyn
-            if stance:
-                r["stance"] = stance
-            changes.append({"toward": tk, "dynamic": dyn, "stance": r["stance"]})
+        rels, changes, _blk = apply_rel_changes(
+            rels, idx, ck, imp.get("relationship_changes", []), bykey, present, _S.new_id)
+        blocked.extend(_blk)
         ex = imp.get("new_exemplar") or {}
         if isinstance(ex, dict) and (ex.get("content") or "").strip() and ex.get("type") in ("life", "saying", "reaction"):
             e = facet_to_entry({"type": ex["type"], "title": ex.get("title", ""),
@@ -873,7 +968,7 @@ def _consolidate(ctx, body: dict) -> dict:
         applied.append({"character": ck, "summary": str(imp.get("summary", "")), "changes": changes})
 
     ctx.update_story_fields(skey, {"relationships": rels})
-    return {"consolidated": applied}
+    return {"consolidated": applied, "blocked": blocked}
 
 
 # ── Lifecycle trigger: consolidation runs ONLY when the player sleeps or dies ────────────────
@@ -892,6 +987,72 @@ _REWIND_SCHEMA = {
     },
 }
 
+# ── The storymaster's FEVER-DREAM ────────────────────────────────────────────────────────────
+# When the player SLEEPS, the conflict pressures latent in the cast's hidden psychology surface NOT
+# as in-play options but as a single FOREBODING fever-dream — surreal, oblique, ominous. The dreamer
+# half-grasps it and can't shake it. This is the DM's conflict signal delivered as a portent. The
+# fuel is the Author's scaffold (want/lie/wound/secret); the storymaster is the dream entity.
+_DREAM_SCHEMA = {"type": "object", "additionalProperties": False, "required": ["dream"],
+                 "properties": {"dream": {"type": "string"}}}
+_DREAM_SYS = (
+    "You are the dream the protagonist sinks into when they sleep — the unconscious surfacing what is "
+    "churning beneath the waking story. You are given the cast's HIDDEN psychology (want / lie / wound / "
+    "secret) and how they regard each other and the dreamer ('you'). Distill the strongest latent "
+    "PRESSURES into a single FOREBODING FEVER-DREAM: surreal, oblique, ominous dream-logic that ENCODES "
+    "the dread without ever naming it — a portent the dreamer half-grasps and cannot shake on waking. "
+    "Things stand in for people; spaces fold impossibly; something is subtly, deeply wrong. It is NOT a "
+    "choice, NOT a question, NOT 'do you…', NOT a recap of events — it leaves a FEELING, not an "
+    "instruction. Second person, present tense, 2-4 sentences. JSON only: {dream}."
+)
+
+
+def generate_dream(ctx, skey: str, world_state: dict, present: list | None = None, you: str = "") -> str:
+    """Distil the on-stage cast's hidden pressures (want/lie/wound/secret + bonds + recent events) into
+    ONE foreboding fever-dream the storymaster sends when the player sleeps. No options, no recap — a
+    portent that lingers. Returns the dream prose, "" on any failure (must never sink the rest pass)."""
+    try:
+        prov, _p = _as_agent(ctx, "storymaster")
+        if prov is None:
+            return ""
+        st = ctx.base_settings.stories.get(skey) if skey else None
+        present = [k for k in (present or []) if k in ctx.base_settings.characters]
+        if not present and st is not None:
+            present = [m.character for m in st.cast]
+        present = present[:8]
+        cname = lambda k: getattr(ctx.base_settings.characters.get(k), "name", k)
+
+        def _scaf(k):
+            f = getattr(ctx.base_settings.characters.get(k), "fields", {}) or {}
+            bits = [f"want: {f['want']}" if f.get("want") else "", f"lie: {f['lie']}" if f.get("lie") else "",
+                    f"wound: {f['wound']}" if f.get("wound") else "", f"secret: {f['secret']}" if f.get("secret") else ""]
+            inner = "; ".join(b for b in bits if b)
+            return f"- {cname(k)}: {inner or '(unknown depths)'}"
+        scaffolds = "\n".join(_scaf(k) for k in present) or "(no cast)"
+
+        from . import story_db as _SDB
+        _db = ctx._story_db(skey) if skey else None
+        focus = set(present)
+        relset = (_SDB.relationships_for(_db, focus) if _db is not None
+                  else [r.model_dump() for r in (st.relationships if st else [])])
+        bonds = []
+        for r in relset:
+            s, t = r.get("source"), r.get("target")
+            if s not in focus and t not in focus:
+                continue
+            d = r.get("dynamic") or r.get("stance") or ""
+            bonds.append(f"- {cname(s)} → {cname(t)}" + (f": {d}" if d else ""))
+        bonds_txt = "\n".join(bonds) or "(no bonds)"
+
+        steps = [str(s) for s in (world_state or {}).get("transcript", []) if str(s).strip()][-6:]
+        recent = "\n".join(steps) or "(the story has barely begun)"
+        prompt = (f"THE DREAMER = you ({you or 'the protagonist'}).\n\nTHE CAST, with hidden depths:\n{scaffolds}\n\n"
+                  f"HOW THEY REGARD EACH OTHER AND YOU:\n{bonds_txt}\n\nWHAT HAS BEEN HAPPENING:\n{recent}\n\n"
+                  f"Give the one foreboding fever-dream that rises from this.")
+        data = (prov.generate_text(system=_DREAM_SYS, prompt=prompt, emits=_DREAM_SCHEMA).data) or {}
+        return (data.get("dream") or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
 
 def consolidate_on_rest(ctx, skey: str, world_state: dict, status: str) -> dict:
     """The player slept or died → consolidate. This is a CONTEXT-COMPRESSION step: every present
@@ -900,11 +1061,15 @@ def consolidate_on_rest(ctx, skey: str, world_state: dict, status: str) -> dict:
     compressed memories re-enter context via lorebook retrieval). On death the storymaster also
     picks a significant past step to rewind to. Returns {memories, rewind|None, compressed}. Never
     raises — a failed consolidation must not sink the turn."""
-    out: dict = {"memories": [], "rewind": None, "compressed": 0}
+    out: dict = {"memories": [], "rewind": None, "compressed": 0, "dream": ""}
     steps = (world_state or {}).get("transcript")
     if not isinstance(steps, list) or not steps:
         return out
     full = list(steps)   # snapshot for the death-rewind selection (taken before compression blanks it)
+    # The fever-dream: on sleep, the cast's latent pressures surface as a foreboding portent (NOT
+    # options) — generated BEFORE compression so the dream reads the freshest recent events.
+    if status == "sleeping":
+        out["dream"] = generate_dream(ctx, skey, world_state)
     # SLIDING WINDOW: the narrative thread keeps the most recent N turns verbatim — only steps that
     # have aged out of the window get compressed. Depth is configurable: per-thread world_state
     # override → the story's `recent_window` → the default. Compress the band [start, end):

@@ -206,13 +206,12 @@
   .phint a { color: var(--accent); }
   .lo { color: var(--faint); font-weight: 400; }
   .busy { font-size: 12.5px; color: var(--accent); background: rgba(124,109,255,.12); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 11px; margin-bottom: 10px; }
-  .err { font-size: 12.5px; color: var(--bad); background: rgba(255,122,122,.1); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 11px; margin-bottom: 10px; }
+  .err { font-size: 12.5px; background: rgba(255,122,122,.1); border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 11px; margin-bottom: 10px; }
 
   .block { margin-bottom: 14px; }
   .genall { border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; background: var(--panel); }
   .genall .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .genall .lo { font-size: 11.5px; color: var(--faint); }
-  :global(.portraits) .sm.primary { background: var(--accent); border-color: transparent; color: #fff; }
   :global(.portraits) .sm.primary:hover:not(:disabled) { filter: brightness(1.08); }
   .fleshed { white-space: pre-wrap; word-break: break-word; font-size: 12px; line-height: 1.5;
     color: var(--text); background: var(--bg); border: 1px solid var(--border-soft); border-radius: 8px;
@@ -227,7 +226,7 @@
   .orow { display: flex; gap: 8px; align-items: center; }
   .oname { width: 150px; flex: none; }
   .oinstr { flex: 1; min-width: 0; }
-  .orow input { padding: 7px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); }
+  .orow input { padding: 7px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); }
   .orow input:focus { border-color: var(--accent); outline: none; }
 
   button.sm { font-size: 12.5px; padding: 6px 12px; border-radius: 8px; }
@@ -255,13 +254,13 @@
   }
   .exgen {
     width: 38px; height: 38px; border-radius: 10px; font-size: 18px; padding: 0; display: grid; place-items: center;
-    background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); box-shadow: none;
+    background: var(--elev-2); border: 1px solid var(--border); color: var(--muted);
   }
-  .exgen:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .exgen:hover { color: var(--accent); border-color: var(--accent); }
   .exdel {
     position: absolute; top: 3px; right: 3px; z-index: 3; width: 20px; height: 20px; padding: 0; font-size: 11px;
     display: grid; place-items: center; border-radius: 6px; background: rgba(10,12,18,.7); color: #fff;
-    border: 1px solid rgba(255,255,255,.18); box-shadow: none;
+    border: 1px solid rgba(255,255,255,.18);
   }
-  .exdel:hover { color: var(--bad); background: rgba(255,122,122,.18); filter: none; }
+  .exdel:hover { color: var(--bad); background: rgba(255,122,122,.18); }
 </style>

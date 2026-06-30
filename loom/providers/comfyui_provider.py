@@ -48,13 +48,17 @@ class ComfyUIProvider:
         # Default pipeline feature toggles (detailer / upscale / highrez), from the global
         # image flags. A per-call `flags` arg overrides these.
         self.flags: dict[str, bool] = options.get("flags") or {}
+        # Trigger words for the active LoRA preset, appended to every prompt so the LoRAs fire.
+        # Set by AppContext._apply_image_preset; "" when no preset / no triggers.
+        self.prompt_suffix: str = ""
 
     def _inject(self, prompt: str, negative_prompt: str | None = None, out_prefix: str | None = None,
                 latent: tuple[int, int] | None = None,
                 flags: dict[str, bool] | None = None) -> tuple[dict, str | None]:
-        # Pure graph prep (prompt token, out_prefix, latent, negative, BREAK regions) is shared
-        # with the RunPod serverless provider; see loom/providers/_workflow.py.
-        graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix, latent, flags)
+        # Pure graph prep (prompt token, out_prefix, latent, negative, trigger suffix, BREAK
+        # regions) is shared with the RunPod serverless provider; see loom/providers/_workflow.py.
+        graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix,
+                                 latent, flags, prompt_suffix=self.prompt_suffix)
         # Same-OS ComfyUI: model names must use the host separator (backslash on Windows),
         # else nested paths injected with '/' fail loader validation ("Value not in list").
         _workflow.localize_model_paths(graph)

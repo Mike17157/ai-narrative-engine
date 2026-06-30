@@ -464,9 +464,9 @@
   .wv-left { width: 172px; flex-shrink: 0; overflow-y: auto; border-right: 1px solid var(--border-soft);
     display: flex; flex-direction: column; gap: 4px; padding: 8px; }
   .wv-outfit { display: flex; flex-direction: column; align-items: center; gap: 5px; padding: 7px;
-    border-radius: 10px; border: 1px solid transparent; background: none; box-shadow: none;
+    border-radius: 10px; border: 1px solid transparent; background: none;
     cursor: pointer; width: 100%; flex-shrink: 0; }
-  .wv-outfit:hover { background: var(--elev); filter: none; }
+  .wv-outfit:hover { background: var(--elev); }
   .wv-outfit.sel { border-color: var(--accent); background: var(--panel);
     box-shadow: inset 0 0 0 1px var(--accent-glow); }
   .wv-thumb { width: 100%; aspect-ratio: 3/4; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
@@ -575,20 +575,20 @@
   .thumb :global(img), .thumb :global(.zoom-inline) { border-radius: 8px; }
   .ph { color: var(--faint); font-size: 18px; }
   .ph.dim { color: var(--border); font-size: 16px; }
-  .genc { width: 100%; height: 100%; border-radius: 0; box-shadow: none; background: none; border: none; color: var(--muted); font-size: 20px; }
-  .genc:hover:not(:disabled) { color: var(--accent); filter: none; background: var(--elev-2); }
+  .genc { width: 100%; height: 100%; border-radius: 0; background: none; border: none; color: var(--muted); font-size: 20px; }
+  .genc:hover:not(:disabled) { color: var(--accent); background: var(--elev-2); }
   /* reset/regen overlays the sprite, top-right, revealed on hover */
   .redo { position: absolute; top: 3px; right: 3px; z-index: 2; font-size: 11px; line-height: 1;
-          padding: 3px 6px; border-radius: 6px; box-shadow: none; color: #fff;
+          padding: 3px 6px; border-radius: 6px; color: #fff;
           background: rgba(0, 0, 0, .55); border: 1px solid rgba(255, 255, 255, .25);
           opacity: 0; transition: opacity .12s; }
   .cell:hover .redo { opacity: 1; }
-  .redo:hover { color: var(--accent); border-color: var(--accent); background: rgba(0, 0, 0, .78); filter: none; }
+  .redo:hover { color: var(--accent); border-color: var(--accent); background: rgba(0, 0, 0, .78); }
   .cands { display: flex; gap: 5px; flex-wrap: wrap; justify-content: center; }
   .cand { display: flex; flex-direction: column; gap: 2px; width: 40px; }
   .cand :global(.zoom-inline), .cand :global(img) { border-radius: 5px; }
-  .usec { font-size: 9.5px; padding: 1px 0; border-radius: 5px; box-shadow: none; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); width: 100%; }
-  .usec:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .usec { font-size: 9.5px; padding: 1px 0; border-radius: 5px; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); width: 100%; }
+  .usec:hover { color: var(--accent); border-color: var(--accent); }
 
   /* an out-of-personality-range column (only shown with the 'full taxonomy' toggle) is dimmed */
   .ehdr.outrange, .cell.outrange { opacity: .42; }

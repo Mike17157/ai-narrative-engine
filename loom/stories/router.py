@@ -529,7 +529,7 @@ def register(app, ctx):
         """Persist a character-first build: a Story that REFERENCES the existing developed
         characters (their exemplar lorebooks light up automatically in play) + the woven themed
         arcs. No story spine, no NPC duplication. Body: { name, premise?, characters:[key], arcs:[...] }"""
-        from ..config.schema import Arc as ArcModel, Story
+        from ..config.schema import Arc as ArcModel
 
         body = body or {}
         keys = [k for k in (body.get("characters") or []) if k in ctx.base_settings.characters]
@@ -537,16 +537,6 @@ def register(app, ctx):
             return JSONResponse({"error": "no valid characters"}, status_code=400)
 
         name = (body.get("name") or ctx.base_settings.characters[keys[0]].name or "Story").strip()
-        existing_names = {st.name for st in ctx.base_settings.stories.values()}
-        if name in existing_names:
-            base_name, n = name, 2
-            while name in existing_names:
-                name, n = f"{base_name} ({n})", n + 1
-        skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
-        skey, i = skey_base, 2
-        while (ctx.story_dir() / f"{skey}.yaml").is_file():
-            skey, i = f"{skey_base}_{i}", i + 1
-
         cast = [{"character": k, "primary": (idx == 0)} for idx, k in enumerate(keys)]
         name_to_key = {ctx.base_settings.characters[k].name.lower(): k for k in keys}
 
@@ -575,15 +565,11 @@ def register(app, ctx):
         loc_ids = {l["id"] for l in locations}
         start = body.get("start") if body.get("start") in loc_ids else (locations[0]["id"] if locations else None)
 
-        story = {"name": name, "premise": body.get("premise", ""), "cast": cast,
-                 "arcs": arcs_validated, "fields": {"source_character": keys[0]},
-                 "locations": locations, "start": start}
         try:
-            Story(**story)  # validate (cast ∈ characters)
-            ctx.story_dir().mkdir(parents=True, exist_ok=True)
-            (ctx.story_dir() / f"{skey}.yaml").write_text(
-                yaml.safe_dump(story, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            ctx.reload_settings()
+            skey = ctx.create_story(name, {
+                "premise": body.get("premise", ""), "cast": cast, "arcs": arcs_validated,
+                "fields": {"source_character": keys[0]}, "locations": locations, "start": start,
+            }, character_keys=keys, type_=body.get("type", "novel"))   # one self-contained <skey>.db
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
         return {"ok": True, "key": skey}
@@ -767,7 +753,6 @@ def register(app, ctx):
             f"Logline: {sb.get('logline') or ''}",
             f"Tone: {sd.get('tone') or ''}",
             f"Themes: {', '.join(sd.get('themes') or [])}",
-            f"Intended ending: {sd.get('intended_ending') or ''}",
             f"Cast: {cast}",
         ])
         comp_lines = "\n".join(f"- {cid} ({label}): {desc}" for cid, label, desc in _PREMISE_COMPONENTS)
@@ -795,6 +780,469 @@ def register(app, ctx):
              "covered": bool(by_id.get(cid, {}).get("covered")),
              "note": str(by_id.get(cid, {}).get("note") or "").strip()}
             for cid, label, _desc in _PREMISE_COMPONENTS]}
+
+    # ── Relationship-first genesis (harnesses → web → derived stories) ────────────
+    # See loom/stories/GENESIS.md. Premise is an OUTPUT: design unnamed harnesses, weave
+    # the tension web, derive candidate stories, commit one (names the cast + writes the
+    # Story). Steps 1-3 are stateless structured passes over client-held draft state; only
+    # commit persists. All route through the `premise` builder chokepoint.
+
+    @app.post("/api/stories/genesis/world")
+    def genesis_world(body: dict):
+        """Step 0 — author the WORLD frame (the stage, not the plot) from a one-line idea.
+        Body: { seed?, model? } → { genre, tone, setting, situation }. See genesis.design_world."""
+        from .genesis import design_world
+        body = body or {}
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        try:
+            return design_world(provider, seed=body.get("seed", ""))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"world design failed: {exc}"}, status_code=500)
+
+    @app.post("/api/stories/genesis/world/field")
+    def genesis_world_field(body: dict):
+        """Regenerate ONE field of the world frame (inline ↻). Body: { field, world?, seed?, model? }
+        → { value }. Honors the per-request `model` override like every genesis step."""
+        from .genesis import regen_world_field
+        body = body or {}
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        try:
+            return {"value": regen_world_field(provider, body.get("world") or {},
+                                               (body.get("field") or "").strip(), seed=body.get("seed", ""))}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"regen failed: {exc}"}, status_code=500)
+
+    @app.post("/api/stories/genesis/harnesses")
+    def genesis_harnesses(body: dict):
+        """Step 1 — design N unnamed character harnesses around an optional `seed`, who BELONG to the
+        authored `world`. Body: { seed?, n?, world?, model? } → { harnesses: [{id, role, …}] }."""
+        from .genesis import design_harnesses
+        body = body or {}
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        seed = body.get("seed", "")
+        # Ground the cast in the SAME modern-psych scaffold the workshop uses (_psyche book) — so
+        # genesis characters have real depth, not random traits. See GENESIS.md §6.
+        from .pipeline import grounding as _G
+        try:
+            psyche = _G.psyche_notes(ctx.root, seed or "character personality behaviour", k=6)
+        except Exception:  # noqa: BLE001 — grounding is best-effort; never block generation
+            psyche = ""
+        try:
+            hs = design_harnesses(provider, seed=seed, n=body.get("n", 4), grounding=psyche,
+                                  world=body.get("world") or "")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"harness design failed: {exc}"}, status_code=500)
+        if not hs:
+            return JSONResponse({"error": "the model returned no characters — it likely declined the "
+                                 "prompt or doesn't support structured output. Pick a different model "
+                                 "in the ⚙ picker (or your usual chat model) and try again."},
+                                status_code=502)
+        return {"harnesses": hs}
+
+    @app.post("/api/stories/genesis/weave")
+    def genesis_weave(body: dict):
+        """Step 2 — wire the tension web between harnesses.
+        Body: { harnesses:[…], model? } → { relationships:[…] }."""
+        from .genesis import weave_relationships
+        body = body or {}
+        harnesses = body.get("harnesses") or []
+        if len(harnesses) < 2:
+            return JSONResponse({"error": "need at least 2 harnesses"}, status_code=400)
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        try:
+            return {"relationships": weave_relationships(provider, harnesses)}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"weave failed: {exc}"}, status_code=500)
+
+    @app.post("/api/stories/genesis/formalize")
+    def genesis_formalize(body: dict):
+        """Formalize a RATIFIED character's prose into structure + its relationships (the draft cast
+        queue ratify step). Body: { persona, role?, others?:[names], model? }
+        → { temperament, want, lie, wound, secret, relationships:[{target, nature, dynamic, stance, note}] }."""
+        from .genesis import formalize_harness
+        body = body or {}
+        blurb = (body.get("persona") or body.get("blurb") or "").strip()
+        if not blurb:
+            return JSONResponse({"error": "no character text to formalize"}, status_code=400)
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        try:
+            return formalize_harness(provider, blurb, role=body.get("role", ""),
+                                     others=body.get("others") or [], world=body.get("world") or "")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"formalize failed: {exc}"}, status_code=500)
+
+    @app.post("/api/stories/genesis/potentials")
+    def genesis_potentials(body: dict):
+        """Suggest relationship POTENTIALS between two characters (the story seed) — each the hidden
+        COMMON CORE + a wanted TRAJECTORY/tone. Body: { a, b, n? } (a/b are character dicts:
+        name/persona/want/lie/wound) → { potentials: [{common, trajectory, nature, stance}] }."""
+        from .genesis import suggest_potentials
+        body = body or {}
+        a, b = body.get("a") or {}, body.get("b") or {}
+        if not a or not b:
+            return JSONResponse({"error": "need two characters"}, status_code=400)
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        try:
+            return {"potentials": suggest_potentials(provider, a, b, n=body.get("n", 3))}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"potentials failed: {exc}"}, status_code=500)
+
+    @app.post("/api/stories/genesis/face")
+    async def genesis_face(body: dict):
+        """Best-effort FACE PORTRAIT for a draft (keyless) genesis character → a node avatar.
+        Body: { name, persona|background, appearance?, model?, image_model? } → { image: dataURI,
+        appearance } or { error }. Drafts live in browser state (no key/disk), so nothing is saved;
+        the frontend stores the data URI on the harness and clips it into the graph node."""
+        body = body or {}
+        persona = (body.get("persona") or body.get("background") or "").strip()
+        name = (body.get("name") or "").strip()
+        appearance = (body.get("appearance") or "").strip()
+        if not persona and not appearance:
+            return JSONResponse({"error": "need a persona or appearance"}, status_code=400)
+        # 1) Booru identity tags (FACE-focused). Use an explicit appearance if given, else infer the
+        #    persistent face/identity from the persona (Illustrious wants tags, not prose).
+        if not appearance:
+            author = ctx.author_provider(body.get("model"))
+            if author is None:
+                return JSONResponse({"error": "no author model configured"}, status_code=400)
+            from .pipeline._helpers import _TAG_RULE
+            system = ("You output a short Danbooru tag list describing ONLY a single character's FACE "
+                      "and persistent identity for an Illustrious/SDXL anime portrait: sex + honest age, "
+                      "hair (colour/length/style), eyes (colour/shape), skin tone, and 1-2 distinguishing "
+                      "facial hooks (freckles, a mole, glasses, a scar). NO clothing, NO background, NO "
+                      "pose, NO expression. Output ONLY the comma-separated tags, nothing else.\n\n" + _TAG_RULE)
+            prompt = f"CHARACTER: {name}\n\n{persona}" if name else persona
+            try:
+                appearance = (author.generate_text(system=system, prompt=prompt).text or "").strip()
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": f"appearance failed: {exc}"}, status_code=500)
+        appearance = appearance.strip().strip('"').strip()
+        if not appearance:
+            return JSONResponse({"error": "no appearance tags"}, status_code=500)
+        # 2) Render a TIGHT face close-up (the node crop is a small circle — the face must fill it, not
+        #    the torso). A SQUARE latent at the model's NATIVE SDXL resolution (1024²) — NOT a small ad-hoc
+        #    size, which under-resolves the face; square so the circular crop has no bias. Face-focus tags
+        #    keep the head centred.
+        from ..server.services.poses import ASPECT_DIMS
+        prompt = (appearance + ", solo, portrait, close-up, face focus, looking at viewer, "
+                  "detailed face, head shot, simple background")
+        provider, model_id = ctx.role_image_provider("base", body.get("image_model"))
+        if provider is None:
+            return JSONResponse({"error": model_id}, status_code=400)
+        _randomize_seeds(provider.workflow)
+        try:
+            png = await _render(provider, prompt, latent=ASPECT_DIMS["square"])
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
+        if png is None:
+            return JSONResponse({"error": "image model returned no image"}, status_code=500)
+        return {"image": "data:image/png;base64," + base64.b64encode(png).decode(), "appearance": appearance}
+
+    @app.post("/api/stories/genesis/derive")
+    def genesis_derive(body: dict):
+        """Step 3 — derive candidate stories from the web (premise as output).
+        Body: { harnesses:[…], relationships:[…], steer?, model? } → { candidates:[…] }."""
+        from .genesis import derive_stories
+        body = body or {}
+        harnesses = body.get("harnesses") or []
+        if not harnesses:
+            return JSONResponse({"error": "no harnesses"}, status_code=400)
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        try:
+            cands = derive_stories(provider, harnesses, body.get("relationships") or [],
+                                   steer=body.get("steer", ""))
+            return {"candidates": cands}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"derive failed: {exc}"}, status_code=500)
+
+    @app.post("/api/stories/genesis/commit")
+    def genesis_commit(body: dict):
+        """Step 4 — commit a chosen candidate: name the anchor harnesses into real characters,
+        rewrite edge ids → character keys, persist the Story. Body: { candidate, harnesses,
+        relationships, name?, type? } → { ok, key }."""
+        from . import story_db as _SDB
+        from .genesis import name_cast, persona_from_harness
+
+        body = body or {}
+        cand = body.get("candidate") or {}
+        by_id = {h.get("id"): h for h in (body.get("harnesses") or []) if h.get("id")}
+        rels = body.get("relationships") or []
+        if not cand or not by_id:
+            return JSONResponse({"error": "need candidate + harnesses"}, status_code=400)
+
+        anchors = [a for a in (cand.get("anchors") or []) if a in by_id]
+        prot = cand.get("protagonist") if cand.get("protagonist") in by_id else (anchors[0] if anchors else None)
+        if prot is None:
+            return JSONResponse({"error": "candidate has no valid protagonist"}, status_code=400)
+        if prot not in anchors:
+            anchors = [prot] + anchors
+
+        # New stories are born as ONE self-contained <skey>.db with characters EMBEDDED. Compute the
+        # key FIRST + create the DB so write_npc can embed each anchor into it. See story_db.py.
+        ctx.story_dir().mkdir(parents=True, exist_ok=True)
+        name = (body.get("name") or cand.get("title") or "Story").strip()
+        existing_names = {st.name for st in ctx.base_settings.stories.values()}
+        base_name, j = name, 2
+        while name in existing_names:
+            name, j = f"{base_name} ({j})", j + 1
+        skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
+        skey, i = skey_base, 2
+        while (ctx.story_dir() / f"{skey}.yaml").is_file() or (ctx.story_dir() / f"{skey}.db").is_file():
+            skey, i = f"{skey_base}_{i}", i + 1
+        stype = body.get("type") if body.get("type") in ("novel", "vn") else "novel"
+        db_path = ctx.story_dir() / f"{skey}.db"
+        _SDB.save_story(db_path, {
+            "name": name, "type": stype, "premise": cand.get("premise", ""),
+            "tone": cand.get("tone", ""), "themes": cand.get("themes") or [],
+            "storyboard": {"logline": cand.get("logline", "")},
+            "fields": {"source": "genesis", "dramatic_question": cand.get("dramatic_question", "")},
+        }, {})
+
+        # Name the anchors (commit is the first time harnesses get names) + embed them into the DB.
+        nprov, _systems = ctx.builder_ctx(body, "characters")
+        names = name_cast(nprov, [by_id[a] for a in anchors]) if nprov is not None else {}
+        id_to_key: dict[str, str] = {}
+        for idx, hid in enumerate(anchors):
+            h = by_id[hid]
+            nm = (h.get("name") or "").strip() or (names.get(hid) or {}).get("name") \
+                or h.get("role") or f"Character {idx + 1}"
+            id_to_key[hid] = ctx.write_npc({
+                "name": nm, "persona": persona_from_harness(h),
+                "appearance": (names.get(hid) or {}).get("appearance", ""), "role": h.get("role", ""),
+                "want": h.get("want", ""), "lie": h.get("lie", ""),
+                "wound": h.get("wound", ""), "secret": h.get("secret", ""),
+            }, story_key=skey)                            # embeds into <skey>.db
+
+        cast = [{"character": id_to_key[hid], "primary": (hid == prot)} for hid in anchors]
+        out_rels = []
+        for i, e in enumerate(rels):
+            s, t = id_to_key.get(e.get("source")), id_to_key.get(e.get("target"))
+            if not s or not t or s == t:
+                continue  # edge touches a harness that didn't make the cast — drop it
+            out_rels.append({"id": f"r{i + 1}", "source": s, "target": t,
+                             "nature": e.get("nature", ""), "dynamic": e.get("dynamic", ""),
+                             "stance": e.get("stance", "neutral"), "note": e.get("note", "")})
+        try:
+            ctx.update_story_fields(skey, {"cast": cast, "relationships": out_rels})
+        except Exception as exc:  # noqa: BLE001
+            _SDB.delete_db(db_path)                        # rollback the half-created story
+            return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
+        return {"ok": True, "key": skey}
+
+    @app.post("/api/stories/{key}/genesis/add")
+    def genesis_add(key: str, body: dict):
+        """ADD generated characters to an EXISTING story (the in-Structure generate tools): name the
+        confirmed harnesses, create characters, append to the cast + relationships. Same naming/
+        write_npc path as commit, but onto a live story. Body: { harnesses, relationships? } → { ok }."""
+        from .genesis import name_cast, persona_from_harness
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        by_id = {h.get("id"): h for h in (body.get("harnesses") or []) if h.get("id")}
+        if not by_id:
+            return JSONResponse({"error": "no harnesses"}, status_code=400)
+
+        nprov, _systems = ctx.builder_ctx(body, "characters")
+        names = name_cast(nprov, list(by_id.values())) if nprov is not None else {}
+        id_to_key: dict[str, str] = {}
+        for idx, (hid, h) in enumerate(by_id.items()):
+            nm = (h.get("name") or "").strip() or (names.get(hid) or {}).get("name") \
+                or h.get("role") or f"Character {idx + 1}"
+            id_to_key[hid] = ctx.write_npc({
+                "name": nm, "persona": persona_from_harness(h),
+                "appearance": (names.get(hid) or {}).get("appearance", ""), "role": h.get("role", ""),
+                "want": h.get("want", ""), "lie": h.get("lie", ""),
+                "wound": h.get("wound", ""), "secret": h.get("secret", ""),
+            }, story_key=key)
+
+        sd = st.model_dump()
+        cast = (sd.get("cast") or []) + [{"character": k, "primary": False} for k in id_to_key.values()]
+        rels = list(sd.get("relationships") or [])
+        base = len(rels)
+        for i, e in enumerate(body.get("relationships") or []):
+            s, t = id_to_key.get(e.get("source")), id_to_key.get(e.get("target"))
+            if not s or not t or s == t:
+                continue  # only edges among the newly-added characters (drafts use harness ids)
+            rels.append({"id": f"r{base + i + 1}", "source": s, "target": t,
+                         "nature": e.get("nature", ""), "dynamic": e.get("dynamic", ""),
+                         "stance": e.get("stance", "neutral"), "note": e.get("note", "")})
+        try:
+            ctx.update_story_fields(key, {"cast": cast, "relationships": rels})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not add to cast: {exc}"}, status_code=400)
+        return {"ok": True, "added": list(id_to_key.values())}
+
+    def _chapter_ctx(sd: dict, idx: int) -> str:
+        """Running context for drafting/consolidating a novel chapter: premise/tone/cast + the prior
+        chapters' recaps (what's carried forward). This is the serial memory — never the whole book."""
+        chapters = sd.get("chapters") or []
+        cast = ", ".join(getattr(ctx.base_settings.characters.get(m.get("character")), "name", m.get("character"))
+                         for m in (sd.get("cast") or []) if m.get("character")) or "(unspecified)"
+        prior = "\n".join(
+            f"Ch.{i + 1} {chapters[i].get('title', '') or ''}: {chapters[i].get('recap', '') or '(no recap)'}"
+            for i in range(idx)) or "(this is the first chapter)"
+        return (f"STORY: {sd.get('name')}\nPREMISE: {sd.get('premise', '')}\nTONE: {sd.get('tone', '')}\n"
+                f"CAST: {cast}\n\nWHAT HAS HAPPENED SO FAR:\n{prior}")
+
+    def _find_chapter(key: str, cid: str):
+        """(story_dict, chapters_list, index) for a novel chapter, or (None, None, -1)."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return None, None, -1
+        sd = st.model_dump()
+        chapters = sd.get("chapters") or []
+        idx = next((i for i, c in enumerate(chapters) if c.get("id") == cid), -1)
+        return sd, chapters, idx
+
+    @app.post("/api/stories/{key}/chapter/{cid}/draft")
+    def chapter_draft(key: str, cid: str, body: dict):
+        """Draft ONE novel chapter's prose (Narrative voice) from its harness + the running context.
+        Serial-gated: the previous chapter must be `drafted`, so the book is never generated at once."""
+        sd, chapters, idx = _find_chapter(key, cid)
+        if idx < 0:
+            return JSONResponse({"error": "no such chapter"}, status_code=404)
+        if idx > 0 and chapters[idx - 1].get("status") != "drafted":
+            return JSONResponse({"error": f"draft chapter {idx} first — chapters generate in order"},
+                                status_code=409)
+        provider, _systems = ctx.builder_ctx(body or {}, "chapter")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+        ch = chapters[idx]
+        beats = "; ".join(ch.get("beats") or []) or (ch.get("purpose") or "")
+        system = ("You are the NARRATIVE voice writing a novel chapter by chapter. Render THIS chapter "
+                  "as prose — vivid, in-scene, consistent with what came before. Don't summarize or skip "
+                  "ahead, don't write headings or meta; just the chapter's prose.")
+        prompt = (f"{_chapter_ctx(sd, idx)}\n\nCHAPTER {idx + 1} — {ch.get('title', '')}\n"
+                  f"POV: {ch.get('pov', '')}\nSETTING: {ch.get('setting', '')}\n"
+                  f"PURPOSE: {ch.get('purpose', '')}\nBEATS: {beats}\n\nWrite chapter {idx + 1} now.")
+        try:
+            res = provider.generate_text(system=system, prompt=prompt)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"draft failed: {exc}"}, status_code=500)
+        draft = (res.text or "").strip()
+        if not draft:
+            return JSONResponse({"error": "model returned nothing"}, status_code=500)
+        ch["draft"] = draft
+        ch["status"] = "drafted"
+        ctx.update_story_fields(key, {"chapters": chapters})
+        return {"ok": True, "id": cid, "status": "drafted", "words": len(draft.split()), "draft": draft}
+
+    @app.post("/api/stories/{key}/chapter/{cid}/consolidate")
+    def chapter_consolidate(key: str, cid: str, body: dict):
+        """Storymaster: distill a drafted chapter into a tight carry-forward `recap` (what changed,
+        what now matters) — the input the NEXT chapter draws on."""
+        sd, chapters, idx = _find_chapter(key, cid)
+        if idx < 0:
+            return JSONResponse({"error": "no such chapter"}, status_code=404)
+        ch = chapters[idx]
+        if ch.get("status") != "drafted" or not (ch.get("draft") or "").strip():
+            return JSONResponse({"error": "draft the chapter before consolidating"}, status_code=409)
+        provider, _systems = ctx.builder_ctx(body or {}, "consolidate")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+        system = ("You are the Storymaster. Distill this chapter into a tight RECAP that the next "
+                  "chapter will rely on: what changed, for whom, and what now matters going forward. "
+                  "2-4 concrete sentences. No preamble.")
+        try:
+            res = provider.generate_text(system=system, prompt=(ch.get("draft") or "")[:8000])
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"consolidate failed: {exc}"}, status_code=500)
+        recap = (res.text or "").strip()
+        if not recap:
+            return JSONResponse({"error": "model returned nothing"}, status_code=500)
+        ch["recap"] = recap
+        ctx.update_story_fields(key, {"chapters": chapters})
+        return {"ok": True, "id": cid, "recap": recap}
+
+    import operator as _operator
+    _COND_OPS = {">=": _operator.ge, "<=": _operator.le, "==": _operator.eq,
+                 "!=": _operator.ne, ">": _operator.gt, "<": _operator.lt}
+    _COND_RE = re.compile(r"^\s*(\w+)\s*(>=|<=|==|!=|>|<)\s*(-?\d+(?:\.\d+)?)\s*$")
+
+    def _cond_met(cond: str, state: dict) -> bool:
+        """Cheap emergent-condition check — '<feature> <op> <number>' against the play state. This is
+        the DETECT step; it's free (no model), so the runtime can watch every turn."""
+        m = _COND_RE.match(cond or "")
+        if not m:
+            return False
+        var, op, num = m.group(1), m.group(2), float(m.group(3))
+        try:
+            return _COND_OPS[op](float(state.get(var, 0) or 0), num)
+        except Exception:  # noqa: BLE001
+            return False
+
+    @app.post("/api/stories/{key}/scene/{sid}/evaluate")
+    def scene_evaluate(key: str, sid: str, body: dict):
+        """The detect→ask→act decision for an AI-played VN scene (the same shape as the sleep/death
+        detectors, generalized to scene-switching). DETECT which divergence triggers are armed: a
+        `choice` trigger fires on the player's pick (deterministic); `emergent` triggers fire when a
+        tracked feature crosses its threshold — and then we ASK the tool whether it's dramatically
+        time to switch. Body: { state:{feature:num}, choice?:str, last?:str }.
+        Returns { transition, branch, why, armed:[conditions] }."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        scene = next((s for s in (st.model_dump().get("scenes") or []) if s.get("id") == sid), None)
+        if scene is None:
+            return JSONResponse({"error": "no such scene"}, status_code=404)
+        body = body or {}
+        state = body.get("state") or {}
+        choice = (body.get("choice") or "").strip().lower()
+        last = (body.get("last") or "").strip()
+        triggers = scene.get("triggers") or []
+
+        # A player CHOICE fires deterministically — they decided.
+        if choice:
+            hit = next((t for t in triggers if t.get("kind") == "choice" and t.get("condition")
+                        and (choice in t["condition"].strip().lower() or t["condition"].strip().lower() in choice)), None)
+            if hit:
+                return {"transition": True, "branch": hit.get("branch"), "why": "player choice",
+                        "armed": [hit.get("condition")]}
+
+        # EMERGENT conditions: detect (free), then ASK the tool whether it's time.
+        armed = [t for t in triggers if t.get("kind") == "emergent" and _cond_met(t.get("condition"), state)]
+        if not armed:
+            return {"transition": False, "branch": None, "armed": []}
+        provider, _systems = ctx.builder_ctx(body, "director")
+        if provider is None:
+            return JSONResponse({"error": _systems}, status_code=400)
+        opts = "\n".join(f'- branch "{t.get("branch")}" (triggered by {t.get("condition")}): {t.get("intent")}'
+                         for t in armed)
+        schema = {"type": "object", "additionalProperties": False, "required": ["transition", "branch", "why"],
+                  "properties": {"transition": {"type": "boolean"}, "branch": {"type": "string"},
+                                 "why": {"type": "string"}}}
+        system = ("You are the Dungeon Master deciding whether an AI-played scene should TRANSITION now. "
+                  "One or more divergence conditions have triggered. Switch only if it is dramatically "
+                  "earned given the scene's goal and what just happened — otherwise stay in the scene "
+                  "and let it breathe. Pick from the triggered branches only.")
+        prompt = (f"SCENE goal: {scene.get('goal', '')}\nTONE: {scene.get('tone', '')}\n"
+                  f"WHAT JUST HAPPENED: {last or '(unspecified)'}\n\nTRIGGERED BRANCHES:\n{opts}\n\n"
+                  "Decide whether to transition now, and to which branch.")
+        try:
+            out = (provider.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"evaluate failed: {exc}"}, status_code=500)
+        armed_branches = {t.get("branch") for t in armed}
+        branch = out.get("branch") if out.get("branch") in armed_branches else armed[0].get("branch")
+        go = bool(out.get("transition"))
+        return {"transition": go, "branch": branch if go else None,
+                "why": str(out.get("why") or "").strip(), "armed": [t.get("condition") for t in armed]}
 
     @app.post("/api/stories/extract-scenes")
     def story_extract_scenes(body: dict):
@@ -1491,12 +1939,10 @@ def register(app, ctx):
     @app.patch("/api/stories/{key}/arc/{arc_id}")
     def patch_arc(key: str, arc_id: str, body: dict):
         """Patch mutable arc fields: name, mini_ending, dramatic_function, cast."""
-        import yaml as _yaml
-        st_path = ctx.root / "configs" / "stories" / f"{key}.yaml"
-        if not st_path.is_file():
+        if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        raw = _yaml.safe_load(st_path.read_text(encoding="utf-8")) or {}
-        arcs = raw.get("arcs") or []
+        data = ctx._read_story_data(key)
+        arcs = data.get("arcs") or []
         arc_entry = next((a for a in arcs if a.get("id") == arc_id), None)
         if arc_entry is None:
             return JSONResponse({"error": f"no arc '{arc_id}'"}, status_code=404)
@@ -1504,9 +1950,8 @@ def register(app, ctx):
         for field in ("name", "mini_ending", "dramatic_function", "cast"):
             if field in body:
                 arc_entry[field] = body[field]
-        raw["arcs"] = arcs
-        st_path.write_text(_yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        ctx.reload_settings()
+        data["arcs"] = arcs
+        ctx._write_story_data(key, data)
         return {"ok": True}
 
     @app.post("/api/stories/{key}/arc/{arc_id}/expand")
@@ -1541,9 +1986,9 @@ def register(app, ctx):
 
         instruction = ((body or {}).get("instruction") or "").strip()
 
-        # Collect context: heart, intended_ending, preceding arcs' mini_endings, arc cast details.
+        # Collect context: heart, preceding arcs' mini_endings, arc cast details. NO story-level ending
+        # — each arc owns its OWN resolution (mini_ending), generated from the arc's premise + owner lie.
         heart = st.storyboard.heart or ""
-        intended_ending = st.intended_ending or ""
 
         # Preceding arcs sorted by order.
         sorted_arcs = sorted(st.arcs, key=lambda a: a.order)
@@ -1571,7 +2016,7 @@ def register(app, ctx):
         # consequence binds the world's fate to the hero's choice — never a generic "greater good".
         from .pipeline import grounding as _G
         _exp_craft = _G.craft_notes(
-            ctx.root, f"{intended_ending} {arc.name} {arc.mini_ending or ''} climax self-revelation"[:400],
+            ctx.root, f"{arc.name} {arc.mini_ending or ''} {arc.premise or ''} climax self-revelation"[:400],
             k=6, section="chapters")
 
         system = (
@@ -1595,9 +2040,8 @@ def register(app, ctx):
 
         prompt = (
             (f"{_exp_craft}\n\n" if _exp_craft else "")
-            + f"BOOK HEART: {heart or '(not set)'}\n"
-            f"INTENDED ENDING: {intended_ending or '(not set)'}\n\n"
-            f"PREVIOUS ARCS:\n{prev_endings}\n\n"
+            + f"BOOK HEART: {heart or '(not set)'}\n\n"
+            f"PREVIOUS ARCS (their mini-endings — this arc builds on them):\n{prev_endings}\n\n"
             f"THIS ARC:\n"
             f"  Name: {arc.name}\n"
             f"  Dramatic function: {arc.dramatic_function or '(not set)'}\n"
@@ -1656,11 +2100,9 @@ def register(app, ctx):
                     raw = "".join(full_text).strip()
                     nodes, start_id = _parse_arc_chapters(raw)
 
-                    # Persist the expanded chapters to disk.
-                    safe = re.sub(r"[^\w\-]+", "", key)
-                    path = ctx.story_dir() / f"{safe}.yaml"
+                    # Persist the expanded chapters to the story (DB-backed or YAML — routed).
                     try:
-                        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                        data = ctx._read_story_data(key)
                         arcs_data = data.get("arcs") or []
                         updated = False
                         for arc_entry in arcs_data:
@@ -1673,11 +2115,7 @@ def register(app, ctx):
                                 break
                         if updated:
                             data["arcs"] = arcs_data
-                            path.write_text(
-                                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
-                                encoding="utf-8"
-                            )
-                            ctx.reload_settings()
+                            ctx._write_story_data(key, data)
                     except Exception:  # noqa: BLE001 — disk write failure is non-fatal for the stream
                         pass
 
@@ -1996,11 +2434,9 @@ def register(app, ctx):
 
                 emit({"type": "transitions", "transitions": [t.model_dump() for t in transitions]})
 
-                # ── Persist ───────────────────────────────────────────────
-                safe = re.sub(r"[^\w\-]+", "", key)
-                path = ctx.story_dir() / f"{safe}.yaml"
+                # ── Persist (DB-backed or YAML — routed) ──────────────────
                 try:
-                    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+                    data = ctx._read_story_data(key)
                     for arc_entry in (data.get("arcs") or []):
                         if arc_entry.get("id") == arc_id:
                             arc_entry["timelines"] = [
@@ -2014,8 +2450,7 @@ def register(app, ctx):
                             arc_entry["transitions"] = [t.model_dump() for t in transitions]
                             arc_entry["divergence_axis"] = axis
                             break
-                    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-                    ctx.reload_settings()
+                    ctx._write_story_data(key, data)
                 except Exception:  # noqa: BLE001
                     pass
 
@@ -2178,240 +2613,14 @@ def register(app, ctx):
 
         return StreamingResponse(events(), media_type="text/event-stream")
 
-    # ── Draft persistence ────────────────────────────────────────────────────── #
-    # Drafts store the full wizard state server-side so in-progress stories
-    # survive localStorage clearing and show up in the library.
-
-    def _drafts_dir():
-        return ctx.story_dir() / "drafts"
-
-    @app.post("/api/stories/draft")
-    def save_draft(body: dict):
-        import uuid as _uuid
-        from datetime import datetime, timezone
-        d = body or {}
-        raw_id = d.get("id") or f"draft_{_uuid.uuid4().hex[:8]}"
-        safe_id = re.sub(r"[^\w\-]+", "", raw_id)
-        drafts = _drafts_dir()
-        drafts.mkdir(parents=True, exist_ok=True)
-        d["id"] = safe_id
-        d["updated_at"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-        (drafts / f"{safe_id}.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
-        return {"ok": True, "id": safe_id}
-
-    @app.get("/api/stories/draft/{draft_id}")
-    def get_draft(draft_id: str):
-        safe_id = re.sub(r"[^\w\-]+", "", draft_id)
-        p = _drafts_dir() / f"{safe_id}.json"
-        if not p.exists():
-            return JSONResponse({"error": "not found"}, status_code=404)
-        return json.loads(p.read_text(encoding="utf-8"))
-
-    @app.delete("/api/stories/draft/{draft_id}")
-    def delete_draft(draft_id: str):
-        safe_id = re.sub(r"[^\w\-]+", "", draft_id)
-        p = _drafts_dir() / f"{safe_id}.json"
-        if p.exists():
-            p.unlink()
-        return {"ok": True}
-
-    @app.post("/api/stories")
-    def save_story(body: dict):
-        """Materialize an accepted draft: create Character files for proposed NPCs,
-        remap cast names→keys, link beats to locations, and write the Story."""
-        from ..config.schema import Story
-
-        draft = body or {}
-        name = (draft.get("name") or "Story").strip()
-        primary_key = draft.get("source_character") or draft.get("character")
-        if primary_key and primary_key not in ctx.base_settings.characters:
-            primary_key = None
-
-        # If the caller provided an existing story key, overwrite that story in place
-        # rather than deduplicating the name/key. This happens when re-generating an
-        # existing story from the wizard (regenStory flow).
-        existing_key = re.sub(r"[^\w\-]+", "", draft.get("existing_key") or "")
-        overwriting = existing_key and (ctx.story_dir() / f"{existing_key}.yaml").is_file()
-
-        if overwriting:
-            skey = existing_key
-            # Keep the existing story's name if the user didn't rename it.
-            existing_st = ctx.base_settings.stories.get(skey)
-            if existing_st and not draft.get("name"):
-                name = existing_st.name
-        else:
-            # Ensure a UNIQUE display name so the story list isn't full of identically-named entries.
-            existing_names = {st.name for st in ctx.base_settings.stories.values()}
-            if name in existing_names:
-                base_name, n = name, 2
-                while name in existing_names:
-                    name, n = f"{base_name} ({n})", n + 1
-
-            # Decide the story key first so NPCs can be tagged with it.
-            skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
-            skey, i = skey_base, 2
-            while (ctx.story_dir() / f"{skey}.yaml").is_file():
-                skey, i = f"{skey_base}_{i}", i + 1
-
-        created: list[str] = []
-        from .pipeline import extract_protagonist
-
-        # UNIFIED CAST — ONE ordered list of members; the protagonist is simply the member flagged
-        # `primary` (no separate "main character card" path). The wizard sends `cast`; older drafts
-        # sent `primary_card` + `proposed_npcs`, still accepted for compatibility.
-        cast_in = draft.get("cast")
-        if cast_in is None:
-            cast_in = ([{**draft["primary_card"], "primary": True}] if draft.get("primary_card") else []) \
-                + [{**n, "primary": False} for n in (draft.get("proposed_npcs") or [])]
-        cast_in = [dict(m) for m in cast_in if isinstance(m, dict)]
-
-        # Always guarantee a protagonist: if a source character is set but no member is flagged
-        # primary, distil one faithfully from the source card and prepend it. (The original library
-        # card stays free; the protagonist is a fresh story-bound character like everyone else.)
-        src = ctx.base_settings.characters.get(primary_key) if primary_key else None
-        if src is not None and not any(m.get("primary") for m in cast_in):
-            base_card = None
-            try:
-                provider, systems = ctx.builder_ctx(draft, "characters")
-                if provider is not None:
-                    base_card = extract_protagonist(
-                        provider, name=src.name, persona=src.system or "",
-                        extras=ctx.card_extras(src, primary_key), systems=systems)
-            except Exception:  # noqa: BLE001
-                base_card = None
-            if not base_card:
-                base_card = {"name": src.name, "persona": src.system or "",
-                             "appearance": (src.fields or {}).get("appearance", ""),
-                             "role": (src.fields or {}).get("role") or "protagonist"}
-            cast_in.insert(0, {**base_card, "primary": True})
-
-        # Compose the RICH base-image prompt via the shared ✨ pipeline (the single appearance
-        # authority) for EVERY member IN PARALLEL — reuse one already on the entry, only compose the
-        # missing ones. Same path as the ✨ button and regenerate_cast.
-        from concurrent.futures import ThreadPoolExecutor
-        from .pipeline import compose_base_prompt as _compose_base_prompt
-        _bp_cfg = ctx.load_story_builder()
-        _bp_prov = ctx.stage_provider("base_image")
-        _bp_sys = (_bp_cfg.get("systems") or {})
-
-        def _bp(item):
-            idx, p = item
-            existing = (p.get("base_prompt") or "").strip()
-            if existing:
-                return (idx, existing, p.get("height_cm"))
-            try:
-                r = _compose_base_prompt(_bp_prov, p.get("name", ""), p.get("persona", ""),
-                                         p.get("appearance", ""), p.get("role", ""),
-                                         systems=_bp_sys)
-                if not isinstance(r, dict):
-                    return (idx, "", p.get("height_cm"))
-                return (idx, r.get("prompt", ""),
-                        (r.get("features") or {}).get("height_cm") or p.get("height_cm"))
-            except Exception:  # noqa: BLE001
-                return (idx, "", p.get("height_cm"))
-
-        bps: dict[int, str] = {}
-        if cast_in:
-            with ThreadPoolExecutor(max_workers=min(len(cast_in), 6)) as ex:
-                for idx, pr, h in ex.map(_bp, list(enumerate(cast_in))):
-                    bps[idx] = pr
-                    if h:
-                        cast_in[idx]["height_cm"] = h   # so write_npc persists it
-
-        # Write EVERY member through the SAME _write_npc path — the protagonist differs ONLY by the
-        # `primary` flag. Its base image is generated like everyone else's (no ref_from copy of the
-        # source art); the source card remains the style anchor via story.fields.source_character.
-        cast = []
-        seen_primary = False
-        for idx, member in enumerate(cast_in):
-            is_primary = bool(member.get("primary")) and not seen_primary
-            seen_primary = seen_primary or is_primary
-            k = ctx.write_npc(member, story_key=skey, base_prompt=bps.get(idx, ""))
-            created.append(k)
-            cast.append({"character": k, "primary": is_primary})
-            # Seed the portrait manifest with emotions generated during character extraction —
-            # this runs before wardrobe planning so affect.range is ready for outfit-pose generation.
-            seed: dict = {}
-            if isinstance(member.get("expressions"), dict) and member["expressions"]:
-                seed["expressions"] = member["expressions"]
-            if isinstance(member.get("affect"), dict) and member["affect"].get("range"):
-                seed["affect"] = member["affect"]
-            if seed:
-                try:
-                    _apply_manifest(ctx, k, seed, compose_persona=False)
-                except Exception:  # noqa: BLE001
-                    pass
-
-        # Locations are self-contained neutral places — no cast remapping needed.
-        locations = []
-        name_to_loc: dict[str, str] = {}
-        for l in draft.get("locations", []) or []:
-            lid = l.get("id")
-            locations.append({
-                "id": lid, "name": l.get("name", lid),
-                "description": l.get("description", ""),
-                "background_prompt": l.get("background_prompt", ""),
-                "background": l.get("background"),
-            })
-            if l.get("name"):
-                name_to_loc[l["name"].lower()] = lid
-
-        # Persist the storyboard; link each beat's place to a location id.
-        # New beats include emotional_core, hook, and scene_prompt from the enriched format.
-        board = draft.get("storyboard") or {}
-        beats = []
-        for b in board.get("beats", []) or []:
-            loc = (b.get("location") or "")
-            beat: dict = {
-                "title": b.get("title", ""), "summary": b.get("summary", ""),
-                "location": name_to_loc.get(loc.lower(), loc),
-                "characters": b.get("characters", []),
-            }
-            # Preserve enriched fields if present (new 7-field format).
-            if b.get("emotional_core"):
-                beat["emotional_core"] = b["emotional_core"]
-            if b.get("hook"):
-                beat["hook"] = b["hook"]
-            if b.get("scene_prompt"):
-                beat["scene_prompt"] = b["scene_prompt"]
-            beats.append(beat)
-        storyboard = {"heart": board.get("heart", ""), "logline": board.get("logline", ""), "beats": beats}
-
-        # Validate arcs if provided.
-        from ..config.schema import Arc as ArcModel
-        arcs_raw = draft.get("arcs") or []
-        arcs_validated = []
-        for arc_dict in arcs_raw:
-            if isinstance(arc_dict, dict):
-                try:
-                    arcs_validated.append(ArcModel(**arc_dict).model_dump())
-                except Exception:  # noqa: BLE001
-                    arcs_validated.append(arc_dict)
-
-        story = {
-            "name": name, "premise": draft.get("premise", ""), "tone": draft.get("tone", ""),
-            "themes": draft.get("themes", []), "storyboard": storyboard, "cast": cast,
-            "lorebook": draft.get("lorebook") or {}, "locations": locations,
-            "start": draft.get("start"), "background": draft.get("background"),
-            "fields": {"source_character": primary_key} if primary_key else {},
-            "intended_ending": draft.get("intended_ending", ""),
-            "arcs": arcs_validated,
-        }
-        try:
-            Story(**story)  # validate (start ∈ locations, cast ∈ characters)
-            ctx.story_dir().mkdir(parents=True, exist_ok=True)
-            (ctx.story_dir() / f"{skey}.yaml").write_text(
-                yaml.safe_dump(story, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            ctx.reload_settings()
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
-        return {"ok": True, "key": skey, "created_characters": created}
+    # (The server-side wizard DRAFT store was removed — the genesis cast-queue draft is client-held,
+    # and stories persist as one <key>.db each. See loom/stories/story_db.py + [[per-story-database]].)
 
     @app.get("/api/stories")
     def list_stories() -> list:
         out = []
         for k, st in ctx.base_settings.stories.items():
-            f = ctx.story_dir() / f"{k}.yaml"
+            f = ctx.story_dir() / f"{k}.db"
             mtime = f.stat().st_mtime if f.is_file() else 0.0
             out.append({"key": k, "name": st.name, "premise": st.premise, "tone": st.tone,
                         "themes": st.themes, "locations": len(st.locations), "start": st.start,
@@ -2419,20 +2628,6 @@ def register(app, ctx):
         out.sort(key=lambda s: s["_mtime"], reverse=True)  # newest first
         for s in out:
             s.pop("_mtime", None)
-        # Append in-progress drafts (newest first).
-        drafts = _drafts_dir()
-        if drafts.is_dir():
-            draft_list = []
-            for p in drafts.glob("*.json"):
-                try:
-                    d = json.loads(p.read_text(encoding="utf-8"))
-                    draft_list.append({**d, "draft": True, "_mtime": p.stat().st_mtime})
-                except Exception:
-                    pass
-            draft_list.sort(key=lambda x: x.get("_mtime", 0), reverse=True)
-            for d in draft_list:
-                d.pop("_mtime", None)
-            out = draft_list + out
         return out
 
     @app.get("/api/stories/{key}")
@@ -2444,37 +2639,34 @@ def register(app, ctx):
 
     @app.put("/api/stories/{key}")
     def update_story(key: str, body: dict):
-        """Edit a saved story in place (iterate). Updates only the fields sent;
-        cast members are existing character keys, so no NPCs are re-created."""
-        from ..config.schema import Story
-
-        st = ctx.base_settings.stories.get(key)
-        if st is None:
+        """Edit a saved story in place (iterate). Updates only the fields sent; cast members are
+        existing character keys, so no NPCs are re-created. Routed through update_story_fields so it
+        lands in the story's DB (or legacy YAML) + validates."""
+        if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        data = st.model_dump()
-        for f in ("name", "premise", "tone", "themes", "storyboard", "cast",
-                  "lorebook", "locations", "places", "start", "background", "fields",
-                  "intended_ending", "arcs", "relationships", "connections", "default_personas",
-                  "recent_window"):
-            if f in (body or {}):
-                data[f] = body[f]
+        fields = {f: body[f] for f in (
+            "name", "type", "premise", "tone", "themes", "storyboard", "cast",
+            "lorebook", "locations", "places", "start", "background", "fields",
+            "arcs", "chapters", "scenes", "features", "start_scene",
+            "relationships", "connections", "default_personas", "recent_window")
+            if f in (body or {})}
         try:
-            Story(**data)
-            safe = re.sub(r"[^\w\-]+", "", key)
-            (ctx.story_dir() / f"{safe}.yaml").write_text(
-                yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            ctx.reload_settings()
+            ctx.update_story_fields(key, fields)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
         return {"ok": True, "key": key}
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
+        from .story_db import delete_db
         safe = re.sub(r"[^\w\-]+", "", key)
-        p = ctx.story_dir() / f"{safe}.yaml"
-        if not p.is_file():
+        yaml_p = ctx.story_dir() / f"{safe}.yaml"
+        db_p = ctx.story_dir() / f"{safe}.db"        # a DB-backed story (embeds its characters)
+        if not yaml_p.is_file() and not db_p.is_file():
             return JSONResponse({"error": "no such story"}, status_code=404)
-        p.unlink()
+        if yaml_p.is_file():
+            yaml_p.unlink()
+        delete_db(db_p)                              # also drops the embedded characters
         ctx.reload_settings()
         removed = ctx.prune_orphan_characters()  # cascade: drop the now-storyless generated cast
         return {"ok": True, "removed_characters": removed}
@@ -2576,12 +2768,7 @@ def register(app, ctx):
             for i, npc in enumerate(npcs):
                 nk = ctx.write_npc(npc, story_key=key, base_prompt=bps.get(str(i), ""))
                 cast.append({"character": nk, "primary": False}); created.append(nk)
-            safe = re.sub(r"[^\w\-]+", "", key)
-            path = ctx.story_dir() / f"{safe}.yaml"
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            data["cast"] = cast
-            path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            ctx.reload_settings()
+            ctx.update_story_fields(key, {"cast": cast})   # DB-backed or YAML — routed + validated
             keep = {source, *created}
             cdir = ctx.char_dir()
             # Sweep EVERY character bound to THIS story that isn't part of the new cast — not just the
@@ -2896,6 +3083,39 @@ def register(app, ctx):
         _state_block = _SE.render_state(world_state)
         if _state_block:
             system = system + "\n\n" + _state_block
+
+        # RELATIONSHIP PROJECTION: inject ONLY the web edges among characters on stage or just
+        # mentioned — never the whole web every turn (context economy + perspectival). "Mentioned" =
+        # a cast name in the recent transcript. Opening / nobody named → the whole small web. For a
+        # DB-backed story the relevant edges are PULLED by an INDEXED query (relationships_for) keyed
+        # on the focus set, instead of scanning the full list. See story_db.py + GENESIS.md §8.
+        from . import story_db as _SDB
+        from .genesis import project_web
+        _hay = (transcript or "").lower()
+        def _mentioned(nm: str) -> bool:
+            toks = [t for t in re.split(r"\s+", (nm or "").lower()) if len(t) > 2]
+            return any(re.search(rf"\b{re.escape(t)}\b", _hay) for t in toks)
+        _focus = {m.character for m in st.cast
+                  if _mentioned(getattr(ctx.base_settings.characters.get(m.character), "name", "") or "")}
+        if not _focus:
+            _focus = {m.character for m in st.cast}          # opening: small web, inject all
+        _db = ctx._story_db(key)
+        _relset = (_SDB.relationships_for(_db, _focus) if _db is not None
+                   else [r.model_dump() for r in st.relationships])
+        if _relset:
+            _proj = project_web(_relset, _focus)
+            if _proj:
+                _plines = []
+                for _k, _es in _proj.items():
+                    _txt = "; ".join(
+                        f"{'→' if e['outward'] else '←'} {_cname(e['other'])}"
+                        + (f" ({e['nature']})" if e['nature'] else "")
+                        + (f": {e['dynamic'] or e['stance']}" if (e['dynamic'] or e['stance']) else "")
+                        for e in _es)
+                    _plines.append(f"- {_cname(_k)} {_txt}")
+                system += ("\n\nRELATIONSHIPS (only those on stage or just mentioned — honor these "
+                           "dynamics in how they speak and act toward each other):\n" + "\n".join(_plines))
+
         system = system + (
             "\n\nAlso report `state_deltas`: a list of update objects for what changed THIS turn. "
             "Each object has an `op` and ONLY the fields that op needs; set unused fields to \"\" or []. "
@@ -3022,6 +3242,26 @@ def register(app, ctx):
             "guard": {"tripped": guarded.get("tripped"), "used_fallback": guarded.get("used_fallback")},
         }
 
+    @app.post("/api/stories/{key}/dream")
+    def story_dream(key: str, body: dict):
+        """The storymaster's FEVER-DREAM. Reads the on-stage cast's hidden psychology (want/lie/wound/
+        secret) + bonds + recent events and returns ONE foreboding, oblique dream-portent (NOT options,
+        NOT a recap). This is the DM's conflict signal delivered as a dream — fired primarily when the
+        player SLEEPS (see consolidate_on_rest), exposed here for a deliberate rest/dream. Pure read.
+        Body: { sid?, present?[keys], you? } → { dream }."""
+        from ..server.services.story_sessions import load_session
+        from . import state_engine as _SE
+        from . import stage_tools as _ST
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        ws = _SE.world_of((load_session(ctx.root, sid) or {}).get("state"))
+        dream = _ST.generate_dream(ctx, key, ws, present=body.get("present"), you=(body.get("you") or "").strip())
+        return {"dream": dream}
+
     @app.post("/api/stories/{key}/plan-wardrobe")
     async def story_plan_wardrobe(key: str, body: dict):
         """Plan one cast character's wardrobe (outfits) + story-derived expression prompts,
@@ -3054,133 +3294,6 @@ def register(app, ctx):
             return {"character": char_key, **plan}
 
         job = _start_stream_job("wardrobe", "Plan wardrobe", ch.name,
-                                f"stories/{key}/cast", work)
-        return {"job": job.id}
-
-    @app.post("/api/stories/{key}/plan-wardrobe-all")
-    async def story_plan_wardrobe_all(key: str, body: dict):
-        """Plan + SAVE (replace) wardrobe for ALL cast members via scene-based reasoning.
-
-        One LLM call per location, covering all characters present. Outfits are only generated
-        for major story events that genuinely warrant a costume change.
-        Plans only — renders no sprites; the user renders those per-character afterward.
-        Returns {job}."""
-        from .pipeline import plan_story_wardrobe as _plan_story_wardrobe
-        from .pipeline.wardrobe import compose_outfit_prompt as _compose_outfit_prompt
-
-        st = ctx.base_settings.stories.get(key)
-        if st is None:
-            return JSONResponse({"error": "no such story"}, status_code=404)
-        provider, systems = ctx.builder_ctx(body or {}, "wardrobe")
-        if provider is None:
-            return JSONResponse({"error": systems}, status_code=400)
-        story = st.model_dump()
-
-        # Build name→key mapping and cast detail list for the scene planner.
-        name_to_key: dict[str, str] = {}
-        cast_details: list[dict] = []
-        for m in st.cast:
-            ch = ctx.base_settings.characters.get(m.character)
-            if ch is None:
-                continue
-            name_to_key[ch.name.lower()] = m.character
-            cast_details.append({
-                "name": ch.name,
-                "persona": ch.system or "",
-                "appearance": (ch.fields or {}).get("appearance", ""),
-                "key": m.character,
-            })
-
-        def work(emit, cancelled):
-            emit({"type": "phase", "label": "Planning scene wardrobes…"})
-            scene_plans = _plan_story_wardrobe(provider, story=story, cast=cast_details,
-                                               systems=systems, on_event=emit)
-
-            # Flatten all outfits and tag with resolved character key.
-            all_outfits: list[dict] = []
-            for scene in scene_plans:
-                for o in scene.get("outfits") or []:
-                    char_name = (o.get("character") or "").lower()
-                    char_key = name_to_key.get(char_name)
-                    if not char_key:
-                        # Fuzzy fallback: find the closest name.
-                        char_key = next(
-                            (k for n, k in name_to_key.items()
-                             if char_name and (char_name in n or n in char_name)),
-                            None,
-                        )
-                    if char_key is None:
-                        continue
-                    char = ctx.base_settings.characters.get(char_key)
-                    all_outfits.append({
-                        **o,
-                        "name": o.get("outfit_name") or o.get("name") or "Outfit",
-                        "_char_key": char_key,
-                        "_persona": (char.system or "") if char else "",
-                        "_appearance": ((char.fields or {}).get("appearance", "")) if char else "",
-                    })
-
-            if not all_outfits:
-                emit({"type": "phase",
-                      "label": "No outfit changes needed — no major events warrant new attire."})
-                return {"ok": True, "planned": 0}
-
-            # Refine every outfit into unified prose in parallel.
-            emit({"type": "phase", "label": f"Refining {len(all_outfits)} outfits…"})
-
-            from concurrent.futures import ThreadPoolExecutor
-
-            def _refine(o):
-                try:
-                    r = _compose_outfit_prompt(
-                        provider, o["_persona"], o["_appearance"],
-                        o.get("name", ""), o.get("concept") or "",
-                    )
-                    if r.get("attire"):
-                        o["attire_prompt"] = r["attire"]
-                        o["unified"] = r.get("unified", False)
-                except Exception:  # noqa: BLE001
-                    pass
-                emit({"type": "item", "name": o.get("name", "outfit"),
-                      "text": o.get("attire_prompt") or o.get("concept", "")})
-                return o
-
-            with ThreadPoolExecutor(max_workers=min(len(all_outfits), 8)) as ex:
-                refined = list(ex.map(_refine, all_outfits))
-
-            if cancelled():
-                return {"ok": True, "planned": 0}
-
-            # Group by character key and apply to each manifest.
-            by_char: dict[str, list[dict]] = {}
-            for o in refined:
-                by_char.setdefault(o["_char_key"], []).append(o)
-
-            emit({"type": "phase", "label": "Saving wardrobes…"})
-            planned = 0
-            for char_key, outfits in by_char.items():
-                if cancelled():
-                    break
-                ch = ctx.base_settings.characters.get(char_key)
-                name = ch.name if ch else char_key
-                emit({"type": "phase", "label": f"Applying {name}'s wardrobe"})
-                try:
-                    # Preserve expressions/affect that were seeded at character-extraction time —
-                    # replace=True would normally clear them, so we re-pass them explicitly.
-                    cur = ctx.portrait_manifest(char_key)
-                    manifest_body: dict = {"outfits": outfits, "replace": True}
-                    if cur.get("expression_prompts"):
-                        manifest_body["expressions"] = cur["expression_prompts"]
-                    if isinstance(cur.get("affect"), dict) and cur["affect"].get("range"):
-                        manifest_body["affect"] = cur["affect"]
-                    _apply_manifest(ctx, char_key, manifest_body, provider=provider)
-                    planned += 1
-                    emit({"type": "item", "name": name, "text": f"{len(outfits)} outfits"})
-                except Exception as exc:  # noqa: BLE001
-                    emit({"type": "phase", "label": f"{name} skipped ({exc})"})
-            return {"ok": True, "planned": planned}
-
-        job = _start_stream_job("wardrobe", "Plan all wardrobes", st.name,
                                 f"stories/{key}/cast", work)
         return {"job": job.id}
 
@@ -3234,10 +3347,8 @@ def register(app, ctx):
                                         systems=(_bp_cfg.get("systems") or {}))
             base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
             height_cm = (comp.get("features") or {}).get("height_cm") if isinstance(comp, dict) else None
-            # 3. Persist the rewritten card (name / persona / role / appearance + base_prompt + height).
-            safe = re.sub(r"[^\w\-]+", "", char_key)
-            path = ctx.char_dir() / f"{safe}.yaml"
-            data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            # 3. Persist the rewritten card (routes to the owning story DB if embedded, else global YAML).
+            data = ctx._read_character_data(char_key) or {}
             data["name"] = revised["name"] or data.get("name") or char_key
             data["system"] = revised["persona"]
             data["fields"] = {**(data.get("fields") or {}), "role": revised["role"],
@@ -3247,10 +3358,7 @@ def register(app, ctx):
                     data["fields"]["height_cm"] = int(height_cm)
             except (TypeError, ValueError):
                 pass
-            from ..config.schema import Character
-            Character(**data)  # validate
-            path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-            ctx.reload_settings()
+            ctx._write_character_data(char_key, data)
             emit({"type": "item", "name": revised["name"], "text": base_prompt or revised["appearance"]})
             if cancelled():
                 return {"cancelled": True}
@@ -3352,15 +3460,12 @@ def register(app, ctx):
         prompt = (res.text or "").strip().strip("`").strip().strip('"').strip()
         if not prompt:
             return JSONResponse({"error": "model returned nothing"}, status_code=500)
-        # Save onto the story.
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = ctx.story_dir() / f"{safe}.yaml"
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        # Save onto the story (DB-backed or legacy YAML — routed).
+        data = ctx._read_story_data(key)
         for l in data.get("locations", []):
             if l.get("id") == loc:
                 l["background_prompt"] = prompt
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        ctx.reload_settings()
+        ctx._write_story_data(key, data)
         return {"prompt": prompt}
 
     @app.get("/api/stories/{key}/bg/{file}")
@@ -3459,13 +3564,10 @@ def register(app, ctx):
         fname = f"scene_{re.sub(r'[^a-z0-9_]+', '', sid.lower())}.png"
         (d / fname).write_bytes(png)
         url = f"/api/stories/{key}/bg/{fname}"
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = ctx.story_dir() / f"{safe}.yaml"
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = ctx._read_story_data(key)
         for p in data.get("places", []):
             for s in p.get("scenes", []):
                 if s.get("id") == sid:
                     s["background"] = url
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        ctx.reload_settings()
+        ctx._write_story_data(key, data)
         return {"ok": True, "url": url}

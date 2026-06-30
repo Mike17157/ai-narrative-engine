@@ -23,8 +23,8 @@
   .zoom {
     position: absolute; top: 6px; right: 6px; padding: 2px 7px; font-size: 13px; line-height: 1;
     border-radius: 7px; background: rgba(20, 24, 34, .7); border: 1px solid var(--border); color: #fff;
-    box-shadow: none; opacity: 0; transition: opacity .12s;
+ opacity: 0; transition: opacity .12s;
   }
   .zwrap:hover .zoom { opacity: 1; }
-  .zoom:hover { background: rgba(20, 24, 34, .92); filter: none; }
+  .zoom:hover { background: rgba(20, 24, 34, .92); }
 </style>

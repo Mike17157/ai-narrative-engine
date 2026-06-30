@@ -188,6 +188,152 @@ models:
       timeout_s: 600
 
   # --------------------------------------------------------------------------- #
+  # Krea2 — Gemma-optimized prompt pipeline. A built-in TextGenerate node runs the
+  # local uncensored Gemma LLM (text_encoders/gemma-4-E4B-it-ultra-uncensored-
+  # heretic-fp8) over the raw description and emits one optimized natural-language
+  # image prompt; that prompt feeds the render. Loom injects the description at the
+  # {{image}} token inside TextGenerate.prompt (node 21), so the instruction stays
+  # baked in the workflow. The instruction prompt is tuned for Gemma's chat
+  # template (use_default_template=false, explicit <start_of_turn> turns).
+  #
+  # RENDER BRANCH: currently Flux Klein (present + proven). The real Krea2 turbo
+  # weights aren't on disk yet — when downloaded, swap three model names in
+  # workflows/krea2_t2i_api.json:
+  #   node 1 UNETLoader.unet_name -> krea2/krea2_turbo_bf16.safetensors
+  #   node 2 -> CLIPLoader clip_name=qwen3vl_4b_bf16.safetensors type=qwen_image
+  #   node 3 VAELoader.vae_name  -> qwen_image_vae.safetensors  (already present)
+  #   (add LoraLoaderModelOnly krea2_turbo_lora_rank_64_bf16 + drop to ~8 steps)
+  # The Gemma front-end (nodes 20/21) is model-agnostic and stays as-is.
+  # --------------------------------------------------------------------------- #
+  krea2:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_t2i_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"         # SaveImage
+      timeout_s: 600
+
+  # --------------------------------------------------------------------------- #
+  # krea2_turbo — the REAL Krea2 Turbo (Qwen-Image arch), NVFP4 quant for Blackwell.
+  # VERIFIED end-to-end: photoreal 1024² render in ~27s on the RTX 5070. Runs on the
+  # Loom-managed ComfyUI 0.26 (~/ComfyUI-latest; user.yaml comfyui.main_py points there) —
+  # 0.26 is required for the krea2 arch / comfy_quant NVFP4 / krea2 clip type (the Desktop
+  # app's 0.22.3 can't load it). Models (all present): diffusion_models/
+  # krea2TurboOfficialComfy_krea2TurboNvfp4 + text_encoders/qwen3vl_4b_fp8_scaled
+  # (type=krea2) + vae/qwen_image_vae. Graph mirrors ComfyUI's official
+  # image_krea2_turbo_t2i template: KSampler 8 steps / CFG 1 / euler / simple,
+  # EmptyLatentImage, ConditioningZeroOut negative, + easy loraStack anchor.
+  # --------------------------------------------------------------------------- #
+  krea2_turbo:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_t2i_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"         # SaveImage
+      timeout_s: 600
+
+  # Krea2 Turbo role variants — all share the type=krea2 encoder (12-layer Qwen3-VL stack).
+  krea2_turbo_character:        # tall portrait + Inspyrenet cutout (also serves sprite)
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_cutout_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "22"         # easy imageRemBg (transparent cutout)
+      timeout_s: 600
+  krea2_turbo_sprite:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_cutout_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "22"
+      timeout_s: 600
+  krea2_turbo_scene:            # landscape, no cutout
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_scene_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"
+      timeout_s: 600
+  krea2_turbo_img2img:          # init image via LoadImage, denoise 0.6
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_img2img_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"
+      timeout_s: 600
+
+  # krea2_scene — landscape (1216×832), no cutout.
+  krea2_scene:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_scene_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"         # SaveImage
+      timeout_s: 600
+
+  # krea2_character / krea2_sprite — tall-portrait render +
+  # Inspyrenet cutout (transparent PNG). One file serves both: with the Klein
+  # stand-in they're identical (no FaceDetailer yet); split when real Krea2 turbo +
+  # a detailer land. Aspect is baked (832×1216) — Loom's apply_latent doesn't touch
+  # EmptyFlux2LatentImage, so the file owns the size.
+  krea2_character:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_cutout_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "22"         # easy imageRemBg (transparent cutout)
+      timeout_s: 600
+
+  krea2_sprite:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_cutout_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "22"         # easy imageRemBg (transparent cutout)
+      timeout_s: 600
+
+  # krea2_img2img — LoadImage→VAEEncode seeds
+  # the latent; SplitSigmasDenoise(0.6) sets img2img strength on the Flux2 custom
+  # sampler. Loom's find_load_image_node feeds the source image at node 14.
+  krea2_img2img:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_img2img_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"         # SaveImage
+      timeout_s: 600
+
+  # --------------------------------------------------------------------------- #
   # Wan — video-model family used as an image generator (reliable physics).
   #
   # ComfyUI-WanVideoWrapper pipeline (Wan 2.1 T2V 1.3B, fits the 12 GB 5070 with

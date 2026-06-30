@@ -106,7 +106,6 @@
     background: none;
     border: none;
     padding: 0;
-    box-shadow: none;
     font-size: 11px;
     color: var(--accent);
     cursor: pointer;
@@ -176,10 +175,9 @@
     border: 1px solid rgba(255, 255, 255, .14);
     color: #fff;
     backdrop-filter: blur(4px);
-    box-shadow: none;
     cursor: pointer;
     display: grid;
     place-items: center;
   }
-  .ccb:hover { background: rgba(30, 38, 60, .92); filter: none; }
+  .ccb:hover { background: rgba(30, 38, 60, .92); }
 </style>

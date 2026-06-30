@@ -10,9 +10,9 @@ defaults:
 comfyui:
   base_url: http://127.0.0.1:8188
   managed: true
-  python: null
-  main_py: null
-  base_directory: null
+  python: C:\Users\micha\Documents\ComfyUI\.venv\Scripts\python.exe
+  main_py: C:\Users\micha\ComfyUI-latest\main.py
+  base_directory: C:\Users\micha\Documents\ComfyUI
   startup_timeout_s: 180
   models_path: C:\Users\micha\Documents\ComfyUI\models
 runpod:

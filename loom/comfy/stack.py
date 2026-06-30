@@ -65,6 +65,11 @@ _CLIP_TYPES = ("CLIPLoader", "DualCLIPLoader", "TripleCLIPLoader",
 # hang off them — the master workflow's preset-style stack thus becomes the base
 # that Loom's resolved stack layers on top of.
 _LORA_APPLY_TYPES = ("easy loraStackApply",)
+# In-graph LLM prompt-optimizer nodes (e.g. the krea2 Gemma front-end) consume a
+# CLIP loaded purely to RUN the LLM — it never conditions the image. When a graph
+# has more than one CLIP loader, the LoRA chain must hang off the *render* CLIP
+# (the one feeding image conditioning), not this optimizer CLIP.
+_LLM_CLIP_CONSUMERS = ("TextGenerate", "TextGenerateLTX2Prompt")
 
 
 def resolve_stack(
@@ -130,6 +135,28 @@ def _find_checkpoint(graph: dict) -> str | None:
     return _find_first(graph, _CKPT_TYPES)
 
 
+def _find_render_clip(graph: dict) -> str | None:
+    """The CLIP loader that conditions the IMAGE — feeding a CLIPTextEncode etc.,
+    not an in-graph LLM prompt-optimizer (TextGenerate). With a single CLIP loader
+    this is just _find_first; the distinction only matters for graphs like krea2
+    that carry both a render encoder and a Gemma optimizer encoder."""
+    clips = [nid for nid, n in graph.items()
+             if isinstance(n, dict) and n.get("class_type") in _CLIP_TYPES]
+    if len(clips) <= 1:
+        return clips[0] if clips else None
+
+    def feeds_render(clip_id: str) -> bool:
+        for n in graph.values():
+            if not isinstance(n, dict) or n.get("class_type") in _LLM_CLIP_CONSUMERS:
+                continue
+            for v in (n.get("inputs") or {}).values():
+                if isinstance(v, list) and len(v) == 2 and str(v[0]) == str(clip_id):
+                    return True
+        return False
+
+    return next((nid for nid in clips if feeds_render(nid)), clips[0])
+
+
 def neutralize_baked_stack(graph: dict) -> dict:
     """Defuse the anima workflow's baked-in style presets so an EXTERNAL image preset can be
     injected cleanly (see ``AppContext._apply_image_preset``).
@@ -179,7 +206,7 @@ def inject_models(
     g = copy.deepcopy(graph)
     ckpt = _find_first(g, _CKPT_TYPES)
     unet = _find_first(g, _UNET_TYPES)
-    clip = _find_first(g, _CLIP_TYPES)
+    clip = _find_render_clip(g)
 
     # base override
     if checkpoint:

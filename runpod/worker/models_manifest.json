@@ -15,6 +15,11 @@
     "bytes": 7751111864
   },
   {
+    "local": "diffusion_models/krea2TurboOfficialComfy_krea2TurboNvfp4.safetensors",
+    "key": "models/diffusion_models/krea2TurboOfficialComfy_krea2TurboNvfp4.safetensors",
+    "bytes": 7673668288
+  },
+  {
     "local": "loras/748cmSDXL.safetensors",
     "key": "models/loras/748cmSDXL.safetensors",
     "bytes": 255025442
@@ -108,6 +113,11 @@
     "local": "sams/sam_vit_b_01ec64.pth",
     "key": "models/sams/sam_vit_b_01ec64.pth",
     "bytes": 375042383
+  },
+  {
+    "local": "text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+    "key": "models/text_encoders/qwen3vl_4b_fp8_scaled.safetensors",
+    "bytes": 5242467968
   },
   {
     "local": "text_encoders/qwen_3_06b_base.safetensors",

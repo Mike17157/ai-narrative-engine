@@ -342,7 +342,7 @@
 </section>
 
 <style>
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .card { margin-bottom: 16px; }
   .chead { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
   .chead h3 { margin: 0; font-size: 15px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
@@ -368,7 +368,7 @@
   .io { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; background: var(--bg); border: 1px solid var(--border-soft); border-radius: 10px; margin-bottom: 12px; }
   .io-row { display: flex; align-items: center; gap: 10px; }
   .io-row label { width: 110px; flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .io-row select { flex: 1; min-width: 0; padding: 6px 8px; font-size: 12.5px; border-radius: 7px; background: var(--panel); border: 1px solid var(--border); color: var(--text); }
+  .io-row select { flex: 1; min-width: 0; padding: 6px 8px; font-size: 12.5px; border-radius: 7px; background: var(--panel); }
   .io-note { font-size: 11.5px; color: var(--faint); flex: none; }
 
   .refs { display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; }
@@ -377,12 +377,12 @@
   .ref.rdrag { border-color: var(--accent); background: rgba(109,140,255,.1); }
   .rkind { font-size: 10.5px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; }
   .rname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
-  .ok { color: var(--good); font-size: 11.5px; justify-self: end; }
+  .ok { font-size: 11.5px; justify-self: end; }
   .bad { color: var(--bad); }
   .prog { color: var(--accent); font-size: 11.5px; justify-self: end; font-family: ui-monospace, monospace; }
   .actions { display: flex; gap: 6px; justify-self: end; }
-  .mini { font-size: 11px; padding: 3px 9px; border-radius: 6px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
-  .mini:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .mini { font-size: 11px; padding: 3px 9px; border-radius: 6px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; }
+  .mini:hover { color: var(--accent); border-color: var(--accent); }
   .drop-mini { display: inline-flex; align-items: center; }
 
   .foot { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; border-top: 1px solid var(--border-soft); padding-top: 12px; }

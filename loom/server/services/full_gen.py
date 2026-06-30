@@ -35,12 +35,10 @@ def render_reference(ctx, key: str) -> str:
     if not base_prompt:
         raise ValueError("base prompt generation failed")
 
-    safe = re.sub(r"[^\w\-]+", "", key)
-    ppath = ctx.char_dir() / f"{safe}.yaml"
-    if ppath.is_file():   # persist the base prompt on the card (matches full_gen)
-        data = yaml.safe_load(ppath.read_text(encoding="utf-8")) or {}
+    data = ctx._read_character_data(key)   # owning story DB (embedded) or global YAML
+    if data is not None:   # persist the base prompt on the card
         data.setdefault("fields", {})["base_prompt"] = base_prompt
-        ppath.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        ctx._write_character_data(key, data)
 
     iprov, mid = ctx.role_image_provider("base")
     if iprov is None:
@@ -88,9 +86,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     base_prompt = comp.get("prompt", "") if isinstance(comp, dict) else ""
     if not base_prompt:
         raise ValueError(comp.get("error", "base prompt generation failed") if isinstance(comp, dict) else "base prompt failed")
-    safe = re.sub(r"[^\w\-]+", "", key)
-    path = ctx.char_dir() / f"{safe}.yaml"
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {} if path.is_file() else {}
+    data = ctx._read_character_data(key) or {}   # owning story DB (embedded) or global YAML
     data.setdefault("fields", {})["base_prompt"] = base_prompt
     height_cm = (comp.get("features") or {}).get("height_cm")
     if height_cm:
@@ -98,9 +94,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
             data["fields"]["height_cm"] = int(height_cm)
         except (TypeError, ValueError):
             pass
-    Character(**data)
-    path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    ctx.reload_settings()
+    ctx._write_character_data(key, data)
     appearance = (ctx.base_settings.characters[key].fields or {}).get("appearance", "") or base_prompt
     emit({"type": "item", "name": "base prompt", "text": base_prompt})
     if cancelled():

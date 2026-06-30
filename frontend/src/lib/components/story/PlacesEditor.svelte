@@ -134,21 +134,21 @@
   .sbg { flex: 1; font-size: 11.5px; padding: 5px 9px; border-radius: 7px; background: var(--bg); border: 1px solid var(--border-soft); color: var(--muted); }
   .home-toggle { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: var(--muted); white-space: nowrap; cursor: pointer; }
   .home-toggle input { accent-color: var(--accent); }
-  .bgbtn { width: 28px; height: 28px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; }
-  .bgbtn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); filter: none; }
+  .bgbtn { width: 28px; height: 28px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); }
+  .bgbtn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
   .bgrow { display: flex; align-items: center; gap: 8px; }
   .bgthumb { width: 72px; height: 44px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); }
   .bgthumb.cand { border-color: var(--accent); }
-  .bguse { font-size: 11.5px; padding: 4px 10px; border-radius: 7px; background: var(--accent); color: #fff; border: none; box-shadow: none; }
-  .bgredo { width: 26px; height: 26px; padding: 0; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; }
+  .bguse { font-size: 11.5px; padding: 4px 10px; border-radius: 7px; background: var(--accent); color: #fff; border: none; }
+  .bgredo { width: 26px; height: 26px; padding: 0; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); }
   .bgerr { font-size: 11.5px; color: var(--bad); }
 
-  .rm { width: 30px; height: 30px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 8px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; }
+  .rm { width: 30px; height: 30px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 8px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); }
   .rm.sm { width: 26px; height: 26px; }
-  .rm:hover { color: var(--bad); border-color: rgba(255,122,122,.5); filter: none; }
+  .rm:hover { color: var(--bad); border-color: rgba(255,122,122,.5); }
 
-  .add-scene { align-self: flex-start; font-size: 12px; padding: 5px 11px; border-radius: 7px; background: none; border: 1px dashed var(--border); color: var(--muted); box-shadow: none; }
-  .add-scene:hover { border-color: var(--accent); color: var(--accent); filter: none; }
-  .add-place { align-self: flex-start; font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: 8px; background: var(--elev); border: 1px solid var(--border); color: var(--text); box-shadow: none; }
-  .add-place:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .add-scene { align-self: flex-start; font-size: 12px; padding: 5px 11px; border-radius: 7px; background: none; border: 1px dashed var(--border); color: var(--muted); }
+  .add-scene:hover { border-color: var(--accent); color: var(--accent); }
+  .add-place { align-self: flex-start; font-size: 12.5px; font-weight: 600; padding: 7px 14px; border-radius: 8px; background: var(--elev); border: 1px solid var(--border); color: var(--text); }
+  .add-place:hover { border-color: var(--accent); color: var(--accent); }
 </style>

@@ -5,7 +5,7 @@
 // a horizontal subnav bar (+ dropdowns for nodes with children).
 
 import { chars } from './characters.svelte.js';
-import { stories, storySteps } from './stories.svelte.js';
+import { stories } from './stories.svelte.js';
 import { app } from './app.svelte.js';
 
 export function charactersTree() {
@@ -50,35 +50,14 @@ export function settingsTree() {
   ];
 }
 
-// Stories subnav — 3 contextual modes:
-//   Mode A (library): Library · story list · Pipeline
-//   Mode B (wizard):  ← Library · Setup · Storyboard · Scenes · Cast  (step indicators)
-//   Mode C (story):   [Story Name ▾ picker] · Overview · Cast · ▶ Play
-//                     (Overview is the main page + edit-in-place editor + the unified graph canvas;
-//                      Iterate/workshop retired — its graph folded into the Overview. See [[overview-is-editor]])
+// Stories subnav — 2 contextual modes:
+//   Library (the list, genesis draft): NO subnav — the top-level "Stories" tab IS the library, so a lone
+//     "Library" sub-tab would be redundant. Returns [] → the layout renders no bar.
+//   Inside a story: [← Stories back-button] · [Story ▾ picker] · Structure · Cast · ▶ Play
 export function storiesTree(path = '') {
   const list = stories.list || [];
 
-  // Mode B — lean wizard: Premise · Characters · Outfits · Scenes (no spine/storyboard).
-  // Step ✓ marks are driven by ARTIFACT PRESENCE (storySteps), not the raw step index.
-  if (path.startsWith('/stories/new')) {
-    const st = Object.fromEntries(storySteps(stories.wizard).map((s) => [s.route, s.status]));
-    const STEPS = [
-      { id: 'wz-premise',    label: 'Premise',    href: '/stories/new/premise',    route: null },
-      { id: 'wz-characters', label: 'Characters', href: '/stories/new/characters', route: 'characters' },
-      { id: 'wz-outfits',    label: 'Outfits',    href: '/stories/new/outfits',    route: 'outfits' },
-      { id: 'wz-scenes',     label: 'Scenes',     href: '/stories/new/scenes',     route: 'scenes' },
-    ];
-    return [
-      { id: 'wz-back', label: '← Library', href: '/stories', match: 'exact' },
-      ...STEPS.map((s) => {
-        const done = s.route ? st[s.route] === 'done' : false;
-        return { id: s.id, label: done ? s.label + ' ✓' : s.label, href: s.href, done };
-      }),
-    ];
-  }
-
-  // Mode C — inside a specific story
+  // Inside a specific story
   const m = path.match(/^\/stories\/([^/?]+)/);
   const key = m?.[1];
   const active = key && key !== 'new' ? list.find((s) => s.key === key) : null;
@@ -87,20 +66,15 @@ export function storiesTree(path = '') {
     return [
       { id: 'all', label: '← Stories', href: '/stories', match: 'exact' },
       { id: 'story-picker', label: active.name || active.key, picker: true,
-        children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/overview` })) },
-      { id: `${key}-overview`,    label: 'Overview',    href: `/stories/${key}/overview` },
+        children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/structure` })) },
+      { id: `${key}-structure`,   label: 'Structure',   href: `/stories/${key}/structure` },
       { id: `${key}-cast`,        label: 'Cast',        href: `/stories/${key}/cast` },
       { id: `${key}-play`,        label: '▶ Play',      href: `/stories/${key}/play` },
     ];
   }
 
-  // Mode A — library: Finished gallery + a separate In progress tab for wizard drafts.
-  const draftCount = list.filter((s) => s.draft).length;
-  return [
-    { id: 'library', label: 'Library', href: '/stories', match: 'exact' },
-    { id: 'drafts', label: `In progress${draftCount ? ` (${draftCount})` : ''}`, href: '/stories/drafts' },
-    { id: 'charlab', label: 'Character Lab', href: '/stories/characters' },
-  ];
+  // Library (or the genesis draft) — no subnav.
+  return [];
 }
 
 // Library subnav — the two first-class entities you author: Presets (the model side:

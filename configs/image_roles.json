@@ -1,6 +1,6 @@
 {
-  "base": "anima_character",
-  "sprite": "anima_sprite",
-  "scene": "anima_scene",
-  "chat": "anima_txt2img"
+  "base": "krea2_turbo_character",
+  "sprite": "krea2_turbo_sprite",
+  "scene": "krea2_turbo_scene",
+  "chat": "krea2_turbo"
 }

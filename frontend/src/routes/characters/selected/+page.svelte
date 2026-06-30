@@ -312,10 +312,10 @@
 
   .vtabs { display: flex; gap: 4px; padding: 10px 22px 0; border-bottom: 1px solid var(--border-soft); }
   .vtabs button {
-    background: none; border: none; box-shadow: none; color: var(--muted); font-size: 13.5px; font-weight: 600;
+    background: none; border: none; color: var(--muted); font-size: 13.5px; font-weight: 600;
     padding: 9px 14px; border-radius: 9px 9px 0 0; border-bottom: 2px solid transparent;
   }
-  .vtabs button:hover { color: var(--text); filter: none; background: var(--elev); }
+  .vtabs button:hover { color: var(--text); background: var(--elev); }
   .vtabs button.on { color: var(--text); border-bottom-color: var(--accent); }
 
   .dbody { padding: 16px 22px 22px; }
@@ -358,8 +358,8 @@
   .home { border: 1px solid var(--border-soft); border-radius: 10px; padding: 9px 10px; margin-bottom: 8px; background: var(--elev); display: flex; flex-direction: column; gap: 6px; }
   .home-top { display: flex; gap: 7px; align-items: center; }
   .home-top .fld { flex: 1; }
-  .rmhome { width: 30px; height: 30px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 8px; background: var(--elev-2); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; }
-  .rmhome:hover { color: var(--bad); border-color: rgba(255,122,122,.5); filter: none; }
+  .rmhome { width: 30px; height: 30px; flex: none; padding: 0; display: grid; place-items: center; font-size: 12px; border-radius: 8px; background: var(--elev-2); border: 1px solid var(--border-soft); color: var(--muted); }
+  .rmhome:hover { color: var(--bad); border-color: rgba(255,122,122,.5); }
   .nohome { margin: 0 0 8px; }
   .prow { display: flex; align-items: center; gap: 12px; margin-top: 16px; }
   .pm { font-size: 12.5px; }
@@ -385,10 +385,10 @@
   .ik-avatar { color: #6d8cff; } .ik-reference { color: var(--accent); } .ik-card-link { color: var(--muted); }
   .idot.ok { color: var(--good); } .idot.ext { color: #ffd479; } .idot.bad { color: var(--bad); }
   .usebtn {
-    font-size: 11.5px; font-weight: 600; padding: 5px 8px; border-radius: 7px; box-shadow: none;
+    font-size: 11.5px; font-weight: 600; padding: 5px 8px; border-radius: 7px;
     background: var(--elev-2); border: 1px solid var(--border); color: var(--text);
   }
-  .usebtn:hover { border-color: var(--accent); color: var(--accent); filter: none; }
+  .usebtn:hover { border-color: var(--accent); color: var(--accent); }
 
   .wfpick .phint { margin: 0 0 8px; font-size: 12px; color: var(--muted); }
 

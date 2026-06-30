@@ -23,11 +23,10 @@
 <style>
   .tprompt { margin-bottom: 14px; }
   .tprompt label { display: block; font-size: 11px; color: var(--muted); margin: 0 0 5px; }
-  .tprompt textarea { width: 100%; resize: vertical; min-height: 56px; font: inherit; line-height: 1.45; }
+  .tprompt textarea { resize: vertical; min-height: 56px; line-height: 1.45; }
   .lo { color: var(--faint); }
 
   .card { background: var(--elev); border: 1px solid var(--border-soft); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
   .card h3 { margin: 0 0 10px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .3px; font-weight: 700; }
   .savemsg { font-size: 12.5px; margin-top: 12px; }
-  .ok { color: var(--good); } .err { color: var(--bad); }
 </style>

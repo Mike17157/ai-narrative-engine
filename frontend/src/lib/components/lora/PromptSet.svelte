@@ -41,10 +41,9 @@
 </div>
 
 <style>
-  .hint { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; }
+  .hint { margin-bottom: 10px; }
   textarea.prompts { width: 100%; height: 220px; resize: vertical; font: 13px/1.5 ui-monospace, monospace; }
   .helper { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
   .hlbl { font-size: 12.5px; color: var(--muted); white-space: nowrap; }
   .row { display: flex; gap: 10px; align-items: center; }
-  .ok { color: var(--good); } .err { color: var(--bad); }
 </style>

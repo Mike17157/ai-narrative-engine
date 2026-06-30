@@ -174,7 +174,7 @@
   .empty { margin: auto; text-align: center; color: var(--muted); }
   .empty p { margin: 0 0 4px; color: var(--text); font-size: 15px; }
   .empty a, .link { color: var(--accent); }
-  .link { background: none; border: 0; box-shadow: none; cursor: pointer; padding: 0; font: inherit; }
+  .link { background: none; border: 0; cursor: pointer; padding: 0; font: inherit; }
 
   .msg { display: flex; max-width: 86%; }
   .msg.user { align-self: flex-end; }

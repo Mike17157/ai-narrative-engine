@@ -200,10 +200,9 @@
 </section>
 
 <style>
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .card { margin-bottom: 16px; }
   .card h3 { margin: 0 0 12px; font-size: 15px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
-  .hint { font-size: 12.5px; color: var(--muted); }
   .warnsm { font-size: 11.5px; color: var(--muted); }
   .famhead { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--text);
              margin: 16px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border-soft); }
@@ -225,7 +224,7 @@
   .ach { flex: none; font-size: 9.5px; color: var(--faint); background: var(--panel); border: 1px solid var(--border-soft); border-radius: 4px; padding: 0 4px; }
   .cerr { flex: none; font-size: 10px; font-weight: 700; color: var(--bad); background: rgba(255,60,60,.12); border-radius: 4px; padding: 0 4px; }
   .types { display: grid; grid-template-columns: repeat(4, 1fr) 24px; gap: 3px; margin-top: auto; }
-  .tbtn { font-size: 10px; padding: 4px 0; border-radius: 6px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; white-space: nowrap; min-width: 0; overflow: hidden; }
+  .tbtn { font-size: 10px; padding: 4px 0; border-radius: 6px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--muted); white-space: nowrap; min-width: 0; overflow: hidden; }
   .tbtn:hover { color: var(--text); }
   .tbtn.on { color: #fff; border-color: transparent; }
   .tbtn.detail.on { background: #3a6ea5; } .tbtn.theme.on { background: #7a5bbf; } .tbtn.character.on { background: var(--accent); } .tbtn.skip.on { background: #555; }

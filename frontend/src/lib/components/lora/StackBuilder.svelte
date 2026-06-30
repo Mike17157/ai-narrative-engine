@@ -112,7 +112,7 @@
 </section>
 
 <style>
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .card { margin-bottom: 16px; }
   .card h3 { margin: 0 0 12px; font-size: 15px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
   .builder { display: grid; grid-template-columns: 280px 1fr; gap: 14px; }
@@ -122,7 +122,7 @@
   .loraitem {
     display: flex; align-items: center; gap: 7px; text-align: left; width: 100%; cursor: grab;
     background: var(--elev); border: 1px solid var(--border-soft); border-radius: 8px; padding: 6px 9px;
-    color: var(--text); font: inherit; box-shadow: none;
+    color: var(--text); font: inherit;
   }
   .loraitem:hover { border-color: var(--accent); }
   .loraitem:active { cursor: grabbing; }
@@ -147,7 +147,7 @@
   .mn { flex: 1; min-width: 0; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .member :global(.w) { width: 64px; flex: none; padding: 6px 8px; }
   .roles { display: flex; gap: 3px; flex: none; }
-  .rb { font-size: 10.5px; padding: 3px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--muted); box-shadow: none; }
+  .rb { font-size: 10.5px; padding: 3px 8px; border-radius: 6px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--muted); }
   .rb.identity.on { background: #2f8f5b; color: #fff; border-color: transparent; }
   .rb.state.on { background: var(--accent); color: #fff; border-color: transparent; }
   .mkeys { font-size: 12px; margin: 2px 0 6px 7px; width: calc(100% - 14px); }

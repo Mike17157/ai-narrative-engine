@@ -396,10 +396,17 @@ def register(app, ctx):
         trigger words, and the source page URL. Resolved via configs/civitai_loras.json, else by
         file hash. Cached server-side. `name` is the scan rel or LoraManager bare name."""
         from fastapi.concurrency import run_in_threadpool
-        from ...comfy.civitai import lora_metadata as _meta
+        from ...comfy.civitai import lora_metadata as _meta, local_trigger_words
         bd = ctx.comfy_base_dir()
         loras_dir = (bd / "models" / "loras") if bd else None
-        return await run_in_threadpool(_meta, ctx.root, name, loras_dir)
+        res = await run_in_threadpool(_meta, ctx.root, name, loras_dir)
+        # Civitai is the primary trigger source; fall back to the file's own metadata so
+        # local/private LoRAs still auto-suggest a trigger word.
+        if not res.get("trained_words"):
+            tw = await run_in_threadpool(local_trigger_words, loras_dir, name)
+            if tw:
+                res["trained_words"] = tw
+        return res
 
     @app.post("/api/loras")
     def save_loras(body: dict):

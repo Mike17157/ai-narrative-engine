@@ -161,21 +161,15 @@
   }
   function pick(p) { selId = p.id; snap = JSON.stringify(p); }
 
-  // The three AGENTS the system divides into — shown at the top so the structure is legible. Each
-  // backs a real preset (click to edit it below). Author = author-time; Narrative + Dungeon Master =
-  // play-time. They map 1:1 to the agent groups in the list.
-  const ROLES = [
-    { icon: '🛠', name: 'Author', preset: 'character_smith',
-      desc: 'Authors the story with you — every tool available; adopts a mode by what you say (its facets live in the story agent config).',
-      backs: 'Author agent' },
-    { icon: '🎭', name: 'Narrative', preset: 'free_chat',
-      desc: 'Plays the story out: narrates each turn, embodies the cast from their per-character lorebooks, tracks who is in the scene.',
-      backs: 'Narrative agent' },
-    { icon: '🌙', name: 'Dungeon Master', preset: 'stage_sim_director',
-      desc: 'Runs play: directs scenes and embodies actors (the simulation), and consolidates the aftermath when the player sleeps or dies (Storymaster).',
-      backs: 'Director · Actor · Storymaster' },
-  ];
-  function gotoRole(r) { const p = r.preset && presets.find((x) => x.id === r.preset); if (p) pick(p); }
+  // Icon + one-line blurb per agent group, shown inline on the list's group header. This folds
+  // in what the old (duplicated) role cards used to say. Author = author-time; Narrative +
+  // Dungeon Master = play-time. Groups without an entry just show their name.
+  const GROUP_META = {
+    'Author':         { icon: '🛠', desc: 'Authors the story with you — every tool; adopts a mode by what you say.' },
+    'Narrative':      { icon: '🎭', desc: 'Plays the story out — narrates each turn and embodies the cast.' },
+    'Dungeon Master': { icon: '🌙', desc: 'Runs play — directs scenes, embodies actors, consolidates the aftermath.' },
+    'Agents':         { icon: '🤖', desc: 'Your own story partners.' },
+  };
   const paramCount = (p) => Object.values(p?.params || {}).filter((v) => v !== '' && v != null).length;
 
   // Lorebooks this preset ATTACHES (composition: world info, sprites, functions). Stored on
@@ -253,18 +247,18 @@
   }
 </script>
 
-<div class="roles">
-  <div class="rhead">The three roles <span class="lo">— how the agent system fits together</span></div>
-  <div class="rcards">
-    {#each ROLES as r}
-      <button class="rcard" class:link={r.preset} onclick={() => gotoRole(r)} title={r.preset ? 'Edit this agent' : 'Runtime role (no preset)'}>
-        <div class="rtitle">{r.icon} {r.name}</div>
-        <div class="rdesc">{r.desc}</div>
-        <div class="rback">{r.preset ? '→ ' : ''}{r.backs}</div>
-      </button>
-    {/each}
+<header class="phead">
+  <div class="picon" aria-hidden="true">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M18 4a3 3 0 0 1 3 3v8a3 3 0 0 1 -3 3h-5l-5 3v-3h-2a3 3 0 0 1 -3 -3v-8a3 3 0 0 1 3 -3h12z" />
+      <path d="M11 7.5l1 3 3 1-3 1-1 3-1-3-3-1 3-1z" fill="currentColor" stroke="none" />
+    </svg>
   </div>
-</div>
+  <div class="ptitle">
+    <h1>Agents</h1>
+    <p class="sub">Each agent is a chat model + image workflow + lorebooks + tools. Pick one to talk to, or build your own.</p>
+  </div>
+</header>
 
 <div class="wrap">
   {#snippet presetRow(p)}
@@ -282,9 +276,11 @@
   {/snippet}
 
   <div class="list">
-    <div class="lhead">Agents <span class="lo">— a chat model + image workflow + lorebooks + tools</span></div>
     {#each chatGroups as grp (grp.group)}
-      {#if chatGroups.length > 1}<div class="pgroup">{grp.group}</div>{/if}
+      <div class="pgroup">
+        <span class="gname">{GROUP_META[grp.group]?.icon || ''} {grp.group}</span>
+        {#if GROUP_META[grp.group]?.desc}<span class="gdesc">{GROUP_META[grp.group].desc}</span>{/if}
+      </div>
       {#each grp.items as p (p.id)}{@render presetRow(p)}{/each}
     {/each}
     <button class="new" onclick={newPreset}>＋ New agent</button>
@@ -295,7 +291,7 @@
       </button>
       {#if showPipeline}
         {#each pipelineGroups as grp (grp.group)}
-          <div class="pgroup">{grp.group}</div>
+          <div class="pgroup"><span class="gname">{grp.group}</span></div>
           {#each grp.items as p (p.id)}{@render presetRow(p)}{/each}
         {/each}
       {/if}
@@ -306,13 +302,13 @@
     <div class="edit">
       <div class="erow">
         <label>Name</label>
-        <input class="fld" bind:value={sel.name} />
+        <input bind:value={sel.name} />
       </div>
       <div class="erow">
         <label>Group</label>
-        <input class="fld" list="preset-groups" bind:value={sel.group} placeholder="e.g. Story arc" title="Buckets presets in the list & picker" />
+        <input list="preset-groups" bind:value={sel.group} placeholder="e.g. Story arc" title="Buckets presets in the list & picker" />
         <label class="ordl" title="Sort order within the flow (lower = earlier)">order
-          <input class="fld onum" type="number" step="1" bind:value={sel.order} />
+          <input class="onum" type="number" step="1" bind:value={sel.order} />
         </label>
       </div>
       <datalist id="preset-groups">
@@ -320,7 +316,7 @@
       </datalist>
       <div class="erow col">
         <label>Description <span class="lo">— what this preset is for</span></label>
-        <textarea class="fld ta" rows="1" use:autosize={sel.description} bind:value={sel.description}></textarea>
+        <textarea class="ta" rows="1" use:autosize={sel.description} bind:value={sel.description}></textarea>
       </div>
       <div class="erow">
         <label>Connection</label>
@@ -329,7 +325,7 @@
         <button class="mng" class:on={manageConn} onclick={() => (manageConn = !manageConn)} title="Add / edit API connections">⚙ Manage</button>
       </div>
       {#if manageConn}
-        <div class="connmng">
+        <div class="card">
           <ConnectionPanel kind="text" />
         </div>
       {/if}
@@ -356,19 +352,6 @@
         </div>
       {/if}
 
-      <div class="erow col">
-        <label style="display:flex; align-items:center; gap:8px">Lorebooks <span class="lo">— attached to this preset (world info, sprites, functions/scripts)</span>
-          <button class="addb" onclick={editAttachedBooks}>＋ Attach</button>
-        </label>
-        {#if (sel.lorebooks || []).length}
-          <div class="chips">
-            {#each sel.lorebooks as id}<a class="chip" href="/library/lorebooks?book={id}">{bookName(id)}</a>{/each}
-          </div>
-        {:else}
-          <p class="lo">No lorebooks attached. Click <b>Attach</b> to compose this preset with world info, sprites or functions.</p>
-        {/if}
-      </div>
-
       <div class="erow">
         <label title="How the model is framed.">Address</label>
         <div class="seg">
@@ -379,7 +362,7 @@
       </div>
       <div class="erow col">
         <label>System prompt <span class="lo">— top of the prompt; standing rules (lorebooks add more on top)</span></label>
-        <textarea class="fld ta" rows="1" use:autosize={sel.system} bind:value={sel.system} placeholder="Optional standing instructions for this preset…"></textarea>
+        <textarea class="ta" rows="1" use:autosize={sel.system} bind:value={sel.system} placeholder="Optional standing instructions for this preset…"></textarea>
       </div>
       <button class="advtoggle adv-sec" onclick={() => (showAdvanced = !showAdvanced)}>
         {showAdvanced ? '▾' : '▸'} Advanced
@@ -388,15 +371,15 @@
       {#if showAdvanced}
         <div class="erow col">
           <label>Author's note <span class="lo">— injected near the end of history; strong steer on tone/direction</span></label>
-          <textarea class="fld ta" rows="1" use:autosize={sel.author_note} bind:value={sel.author_note} placeholder="e.g. Keep the pace tense and the prose sensory."></textarea>
+          <textarea class="ta" rows="1" use:autosize={sel.author_note} bind:value={sel.author_note} placeholder="e.g. Keep the pace tense and the prose sensory."></textarea>
           <label class="depth">depth
-            <input class="fld dnum" type="number" min="0" step="1" bind:value={sel.author_depth} title="How many messages from the end to inject the note" />
+            <input class="dnum" type="number" min="0" step="1" bind:value={sel.author_depth} title="How many messages from the end to inject the note" />
             <span class="lo">messages from the end</span>
           </label>
         </div>
         <div class="erow col">
           <label>Post-history instructions <span class="lo">— placed LAST, just before the reply; strongest steer</span></label>
-          <textarea class="fld ta" rows="1" use:autosize={sel.post_history} bind:value={sel.post_history} placeholder="e.g. Stay in character. Reply in 2–3 paragraphs, present tense."></textarea>
+          <textarea class="ta" rows="1" use:autosize={sel.post_history} bind:value={sel.post_history} placeholder="e.g. Stay in character. Reply in 2–3 paragraphs, present tense."></textarea>
         </div>
 
         <div class="adv">
@@ -405,12 +388,12 @@
             {#each PARAM_FIELDS as f (f.k)}
               <div class="pf">
                 <label title={f.hint}>{f.label}</label>
-                <input class="fld" type="number" step={f.step} min={f.min} max={f.max} placeholder={f.ph} bind:value={sel.params[f.k]} />
+                <input type="number" step={f.step} min={f.min} max={f.max} placeholder={f.ph} bind:value={sel.params[f.k]} />
               </div>
             {/each}
             <div class="pf">
               <label title="Map to OpenRouter reasoning:{'{'}effort{'}'} — only affects reasoning models">Reasoning</label>
-              <select class="fld" bind:value={sel.reasoning_effort}>
+              <select bind:value={sel.reasoning_effort}>
                 <option value="">default</option>
                 <option value="low">low</option>
                 <option value="medium">medium</option>
@@ -420,13 +403,26 @@
           </div>
           <div class="erow col" style="margin-top:9px">
             <label title="Up to 4 strings that immediately stop generation the moment the model produces them">Stop sequences <span class="lo">— comma-separated; cut the reply off when any is produced</span></label>
-            <input class="fld" bind:value={stopStr} onblur={commitStop} placeholder='e.g. \n\n, ###, "User:"' />
+            <input bind:value={stopStr} onblur={commitStop} placeholder='e.g. \n\n, ###, "User:"' />
             <p class="lo" style="margin:2px 0 0">Generation halts as soon as the model emits one of these — e.g. to stop it writing your side of the conversation (<code>User:</code>) or running past a separator. Up to 4.</p>
           </div>
         </div>
       {/if}
 
-      <div class="scripts">
+      <div class="zone">
+        <div class="bhd">Lorebooks <span class="lo">— attached: world info, sprites, functions/scripts</span>
+          <button class="addb" onclick={editAttachedBooks}>＋ Attach</button>
+        </div>
+        {#if (sel.lorebooks || []).length}
+          <div class="chips">
+            {#each sel.lorebooks as id}<a class="chip" href="/library/lorebooks?book={id}">{bookName(id)}</a>{/each}
+          </div>
+        {:else}
+          <p class="lo">No lorebooks attached. Click <b>Attach</b> to compose this preset with world info, sprites or functions.</p>
+        {/if}
+      </div>
+
+      <div class="zone">
         <div class="bhd">Scripts <span class="lo">— tools this preset can call; triggered by the keywords below</span>
           {#if presetScripts.length}<span class="cnt">{presetScripts.length}</span>{/if}
         </div>
@@ -455,7 +451,7 @@
         {/if}
       </div>
 
-      <div class="bound">
+      <div class="zone bound">
         <div class="bhd">Bound lorebooks <span class="lo">— functions reach this preset through these books</span>
           <button class="addb" onclick={editBoundBooks}>＋ Browse lorebooks</button>
         </div>
@@ -470,92 +466,82 @@
 
       <div class="acts">
         <span class="hint">Auto-saves</span>
-        {#if sel.id !== 'default'}<button class="ghost danger" onclick={deletePreset}>Delete</button>{/if}
+        {#if sel.id !== 'default'}<button class="del" onclick={deletePreset}>Delete</button>{/if}
       </div>
     </div>
   {/if}
 </div>
 
 <style>
-  .roles { max-width: 1100px; margin-bottom: 16px; }
-  .rhead { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 0 2px 8px; }
-  .rcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
-  .rcard { text-align: left; display: flex; flex-direction: column; gap: 5px; padding: 12px 14px; border-radius: 11px;
-    background: var(--bg); border: 1px solid var(--border-soft); color: var(--text); box-shadow: none; cursor: default; }
-  .rcard.link { cursor: pointer; }
-  .rcard.link:hover { border-color: var(--accent); background: var(--elev); filter: none; }
-  .rtitle { font-size: 13.5px; font-weight: 700; }
-  .rdesc { font-size: 12px; color: var(--muted); line-height: 1.5; }
-  .rback { font-size: 11px; color: var(--accent); margin-top: auto; }
-  @media (max-width: 760px) { .rcards { grid-template-columns: 1fr; } }
+  .phead { display: flex; align-items: center; gap: 14px; max-width: 1100px; margin-bottom: 18px; }
+  .picon { flex: none; width: 44px; height: 44px; border-radius: 12px; display: grid; place-items: center;
+    color: var(--accent); background: rgba(109,140,255,.12); border: 1px solid rgba(109,140,255,.25); }
+  .picon svg { width: 24px; height: 24px; }
+  .ptitle h1 { margin: 0; font-size: 20px; font-weight: 700; color: var(--text); }
+  .ptitle .sub { margin: 2px 0 0; font-size: 12.5px; color: var(--muted); line-height: 1.45; }
 
   .wrap { display: flex; gap: 16px; align-items: flex-start; max-width: 1100px; }
-  .list { width: 230px; flex: none; display: flex; flex-direction: column; gap: 4px; }
-  .lhead { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); padding: 4px 2px 6px; }
   .lo { color: var(--faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
-  .row { display: flex; align-items: center; gap: 8px; text-align: left; padding: 9px 11px; border-radius: 9px;
-    background: var(--bg); border: 1px solid var(--border-soft); color: var(--text); cursor: pointer; box-shadow: none; }
-  .row:hover { background: var(--elev); filter: none; }
+
+  /* ── list ── */
+  .list { width: 230px; flex: none; display: flex; flex-direction: column; gap: 4px; }
+  .pgroup { display: flex; flex-direction: column; gap: 1px; padding: 12px 4px 4px; }
+  .pgroup:first-child { padding-top: 2px; }
+  .gname { font-size: 11px; font-weight: 700; color: var(--muted); }
+  .gdesc { font-size: 10.5px; color: var(--faint); line-height: 1.35; }
+  .row { display: flex; align-items: center; gap: 8px; text-align: left; padding: 9px 11px;
+    border-radius: 9px; background: var(--bg); border: 1px solid var(--border-soft); }
+  .row:hover { background: var(--elev); border-color: var(--border); }
   .row.on { border-color: var(--accent); background: var(--elev-2); }
   .nm { flex: 1; font-size: 13px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tags { display: flex; align-items: center; gap: 5px; flex: none; }
-  .toolsf { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--faint); white-space: nowrap; cursor: pointer; }
-  .pgroup { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); padding: 10px 4px 3px; }
-  .pgroup:first-child { padding-top: 2px; }
-  .ordl { display: inline-flex; align-items: center; gap: 6px; flex: none; font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .onum { width: 60px; flex: none; padding: 6px 8px; font-size: 12.5px; }
   .mtag { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--faint);
     background: var(--elev); border-radius: 999px; padding: 1px 7px; }
   .mtag.assist { color: var(--accent); background: rgba(109,140,255,.14); }
   .mtag.rp { color: var(--good); background: rgba(100,210,130,.12); }
   .mtag.local { color: var(--warn); background: rgba(230,170,90,.14); }
   .mtag.img { background: none; padding: 0; font-size: 12px; }
-  .advtoggle { margin-top: 10px; padding: 7px 9px; border-radius: 8px; background: none; border: 0; box-shadow: none;
-    color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
-    text-align: left; cursor: pointer; }
-  .advtoggle:hover { color: var(--text); background: var(--elev); filter: none; }
   .btag { font-size: 9.5px; color: var(--faint); }
-  .new { margin-top: 4px; padding: 9px 11px; border-radius: 9px; background: none; border: 1px dashed var(--border);
-    color: var(--muted); font-size: 12.5px; cursor: pointer; box-shadow: none; }
-  .new:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .new { margin-top: 4px; background: none; border: 1px dashed var(--border); color: var(--muted); font-weight: 500; }
+  .new:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); background: none; }
+  .advtoggle { margin-top: 10px; background: none; border: 0; text-align: left;
+    color: var(--muted); font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; }
+  .advtoggle:hover { color: var(--text); background: var(--elev); border-color: transparent; }
 
+  /* ── editor (label-left rows; controls inherit the global input/button styling) ── */
   .edit { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
   .erow { display: flex; align-items: center; gap: 10px; }
   .erow.col { flex-direction: column; align-items: stretch; gap: 5px; }
-  .erow > label { width: 96px; flex: none; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .erow.col > label { width: auto; }
-  .erow .fld, .erow :global(.combo) { flex: 1; min-width: 0; }
-  /* Stacked (column) rows put fields below the label — they're full-width, not flex items,
-     so the textarea's own (autosized) height wins instead of being collapsed by flex. */
-  .erow.col .fld { flex: none; }
-  .fld { width: 100%; padding: 8px 10px; font-size: 13px; border-radius: 8px; background: var(--bg); border: 1px solid var(--border); color: var(--text); box-sizing: border-box; }
-  .fld:focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 2px var(--accent-glow); }
-  .ta { resize: vertical; line-height: 1.5; font-family: inherit; }
-
-  .depth { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin-top: 2px; }
-  .dnum { width: 64px; flex: none; padding: 5px 8px; font-size: 12.5px; }
-  .mng { flex: none; font-size: 11.5px; padding: 6px 11px; border-radius: 8px; background: var(--elev);
-    border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
-  .mng:hover, .mng.on { color: var(--accent); border-color: var(--accent); filter: none; }
-  .connmng { border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px; background: var(--bg); }
-  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
-  .segbtn { background: var(--bg); border: 0; box-shadow: none; color: var(--muted); font-size: 12px; font-weight: 600;
-    padding: 7px 14px; cursor: pointer; border-right: 1px solid var(--border-soft); }
+  .erow > label { width: 96px; flex: none; margin: 0; }
+  .erow.col > label, .ordl, .depth, .toolsf { width: auto; }
+  .erow > input, .erow :global(.combo) { flex: 1; min-width: 0; }
+  .ta { resize: vertical; }
+  .ordl, .depth { display: inline-flex; align-items: center; gap: 6px; flex: none; margin: 0; color: var(--muted); }
+  .onum { width: 60px; } .dnum { width: 64px; }
+  .toolsf { display: inline-flex; align-items: center; gap: 4px; flex: none; font-size: 11px; color: var(--faint); white-space: nowrap; }
+  .toolsf input { width: auto; }
+  .mng { flex: none; }
+  .mng.on, .mng.on:hover:not(:disabled) { border-color: var(--accent); }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; }
+  .segbtn { background: var(--bg); border: 0; border-radius: 0; color: var(--muted); font-size: 12px; font-weight: 600;
+    padding: 7px 14px; border-right: 1px solid var(--border-soft); }
   .segbtn:last-child { border-right: 0; }
-  .segbtn:hover { color: var(--text); background: var(--elev); filter: none; }
-  .segbtn.on { color: #fff; background: var(--accent); }
+  .segbtn:hover:not(:disabled) { color: var(--text); background: var(--elev); border-color: var(--border-soft); }
+  .segbtn.on, .segbtn.on:hover:not(:disabled) { color: #fff; background: var(--accent); }
 
   .adv { border-top: 1px solid var(--border-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 9px; }
-  .advhdr { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .cnt { font-size: 9.5px; font-weight: 700; color: var(--accent); background: rgba(109,140,255,.14); border-radius: 999px; padding: 1px 7px; text-transform: none; letter-spacing: 0; }
+  .advhdr, .bhd { display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+  .cnt { font-size: 9.5px; font-weight: 700; color: var(--accent); background: rgba(109,140,255,.14);
+    border-radius: 999px; padding: 1px 7px; text-transform: none; letter-spacing: 0; }
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px 12px; }
   .pf { display: flex; flex-direction: column; gap: 3px; }
-  .pf label { font-size: 10.5px; font-weight: 600; color: var(--muted); text-transform: none; letter-spacing: 0; }
-  .pf .fld { padding: 6px 8px; font-size: 12.5px; }
+  .pf label { margin: 0; font-size: 10.5px; font-weight: 600; text-transform: none; letter-spacing: 0; }
+  .pf input, .pf select { padding: 6px 8px; font-size: 12.5px; }
 
-  .scripts { border-top: 1px solid var(--border-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  /* ── tool / lorebook zones ── */
+  .zone { border-top: 1px solid var(--border-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 8px; }
+  .addb { margin-left: auto; }
   .scriptlist { display: flex; flex-direction: column; gap: 6px; }
   .script { border: 1px solid var(--border-soft); border-radius: 9px; padding: 8px 10px; background: var(--bg); display: flex; flex-direction: column; gap: 4px; }
   .srow { display: flex; align-items: center; gap: 8px; }
@@ -566,20 +552,12 @@
   .sdesc { font-size: 12.5px; color: var(--text); line-height: 1.4; }
   .strig { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; }
   .kw { font-size: 11px; color: var(--muted); background: var(--elev); border: 1px solid var(--border-soft); border-radius: 5px; padding: 1px 6px; }
-
-  .bound { border-top: 1px solid var(--border-soft); padding-top: 12px; display: flex; flex-direction: column; gap: 7px; }
-  .bhd { display: flex; align-items: center; gap: 10px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
-  .addb { margin-left: auto; font-size: 11.5px; text-transform: none; letter-spacing: 0; font-weight: 600;
-    padding: 4px 10px; border-radius: 7px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
-  .addb:hover { color: var(--accent); border-color: var(--accent); filter: none; }
   .chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: rgba(109,140,255,.1);
     border: 1px solid rgba(109,140,255,.25); color: var(--accent); text-decoration: none; }
   .chip:hover { background: rgba(109,140,255,.18); }
-  .bound a { color: var(--accent); }
 
   .acts { display: flex; align-items: center; gap: 12px; margin-top: 4px; }
-  .hint { font-size: 12px; color: var(--muted); }
-  .ghost { font-size: 12px; padding: 6px 12px; border-radius: 8px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; box-shadow: none; }
-  .danger:hover { color: var(--bad); border-color: var(--bad); filter: none; }
+  .del { color: var(--bad); }
+  .del:hover:not(:disabled) { color: var(--bad); border-color: var(--bad); }
 </style>

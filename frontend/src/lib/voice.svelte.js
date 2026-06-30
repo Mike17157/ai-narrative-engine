@@ -1,8 +1,19 @@
 // Voice input for the agentic surfaces — a thin wrapper over the browser Web Speech API behind a
 // tiny interface so a local Whisper recognizer can swap in later without touching callers.
 // `voice` is reactive: components read voice.state / voice.partial to render the bubble live.
+import { stories } from '$lib/stories.svelte.js';
+import { chars } from '$lib/characters.svelte.js';
+
 const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 const SS = typeof window !== 'undefined' && window.speechSynthesis;
+
+// The active story's cast NAMES — fed to Whisper as a bias prompt so it stops mangling them.
+function sttHints() {
+  const st = stories.current;
+  if (!st?.cast?.length) return '';
+  const names = st.cast.map((m) => chars.list?.find((c) => c.key === m.character)?.name).filter(Boolean);
+  return names.join(', ').slice(0, 300);
+}
 
 export const voice = $state({
   supported: !!SR,
@@ -124,7 +135,8 @@ function startWhisper(onFinal) {
       let text = '';
       if (blob.size) {
         try {
-          const r = await fetch('/api/stt', { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
+          const r = await fetch('/api/stt?hints=' + encodeURIComponent(sttHints()),
+            { method: 'POST', headers: { 'Content-Type': blob.type }, body: blob });
           if (r.ok) text = ((await r.json()).text || '').trim();
         } catch { /* noop */ }
       }

@@ -26,10 +26,9 @@
 </section>
 
 <style>
-  .card { background: var(--panel); border: 1px solid var(--border-soft); border-radius: 14px; padding: 16px 18px; margin-bottom: 16px; }
+  .card { margin-bottom: 16px; }
   .card h3 { margin: 0 0 12px; font-size: 15px; }
   .sub { color: var(--faint); font-weight: 400; font-size: 12.5px; }
-  .hint { font-size: 12.5px; color: var(--muted); }
   .libhead, .librow { display: grid; grid-template-columns: 1fr 90px 70px 36px 1.2fr 32px; gap: 8px; align-items: center; }
   .libhead { font-size: 10.5px; text-transform: uppercase; letter-spacing: .3px; color: var(--faint); margin-bottom: 6px; }
   .librow { margin-bottom: 6px; }

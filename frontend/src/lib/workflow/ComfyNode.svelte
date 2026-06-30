@@ -166,9 +166,9 @@
   }
   .nt {
     width: 22px; height: 22px; padding: 0; display: grid; place-items: center; font-size: 12px; line-height: 1;
-    border-radius: 6px; box-shadow: none; border: 1px solid rgba(255, 255, 255, .18); background: rgba(20, 24, 34, .7); color: #fff;
+    border-radius: 6px; border: 1px solid rgba(255, 255, 255, .18); background: rgba(20, 24, 34, .7); color: #fff;
   }
-  .nt:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .nt:hover { color: var(--text); background: var(--elev-2); }
   .nt.on { color: #ffd479; border-color: rgba(255, 212, 121, .5); background: rgba(255, 212, 121, .14); }
   .nt.del:hover { color: var(--bad); border-color: rgba(255, 122, 122, .5); background: rgba(255, 122, 122, .14); }
   .dropbadge {
@@ -213,10 +213,10 @@
   .chk { margin-left: auto; width: auto; }
   .embchips { display: flex; flex-wrap: wrap; gap: 4px; }
   .emb {
-    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; box-shadow: none;
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
     border: 1px solid var(--border); background: var(--bg); color: var(--muted); font-family: ui-monospace, monospace;
   }
-  .emb:hover { color: var(--text); background: var(--elev-2); filter: none; }
+  .emb:hover { color: var(--text); background: var(--elev-2); }
   .emb.on { color: #0b0e14; background: var(--accent); border-color: transparent; }
   :global(.cnode .svelte-flow__handle) { width: 13px; height: 13px; border: 2px solid #0b0e14; }
 </style>

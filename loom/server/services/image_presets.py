@@ -33,8 +33,9 @@ def _default_image_preset() -> dict:
 
 
 def _clean_loras(raw) -> list[dict]:
-    """Normalise a LoRA stack: {name, weight:float}, drop blanks, dedupe by name last-wins,
-    preserve order. Matches inject_models / resolve_stack semantics."""
+    """Normalise a LoRA stack: {name, weight:float, trigger?:str}, drop blanks, dedupe by name
+    last-wins, preserve order. `trigger` (optional) is text appended to every prompt while this
+    LoRA is active — see AppContext._apply_image_preset. Matches inject_models semantics."""
     order: list[str] = []
     merged: dict[str, dict] = {}
     for lr in raw or []:
@@ -47,9 +48,13 @@ def _clean_loras(raw) -> list[dict]:
             weight = float(lr.get("weight", 0.8))
         except (TypeError, ValueError):
             weight = 0.8
+        entry = {"name": name, "weight": weight}
+        trigger = str(lr.get("trigger") or "").strip()
+        if trigger:
+            entry["trigger"] = trigger
         if name not in merged:
             order.append(name)
-        merged[name] = {"name": name, "weight": weight}
+        merged[name] = entry
     return [merged[n] for n in order]
 
 

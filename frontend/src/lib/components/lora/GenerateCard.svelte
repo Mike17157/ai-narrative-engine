@@ -62,7 +62,6 @@
 
 <style>
   .empty { padding: 24px 8px; }
-  .hint { font-size: 12.5px; color: var(--muted); }
   .row { display: flex; gap: 10px; align-items: center; }
   .rows { display: flex; flex-direction: column; gap: 10px; }
   .lrow { padding: 8px; border: 1px solid var(--border-soft); border-radius: var(--radius); }
@@ -77,11 +76,11 @@
     position: absolute; top: 5px; right: 5px; width: 26px; height: 26px; padding: 0;
     display: grid; place-items: center; font-size: 14px; line-height: 1; color: #fff;
     background: rgba(12, 14, 20, .62); border: 1px solid rgba(255, 255, 255, .18);
-    border-radius: 7px; box-shadow: none; opacity: 0; transform: translateY(-3px);
+    border-radius: 7px; opacity: 0; transform: translateY(-3px);
     transition: opacity .15s, transform .15s, background .15s; backdrop-filter: blur(4px);
   }
   .cell:hover .zoom { opacity: 1; transform: none; }
-  .cell .zoom:hover { background: rgba(20, 24, 34, .9); filter: none; }
+  .cell .zoom:hover { background: rgba(20, 24, 34, .9); }
   .cell .check {
     position: absolute; top: 5px; left: 5px; width: 22px; height: 22px; display: grid; place-items: center;
     font-size: 13px; font-weight: 800; color: #0b0e14; background: var(--accent);
@@ -93,5 +92,4 @@
   .cap { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 4px; }
   .saver { display: flex; gap: 10px; align-items: center; margin-top: 16px; position: sticky; bottom: 0; padding: 12px 0; background: var(--bg); border-top: 1px solid var(--border); }
   .saver input { width: 160px; }
-  .ok { color: var(--good); } .err { color: var(--bad); }
 </style>

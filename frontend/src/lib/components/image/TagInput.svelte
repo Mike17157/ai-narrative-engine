@@ -153,15 +153,15 @@
   /* not a canonical booru tag — fine, used as written. Neutral dashed, not an error. */
   .chip.unknown { border-style: dashed; border-color: var(--border); background: var(--elev); color: var(--muted); }
   .chip .arrow { font-style: normal; opacity: .7; font-size: 11px; margin-left: 2px; }
-  .chip .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 14px; box-shadow: none; }
+  .chip .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 14px; }
   .chip .x:hover { opacity: 1; }
   .brk { display: inline-flex; align-items: center; gap: 3px; font-size: 10px; font-weight: 700; letter-spacing: .5px;
     color: var(--accent); background: rgba(109,140,255,.10); border: 1px dashed rgba(109,140,255,.5);
     border-radius: 7px; padding: 2px 5px 2px 8px; }
-  .brk .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 13px; box-shadow: none; }
+  .brk .x { background: none; border: 0; color: inherit; opacity: .6; cursor: pointer; padding: 0 1px; font-size: 13px; }
   .brk .x:hover { opacity: 1; }
-  .entry { flex: 1; min-width: 120px; border: 0; background: none; padding: 2px; font-size: 12.5px; box-shadow: none; }
-  .entry:focus { box-shadow: none; outline: none; }
+  .entry { flex: 1; min-width: 120px; border: 0; background: none; padding: 2px; font-size: 12.5px; }
+  .entry:focus { outline: none; }
   .pop {
     position: absolute; z-index: 40; left: 0; right: 0; top: 100%; margin-top: 5px;
     background: var(--elev); border: 1px solid var(--border); border-radius: var(--radius);
@@ -177,7 +177,7 @@
   .bar { display: flex; align-items: center; gap: 10px; margin: 5px 1px 0; font-size: 11.5px; }
   .bar .free { color: var(--muted); } .bar .free .lo { color: var(--faint); }
   .bar .ok { color: #8fc7a0; }
-  .snap, .graph { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); box-shadow: none; }
+  .snap, .graph { font-size: 11px; padding: 3px 8px; border-radius: 7px; background: var(--elev-2); border: 1px solid var(--border); color: var(--muted); }
   .graph { margin-left: auto; }
-  .snap:hover, .graph:hover { color: var(--accent); border-color: var(--accent); filter: none; }
+  .snap:hover, .graph:hover { color: var(--accent); border-color: var(--accent); }
 </style>

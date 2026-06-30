@@ -13,7 +13,7 @@
   import { buildStoryGraph, ARC_COLORS } from '$lib/story_graph.js';
   import { buildRelationshipGraph, buildMapGraph } from '$lib/canvas_graph.js';
 
-  let { story, storyKey, cast = [], speaker = '', focus = '', relPulse = null,
+  let { story, storyKey, cast = [], speaker = '', focus = '', relPulse = null, layer = '',
         onSelectNode = () => {}, onSelectArc = () => {}, onSelectChar = () => {} } = $props();
 
   const nodeTypes = { beat: ArcBeatNode, arcGroup: ArcGroupNode, timelineHead: TimelineHeadNode,
@@ -72,7 +72,7 @@
     } catch (e) { if (k === seq) struct = { nodes: [], edges: [] }; }
     finally { if (k === seq) structBusy = false; }
   }
-  $effect(() => { if (story) rebuildStruct(story); });
+  $effect(() => { if (story && (!layer || layer === 'structure')) rebuildStruct(story); });
   function structMiniColor(node) {
     if (node.type === 'beat') return node.data?.arcColor || ARC_COLORS[0].label;
     if (node.type === 'arcGroup') return 'rgba(255,255,255,.06)';
@@ -87,6 +87,17 @@
   let map = $derived.by(() => buildMapGraph(story?.locations || [], story?.start));
 </script>
 
+{#if layer}
+  <div class="canvas">
+    {#if layer === 'relationships'}
+      <FlowGraph nodes={rel.nodes} edges={rel.edges} {nodeTypes} {edgeTypes} minimap={false} empty="No cast yet." />
+    {:else if layer === 'map'}
+      <FlowGraph nodes={map.nodes} edges={map.edges} {nodeTypes} minimap={false} empty="No locations yet — add some in the Document tab." />
+    {:else}
+      <FlowGraph nodes={struct.nodes} edges={struct.edges} {nodeTypes} busy={structBusy} minimapNodeColor={structMiniColor} empty="No structure yet." />
+    {/if}
+  </div>
+{:else}
 <div class="canvas">
   <div class="layers">
     {#each LAYERS as L, i (L.id)}
@@ -113,6 +124,7 @@
     </div>
   </div>
 </div>
+{/if}
 
 <style>
   .canvas { position: relative; height: 74vh; border-radius: 10px; overflow: hidden;
@@ -123,9 +135,9 @@
             background: color-mix(in srgb, var(--panel) 85%, transparent);
             border: 1px solid var(--border); box-shadow: 0 4px 14px rgba(0,0,0,.3); backdrop-filter: blur(6px); }
   .lbtn { display: inline-flex; align-items: center; gap: 6px; padding: 5px 11px; border-radius: 7px;
-          background: none; border: none; box-shadow: none; color: var(--muted); font-size: 12.5px;
+          background: none; border: none; color: var(--muted); font-size: 12.5px;
           font-weight: 600; cursor: pointer; }
-  .lbtn:hover { color: var(--text); background: var(--elev); filter: none; }
+  .lbtn:hover { color: var(--text); background: var(--elev); }
   .lbtn.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent); }
   .lbtn.auto { color: var(--faint); font-weight: 500; }
   .li { font-size: 14px; line-height: 1; }

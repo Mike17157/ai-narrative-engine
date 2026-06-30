@@ -10,6 +10,8 @@ import math
 import re
 from pathlib import Path
 
+from .agent_modes import MODES   # the agent's modes are hard-coded in CODE, not story_agent.json
+
 # Minimal safety-net defaults. The RICH config lives in configs/story_agent.json (the editable source);
 # these only keep the agent functional if that file is deleted.
 _DEFAULTS: dict = {
@@ -17,7 +19,7 @@ _DEFAULTS: dict = {
               "for a change, make it by calling the right tool. Always reply with something.",
     "tool_rules": "Fill every tool param using exact ids from the document; set all fields when adding.",
     "story_context_fields": ["title", "premise", "tone", "themes", "logline", "heart",
-                             "intended_ending", "arcs", "cast"],
+                             "arcs", "cast"],
     "craft": {"scope": "_craft", "k": 5, "section_anchors": {}},
     "psyche": {"scope": "_psyche", "k": 4},
     "tool_policy": {"all_tools_cap": 40, "attached_cap": 12},
@@ -58,6 +60,7 @@ def load_config(root: Path, *, fresh: bool = False) -> dict:
             cfg = _deep_merge(_DEFAULTS, data)
         except Exception:  # noqa: BLE001 — a malformed file falls back to defaults, never crashes
             cfg = dict(_DEFAULTS)
+    cfg["modes"] = dict(MODES)   # modes (persona + tool wiring) are CODE, not data — override any JSON
     _cache[key] = cfg
     return cfg
 

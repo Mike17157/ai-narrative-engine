@@ -355,20 +355,63 @@ class AppContext:
         return provider, mid
 
     def _apply_image_preset(self, provider, preset_id: str | None) -> None:
-        """Neutralize the workflow's baked LoRA styles, then inject the chosen image preset's
-        stack. `preset_id` None/"" → the global-default active preset; "none" → vanilla base."""
+        """Neutralize the workflow's baked LoRA styles, inject the chosen image preset's stack, and
+        gather LoRA trigger words → provider.prompt_suffix (appended to the positive conditioning at
+        render). Triggers come from BOTH the preset's LoRAs (explicit `trigger` field) AND any LoRAs
+        sitting in the workflow's own `easy loraStack` node (resolved from metadata). `preset_id`
+        None/"" → the global-default active preset; "none" → vanilla base."""
         from ..comfy.stack import inject_models, neutralize_baked_stack, resolve_lora_names
         from .services import image_presets as IP
 
         neutralize_baked_stack(provider.workflow)
         pid = preset_id or IP.load_image_presets(self.root).get("active")
         preset = IP.get_image_preset(self.root, pid)
-        if not preset or preset["id"] == "none" or not preset.get("loras"):
-            return                                  # vanilla base model (baked styles defused)
-        # Presets store LoraManager bare names; map them to real ComfyUI lora filenames.
-        loras = resolve_lora_names(list(preset["loras"]), self.available_loras())
-        provider.workflow = inject_models(
-            provider.workflow, preset.get("base_checkpoint") or None, loras)
+
+        triggers: list[str] = []
+        if preset and preset["id"] != "none" and preset.get("loras"):
+            # Presets store LoraManager bare names; map them to real ComfyUI lora filenames.
+            loras = resolve_lora_names(list(preset["loras"]), self.available_loras())
+            provider.workflow = inject_models(
+                provider.workflow, preset.get("base_checkpoint") or None, loras)
+            triggers += [t for lr in preset["loras"] if (t := str(lr.get("trigger") or "").strip())]
+        # LoRAs added straight to the workflow's easy loraStack node have no trigger field —
+        # resolve theirs from each file's metadata so they fire too.
+        triggers += self._workflow_lora_triggers(provider.workflow)
+        # Trigger words must appear in the prompt to fire — the provider appends them to the
+        # positive conditioning (a string suffix, so it works for single-stage AND Gemma-optimized
+        # krea2 workflows alike). De-duped, order preserved.
+        provider.prompt_suffix = ", ".join(dict.fromkeys(t for t in triggers if t))
+
+    def _workflow_lora_triggers(self, workflow: dict) -> list[str]:
+        """Trigger words for LoRAs sitting in the workflow's `easy loraStack` node(s), resolved
+        from each LoRA's metadata (Civitai trained words, else the file's own trigger phrase;
+        cached by lora_metadata). Skips stacks toggled off and empty slots; never raises."""
+        from ..comfy.civitai import lora_metadata, local_trigger_words
+        bd = self.comfy_base_dir()
+        loras_dir = (bd / "models" / "loras") if bd else None
+        out: list[str] = []
+        for node in (workflow or {}).values():
+            if not isinstance(node, dict) or node.get("class_type") != "easy loraStack":
+                continue
+            ins = node.get("inputs") or {}
+            if ins.get("toggle") is False:          # stack disabled → its LoRAs don't apply
+                continue
+            try:
+                num = min(max(int(ins.get("num_loras") or 10), 0), 10)
+            except (TypeError, ValueError):
+                num = 10
+            for k in range(1, num + 1):
+                name = str(ins.get(f"lora_{k}_name") or "").strip()
+                if not name or name == "None":
+                    continue
+                try:
+                    tw = (lora_metadata(self.root, name, loras_dir).get("trained_words")
+                          or local_trigger_words(loras_dir, name))
+                except Exception:                    # noqa: BLE001 — never break a render on lookup
+                    tw = None
+                if tw:
+                    out.append(", ".join(tw) if isinstance(tw, list) else str(tw))
+        return out
 
     _loras_cache: list | None = None
 
@@ -491,16 +534,12 @@ class AppContext:
                 systems=systems)
         except Exception as exc:  # noqa: BLE001
             return {"error": f"flesh failed: {exc}"}
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = self.char_dir() / f"{safe}.yaml"
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {} if path.is_file() else {}
+        data = self._read_character_data(key) or {}
         data["name"] = revised.get("name") or data.get("name") or ch.name
         data["system"] = revised.get("persona") or ch.system or ""
         data["fields"] = {**(data.get("fields") or {}), "role": revised.get("role") or fields.get("role", ""),
                           "appearance": revised.get("appearance") or fields.get("appearance", "")}
-        Character(**data)  # validate
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        self.reload_settings()
+        self._write_character_data(key, data)   # owning story DB (embedded) or global YAML
         return {"ok": True, "name": data["name"], "persona": data["system"],
                 "appearance": data["fields"]["appearance"], "role": data["fields"]["role"]}
 
@@ -727,16 +766,25 @@ class AppContext:
         grouped and hidden from global pickers. If `ref_from` is given, that character's
         reference image is copied across. `base_prompt` (from the shared ✨ composer) is stored
         as fields.base_prompt so the base image renders richly without a manual ✨ pass."""
+        from ..stories import story_db as SDB
         char_dir = self.char_dir()
         char_dir.mkdir(parents=True, exist_ok=True)
+        db = self._story_db(story_key) if story_key else None   # embed into a DB-backed story
+        taken = {p.stem for p in char_dir.glob("*.yaml")}
+        if db is not None:
+            taken |= set(SDB.character_keys(db))
         base = re.sub(r"[^a-z0-9]+", "_", (npc.get("name") or "npc").lower()).strip("_") or "npc"
         key, i = base, 2
-        while (char_dir / f"{key}.yaml").exists():
+        while key in taken:
             key, i = f"{base}_{i}", i + 1
         fields = {"appearance": npc.get("appearance", ""), "role": npc.get("role", ""),
                   "story": story_key, "_generated": True}
         if base_prompt:
             fields["base_prompt"] = base_prompt
+        # The portable core harness (relationship-first genesis) lives on the card — see GENESIS.md.
+        for hk in ("want", "lie", "wound", "secret"):
+            if npc.get(hk):
+                fields[hk] = npc[hk]
         try:                                              # numeric stature → sprite scaling (not a tag)
             if npc.get("height_cm"):
                 fields["height_cm"] = int(npc["height_cm"])
@@ -749,8 +797,11 @@ class AppContext:
             "_migrated_split": True,
         }
         Character(**cdata)  # validate (extra top-level keys ignored)
-        (char_dir / f"{key}.yaml").write_text(
-            yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        if db is not None:
+            SDB.upsert_character(db, key, cdata)   # embedded in the story DB (authoritative)
+        else:
+            (char_dir / f"{key}.yaml").write_text(
+                yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
         if ref_from:
             ref = self.reference_path(ref_from)
             if ref and ref.is_file():
@@ -814,35 +865,136 @@ class AppContext:
         """Write a chosen background and record it on the story's location."""
         d = self.story_bg_dir(key); d.mkdir(parents=True, exist_ok=True)
         (d / f"{loc}.png").write_bytes(png)
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = self.story_dir() / f"{safe}.yaml"
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        data = self._read_story_data(key)
         for l in data.get("locations", []):
             if l.get("id") == loc:
                 l["background"] = f"/api/stories/{key}/bg/{loc}.png"
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        self.reload_settings()
+        self._write_story_data(key, data)
         return f"/api/stories/{key}/bg/{loc}.png"
 
-    def update_story_fields(self, key: str, fields: dict) -> None:
-        """Patch top-level fields onto a saved story's YAML (e.g. name, background) + reload.
-        VALIDATES the merged story (pydantic) BEFORE writing, so a bad field shape raises
-        instead of corrupting the YAML on disk. Raises FileNotFoundError for a draft (no YAML)."""
-        from ..config.schema import Story
+    # ── Persistence routing ── A story is DB-backed iff its <key>.db exists (else legacy YAML). A
+    # character is owned by a story DB iff embedded there (authoritative), else it's a global YAML
+    # card. These helpers hide the split so every read/write path is store-agnostic. See story_db.py.
+    def _story_db(self, key: str):
+        from ..stories import story_db as SDB
         safe = re.sub(r"[^\w\-]+", "", key)
-        path = self.story_dir() / f"{safe}.yaml"
-        if not path.is_file():
+        p = self.story_dir() / f"{safe}.db"
+        return p if SDB.exists(p) else None
+
+    def _read_story_data(self, key: str) -> dict:
+        from ..stories import story_db as SDB
+        db = self._story_db(key)
+        if db is None:
             raise FileNotFoundError(key)
-        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        story, _chars = SDB.load_story(db)
+        return story
+
+    def _write_story_data(self, key: str, data: dict) -> None:
+        """Validate + persist a whole story dict to its DB, keeping the embedded characters."""
+        from ..config.schema import Story
+        from ..stories import story_db as SDB
+        Story(**data)   # validate FIRST — never persist a corrupt story
+        db = self._story_db(key)
+        if db is None:
+            raise FileNotFoundError(key)
+        _story, chars = SDB.load_story(db)
+        SDB.save_story(db, data, chars)
+        self.reload_settings()
+
+    def create_story(self, name: str, fields: dict, character_keys=None, type_: str = "novel") -> str:
+        """Mint a NEW story as its own ``<skey>.db``, EMBEDDING the records of any referenced
+        characters (the file is the whole self-contained story). Derives a unique key from `name`,
+        validates, reloads. Returns the key. The single creation chokepoint (genesis_commit + the
+        cast/wizard saves route here). See stories/story_db.py."""
+        from ..config.schema import Story
+        from ..stories import story_db as SDB
+        existing = {st.name for st in self.base_settings.stories.values()}
+        nm, j = name.strip() or "Story", 2
+        while nm in existing:
+            nm, j = f"{(name.strip() or 'Story')} ({j})", j + 1
+        base = re.sub(r"[^\w\-]+", "_", nm.lower()).strip("_") or "story"
+        sdir = self.story_dir(); sdir.mkdir(parents=True, exist_ok=True)
+        skey, i = base, 2
+        while (sdir / f"{skey}.yaml").is_file() or (sdir / f"{skey}.db").is_file():
+            skey, i = f"{base}_{i}", i + 1
+        chars: dict = {}
+        for ck in (character_keys or []):
+            rec = self._read_character_data(ck)
+            if rec is not None:
+                chars[ck] = rec                       # embed the referenced character's record
+        story = {"name": nm, "type": type_ if type_ in ("novel", "vn") else "novel", **(fields or {})}
+        Story(**story)                                # validate before writing
+        SDB.save_story(sdir / f"{skey}.db", story, chars)
+        self.reload_settings()
+        return skey
+
+    def _char_owner(self, char_key: str) -> str | None:
+        """The story key that OWNS this character (embeds it), or None for a global library card."""
+        from ..stories import story_db as SDB
+        for skey in self.base_settings.stories:
+            db = self._story_db(skey)
+            if db is not None and char_key in SDB.character_keys(db):
+                return skey
+        return None
+
+    def _read_character_data(self, key: str) -> dict | None:
+        from ..stories import story_db as SDB
+        owner = self._char_owner(key)
+        if owner is not None:
+            return SDB.get_character(self._story_db(owner), key)
+        safe = re.sub(r"[^\w\-]+", "", key)
+        path = self.char_dir() / f"{safe}.yaml"
+        return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
+
+    def _write_character_data(self, key: str, cdata: dict) -> None:
+        """Persist a character to its OWNING story DB (embedded) or the global YAML library."""
+        from ..config.schema import Character
+        from ..stories import story_db as SDB
+        Character(**cdata)   # validate FIRST
+        owner = self._char_owner(key)
+        if owner is not None:
+            SDB.upsert_character(self._story_db(owner), key, cdata)
+        else:
+            safe = re.sub(r"[^\w\-]+", "", key)
+            (self.char_dir() / f"{safe}.yaml").write_text(
+                yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self.reload_settings()
+
+    def update_story_fields(self, key: str, fields: dict) -> None:
+        """Patch top-level fields onto a saved story (DB-backed or legacy YAML) + reload. VALIDATES
+        the merged story BEFORE writing. Raises FileNotFoundError for a draft (neither DB nor YAML)."""
+        data = self._read_story_data(key)
         data.update(fields)
         # Self-heal a DANGLING start: if it points at a location that no longer exists, drop it —
         # otherwise the whole-Story validator would block every unrelated edit (e.g. adding a location).
         loc_ids = {l.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)}
         if data.get("start") and data["start"] not in loc_ids:
             data["start"] = None
-        Story(**data)   # validate the merged result FIRST — never write a corrupt story
-        path.write_text(yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8")
-        self.reload_settings()
+        self._write_story_data(key, data)
+
+    def persist_character_entry(self, key: str, doc: dict) -> None:
+        """Persist one character's conversational field edits (the agent's `character:<key>` target).
+        `doc` is a {cast:[entry]} artifact the agent mutated; the entry maps back onto the Character
+        YAML (persona→system; role/appearance/base_prompt + the core harness onto fields). Only
+        non-empty fields are written (so a wardrobe/no-op turn never blanks anything). Validates
+        before writing; raises FileNotFoundError for an unknown character."""
+        cast = [c for c in (doc.get("cast") or []) if isinstance(c, dict)]
+        entry = next((c for c in cast if str(c.get("id")) == key), None) or (cast[0] if cast else None)
+        if entry is None:
+            raise ValueError("no character entry to persist")
+        data = self._read_character_data(key)   # from the owning story DB or the global library
+        if data is None:
+            raise FileNotFoundError(key)
+        if entry.get("name"):
+            data["name"] = entry["name"]
+        if entry.get("persona"):
+            data["system"] = entry["persona"]
+        fields = dict(data.get("fields") or {})
+        for k in ("role", "appearance", "base_prompt", "temperament", "want", "lie", "wound", "secret"):
+            if entry.get(k):
+                fields[k] = entry[k]
+        data["fields"] = fields
+        self._write_character_data(key, data)   # routes back to the same store
 
     def cast_doc_to_members(self, cast_list) -> list[dict]:
         """Convert an inline cast doc ({name,role,persona,primary}) into Story CastMember refs
