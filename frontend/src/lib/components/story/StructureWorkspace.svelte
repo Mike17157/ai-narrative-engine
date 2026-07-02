@@ -10,9 +10,9 @@
   import { post } from '$lib/api.js';
   import { stories, loadStory, saveDraft, clearDraft } from '$lib/stories.svelte.js';
   import { chars } from '$lib/characters.svelte.js';
-  import RelationshipGraph from '$lib/components/story/RelationshipGraph.svelte';
   import AgentChat from '$lib/components/story/AgentChat.svelte';
   import Icon from '$lib/components/shared/Icon.svelte';
+  import StoryTabs from '$lib/components/story/StoryTabs.svelte';
 
   let key = $derived($page.params.key);          // undefined on /stories/genesis (a new story)
   let st = $derived(stories.current);
@@ -36,10 +36,26 @@
   let world = $state({ genre: '', tone: '', setting: '', situation: '' });
   let worldBusy = $state(false);
   let fieldBusy = $state({});            // world field -> regenerating
+  let focusField = $state('');           // world field the agent just touched — flashes briefly
+  let flashT;
+  // Highlight whatever the chat agent is working on: light the cast node (via activeId → its inspector)
+  // or flash the world field it's editing. Subjects are matched to the draft cast by name/role/id.
+  function onAgentFocus({ subjects = [], fields = [] } = {}) {
+    for (const s of subjects) {
+      const h = harnesses.find((x) => [x.name, x.role, x.id]
+        .some((v) => v && String(v).toLowerCase() === s.toLowerCase()));
+      if (h) { activeId = h.id; break; }
+    }
+    if (fields.length) { focusField = fields[0]; clearTimeout(flashT); flashT = setTimeout(() => (focusField = ''), 2600); }
+  }
   // The generation model for THIS flow — a per-request override (builder_ctx reads body.model), so the
   // toggle steers world/cast/voice/regen without touching the stage_premise preset. GPT + Anthropic only.
-  let genModel = $state('openai/gpt-5-mini');
+  // Default GLM 5.1 — best value writer: an independent critic certified its prose at GPT-5's level for a
+  // fraction of the cost (vs gpt-5-mini/deepseek which can't reach the bar even with looping). GPT-5 for
+  // max richness; Sonnet strong too. See the worldgen writer comparison.
+  let genModel = $state('z-ai/glm-5.2');
   const GEN_MODELS = [
+    { group: 'Z.ai', items: [['z-ai/glm-5.2', 'GLM 5.2'], ['z-ai/glm-5.1', 'GLM 5.1'], ['z-ai/glm-4.7-flash', 'GLM 4.7 Flash']] },
     { group: 'OpenAI', items: [['openai/gpt-5', 'GPT-5'], ['openai/gpt-5-mini', 'GPT-5 mini'],
         ['openai/gpt-4.1-mini', 'GPT-4.1 mini'], ['openai/gpt-5-nano', 'GPT-5 nano']] },
     { group: 'Anthropic', items: [['anthropic/claude-sonnet-4.5', 'Claude Sonnet 4.5'],
@@ -89,12 +105,6 @@
   let kept = $state({});
   let confirmedCount = $derived(harnesses.filter((h) => kept[h.id]).length);
   let activeHarnesses = $derived(confirmedCount ? harnesses.filter((h) => kept[h.id]) : harnesses);
-  // Sort by group so members sit adjacent on the ring; carry a group colour for the node halo.
-  let draftCast = $derived([...activeHarnesses]
-    .sort((a, b) => String(a.group || '~').localeCompare(String(b.group || '~')))
-    .map((h) => ({ key: h.id, name: h.name || h.role || h.id, primary: false, face: h.face || '',
-      facing: !!faceBusy[h.id],
-      group: h.group || '', groupColor: h.group ? `hsl(${hueOf(h.group)} 55% 58%)` : '' })));
   const confirmH = (id) => (kept = { ...kept, [id]: !kept[id] });
   function dropH(id) {
     harnesses = harnesses.filter((h) => h.id !== id);
@@ -129,14 +139,77 @@
   // trauma & good memory — a reliable count), then the auto-flesh effect builds each person's VOICE from
   // that harness — 5 quotes ANCHORED to the psychology (wound, good memory, want, lie, defense) so the
   // lines cohere AND stay specific — ALL CONCURRENTLY, faces too. The chat stays for refinement.
+  // Function-first cast (Truby web): generate ONE focused character per dramatic role — a separate model
+  // run each, in context — instead of a shallow batch. Returns harnesses tagged with `function`.
   async function genCast() {
     const s = seed.trim();
     if (busy || !canGen) return;
     busy = 'cast'; err = null;
-    const r = await post('/stories/genesis/harnesses', { seed: s, n: castN, world: $state.snapshot(world), model: genModel });
+    const r = await post('/stories/genesis/roles', { seed: s, world: $state.snapshot(world), model: genModel });
     busy = '';
     if (r.ok) { harnesses = (r.data?.harnesses || []).map((h) => ({ ...h })); kept = {}; draftRels = []; }
     else err = r.data?.error || 'generation failed';
+  }
+  // Truby role → display label (the character's structural FUNCTION in the story).
+  const FN_LABELS = { protagonist: '★ Protagonist', ally: 'Ally', opponent: 'Opponent',
+    false_ally: 'False ally', mirror: 'Mirror', shadow: 'Shadow', tempter: 'Tempter' };
+  const fnLabel = (f) => FN_LABELS[f] || f;
+
+  // ── World pipeline (the process we outlined) ── The World tab IS the machine: seed → substrate (the
+  // hidden ache + traditions + people) → lived particulars (world shown, never explained) → an opening
+  // SCENE written by GLM and gated by a strong critic through a refine LOOP (rounds + rubric shown). The
+  // substrate also bridges into the Cast pipeline (setting/situation) so the rest of the flow still works.
+  let substrate = $state(stories.draft?.substrate || null);
+  let particulars = $state(stories.draft?.particulars || []);
+  let scene = $state(stories.draft?.scene || null);
+  let sceneRubric = $state(stories.draft?.sceneRubric || null);
+  let sceneRounds = $state(stories.draft?.sceneRounds ?? null);
+  let wgBusy = $state('');   // '' | 'sub' | 'parts' | 'scene'
+  const RUBRIC_AXES = ['voice', 'legibility', 'plainness', 'withholding', 'pulse'];
+  const CRITIC = 'anthropic/claude-sonnet-4-5';   // an INDEPENDENT strong critic gates the weak writer
+
+  async function genSubstrate() {
+    const s = seed.trim();
+    if (wgBusy || !s) return;
+    wgBusy = 'sub'; err = null;
+    const r = await post('/stories/genesis/substrate', { seed: s, model: genModel });
+    wgBusy = '';
+    if (r.ok && r.data?.substrate) {
+      substrate = r.data.substrate;
+      // bridge into the Cast pipeline so design_by_role still has a world frame
+      world = { ...world, setting: substrate.place || world.setting, situation: substrate.preoccupation || world.situation };
+    } else err = r.data?.error || 'substrate failed';
+  }
+  async function genParticulars() {
+    if (wgBusy || !substrate) return;
+    wgBusy = 'parts'; err = null;
+    const r = await post('/stories/genesis/worldgen',
+      { mode: 'particulars', seed: seed.trim(), substrate: $state.snapshot(substrate), n: 6, model: genModel });
+    wgBusy = '';
+    if (r.ok && r.data?.particulars) particulars = r.data.particulars;
+    else err = r.data?.error || 'particulars failed';
+  }
+  function sceneBrief() {
+    const s = substrate;
+    return (`ACHE (never stated aloud): ${s.preoccupation}\nPLACE: ${s.place}\n`
+      + 'TRADITIONS (imply, NEVER explain):\n' + (s.traditions || []).map((t) => `- ${t.name}: ${t.logic}`).join('\n')
+      + '\nPEOPLE: ' + (s.people || []).map((p) => `${p.name} (${p.life})`).join('; ')
+      + '\n\nTHE WORLD’S TEXTURE (echo and extend these; keep their plain register):\n'
+      + particulars.map((p) => `- [${p.kind}] ${p.text}`).join('\n')
+      + '\n\nWrite the opening. Plain, legible, withholding. Center on the person the fragments most orbit.');
+  }
+  async function genScene() {
+    if (wgBusy || !substrate || !particulars.length) return;
+    wgBusy = 'scene'; err = null;
+    const r = await post('/stories/genesis/scene-loop',
+      { brief: sceneBrief(), model: genModel, critic_model: CRITIC, rounds: 2 });
+    wgBusy = '';
+    if (r.ok && r.data?.scene) {
+      scene = r.data.scene;
+      sceneRounds = r.data.rounds_used ?? null;
+      const scored = (r.data.trace || []).filter((t) => t.scores);
+      sceneRubric = scored.length ? scored[scored.length - 1].scores : null;
+    } else err = r.data?.error || 'scene failed';
   }
 
   // ── Draft cache ── The genesis state is the single cached draft: hydrate it on entry, persist edits
@@ -161,7 +234,9 @@
     if (!isNew) return;
     const snap = { harnesses: $state.snapshot(harnesses), draftRels: $state.snapshot(draftRels),
       candidates: $state.snapshot(candidates), kept: $state.snapshot(kept), leadId, newName, newType,
-      world: $state.snapshot(world), genModel, chat: chatState };
+      world: $state.snapshot(world), genModel, chat: chatState,
+      substrate: $state.snapshot(substrate), particulars: $state.snapshot(particulars),
+      scene: $state.snapshot(scene), sceneRubric: $state.snapshot(sceneRubric), sceneRounds };
     if (!hydrated) return;                                    // don't clobber the cache before hydrating
     clearTimeout(saveT);
     saveT = setTimeout(() => {
@@ -180,7 +255,15 @@
   let draftArtifact = $derived({ cast: harnesses, relationships: draftRels, world });
   let formalizing = $state({});   // harness id -> true while its prose is being structured
   function applyDraft(g) {
-    if (Array.isArray(g?.cast)) harnesses = g.cast;
+    if (Array.isArray(g?.cast)) {
+      // The graph sent to the agent has portraits stripped (context-budget), so the returned cast
+      // carries no `face`/`appearance` — preserve the locally-held ones by id across the round-trip.
+      const prev = new Map(harnesses.map((h) => [h.id, h]));
+      harnesses = g.cast.map((c) => {
+        const p = prev.get(c.id);
+        return p ? { ...c, face: c.face || p.face, appearance: c.appearance || p.appearance } : c;
+      });
+    }
     if (Array.isArray(g?.relationships)) draftRels = g.relationships;
     if (g?.world && typeof g.world === 'object') world = { genre: '', tone: '', setting: '', situation: '', ...g.world };
   }
@@ -293,18 +376,51 @@
   // The potential being shaped: lead ↔ the inspected node (only when it isn't the lead itself).
   let activeRel = $derived((activeId && activeId !== leadId) ? relWith(activeId) : null);
   $effect(() => { if (isNew && !leadId && harnesses.length) leadId = harnesses[0].id; });
-  // The graph driver: real bonds + a faint latent spoke from the lead to every undefined other, so the
-  // ring SHOWS what's left to define. Clicking any node inspects that character (see the detail panel).
-  let potentialRels = $derived.by(() => {
-    const out = [...webRels];
-    if (!leadId) return out;
-    const have = new Set(webRels.map((r) => [r.source, r.target].sort().join('|')));
-    for (const o of others) {
-      if (!have.has([leadId, o.id].sort().join('|'))) out.push({ id: `lat-${o.id}`, source: leadId, target: o.id, pending: true, stance: 'neutral' });
-    }
-    return out;
-  });
   const selectNode = (k) => { if (k) activeId = k; };
+  // Cast list grouped by the free-text `group` tag (family/friends/love interest/…) — ungrouped last.
+  let groupedCast = $derived.by(() => {
+    const by = new Map();
+    for (const h of activeHarnesses) {
+      const g = h.group || 'Ungrouped';
+      if (!by.has(g)) by.set(g, []);
+      by.get(g).push(h);
+    }
+    const gnames = [...by.keys()].sort((a, b) => a === 'Ungrouped' ? 1 : b === 'Ungrouped' ? -1 : a.localeCompare(b));
+    return gnames.map((g) => [g, by.get(g)]);
+  });
+
+  // Genesis header tabs — the SAME shell as the committed editor (Overview·Cast·World·Plot·Web). The
+  // flow is sequential, so Cast/Web/Plot stay disabled until the draft reaches them, and we auto-advance
+  // to Cast after the first generation and to Plot once candidates are derived.
+  let gTab = $state('world');
+  let genTabs = $derived([
+    { id: 'world', label: 'World' },
+    { id: 'cast', label: 'Cast', disabled: !harnesses.length, hint: 'Generate a cast first' },
+    { id: 'web', label: 'Web', disabled: harnesses.length < 2, hint: 'Need at least two characters' },
+    { id: 'plot', label: 'Plot', disabled: !activeHarnesses.length, hint: 'Confirm a cast first' },
+  ]);
+  let sawCast = false, sawCands = false;
+  $effect(() => {
+    if (harnesses.length && !sawCast) { sawCast = true; if (gTab === 'world') gTab = 'cast'; }
+    if (candidates.length && !sawCands) { sawCands = true; gTab = 'plot'; }
+  });
+  // The selected tab drives the chat agent's mode. World has no dedicated mode → '' (Auto, full toolset
+  // incl. set_world_field); Cast/Web work the cast + bonds (_smith_tools); Plot shapes the story.
+  let chatMode = $derived({ world: '', cast: '_smith_tools', web: '_smith_tools', plot: '_story_tools' }[gTab] ?? '');
+
+  // The concise "what's next" nudge — the FIRST incomplete step down the genesis hierarchy: world →
+  // cast → confirm keepers → lead → each non-lead's bond to the lead → derive → build. Shown in the
+  // footer so the followup is generated from state, not narration. Empty once nothing's left.
+  let nextStep = $derived.by(() => {
+    const wFilled = ['genre', 'tone', 'setting', 'situation'].filter((k) => (world[k] || '').trim()).length;
+    if (!harnesses.length) return wFilled < 2 ? 'Sketch the world (or Suggest one), then generate a cast.' : 'Generate a cast for this world.';
+    if (!confirmedCount) return 'Confirm the keepers in your cast (✓) and cut the rest.';
+    if (!leadId) return 'Pick the MC (★) — the role you’ll play.';
+    const undef = activeHarnesses.filter((h) => h.id !== leadId && !relWith(h.id));
+    if (undef.length) return `Define ${undef.length} more bond${undef.length > 1 ? 's' : ''} to the lead — open a card and Suggest a potential.`;
+    if (!candidates.length) return 'Derive story candidates from the cast.';
+    return 'Pick a candidate and build it.';
+  });
   const relWith = (oid) => draftRels.find((r) =>
     (r.source === leadId && r.target === oid) || (r.source === oid && r.target === leadId));
   // A bond reads BOTH ways: resolve `rel` into the inspected character's side and the other's side
@@ -382,75 +498,120 @@
     </label>
   </div>
 
-  <div class="body">
-    <div class="main">
+  <StoryTabs tabs={genTabs} bind:active={gTab} />
 
-    {#if isNew}
-      {#if err}<p class="err">{err}</p>{/if}
-      {#if !harnesses.length}
-        <div class="newhint">
-          <Icon name="sparkles" size={20} />
-          <p>Start with the world — the stage your cast lives on. Then generate characters who belong to it.</p>
-          <div class="genform">
-            <div class="idearow">
-              <textarea class="seed" use:autogrow={seed} bind:value={seed} rows="2"
-                        placeholder="Your idea — a line or two. e.g. a shy boy and the popstar who keeps catching him watching her"></textarea>
-              <button class="soft ib world-sg" onclick={suggestWorld} disabled={worldBusy || !seed.trim()}>
-                <Icon name="sparkles" size={12} />{worldBusy ? 'Building…' : 'Suggest a world'}
-              </button>
-            </div>
+  <div class="main">
+    {#if err}<p class="err">{err}</p>{/if}
 
-            <div class="worldpanel">
-              <div class="wtitle">World <span class="whint">the stage — edit freely or ↻ re-roll a field; the plot still emerges from the cast</span></div>
-              {#snippet wfield(key, label, multiline)}
-                <div class="wf">
-                  <span class="wfhead">{label}
-                    <button class="regen" class:spin={fieldBusy[key]} onclick={() => regenField(key)}
-                            disabled={!!fieldBusy[key]} title="Regenerate {label.toLowerCase()}" aria-label="Regenerate {label}">
-                      <Icon name="refresh" size={11} />
-                    </button>
-                  </span>
-                  {#if multiline}
-                    <textarea rows="2" use:autogrow={world[key]} bind:value={world[key]}></textarea>
-                  {:else}
-                    <input bind:value={world[key]} />
-                  {/if}
-                </div>
-              {/snippet}
-              <div class="wgrid">
-                {@render wfield('genre', 'Genre', false)}
-                {@render wfield('tone', 'Tone', false)}
+    {#if gTab === 'world'}
+      <!-- The World tab IS the process: seed → substrate → particulars → scene, the machine visible. -->
+      <div class="steps">
+        <!-- 1 · Seed -->
+        <div class="wstep">
+          <div class="stepno">1 · Your idea</div>
+          <textarea class="seed" use:autogrow={seed} bind:value={seed} rows="2"
+                    placeholder="A line or two — a place, a feeling, a debt. e.g. a rainy northern town where the drowned are owed something"></textarea>
+          <button class="ib gen" onclick={genSubstrate} disabled={!!wgBusy || !seed.trim()}>
+            <Icon name="sparkles" size={13} />{wgBusy === 'sub' ? 'Finding the soul…' : (substrate ? '↻ Re-find the soul' : 'Find the world’s soul →')}
+          </button>
+        </div>
+
+        <!-- 2 · Substrate (the hidden skeleton) -->
+        {#if substrate}
+          <div class="wstep">
+            <div class="stepno">2 · The world’s soul <span class="stephint">the hidden skeleton — a reader never sees this, it just makes the world cohere</span></div>
+            <div class="ache"><span class="achek">The ache</span> {substrate.preoccupation}</div>
+            <div class="subgrid">
+              <div class="subcol">
+                <div class="subh">Traditions <span class="stephint">real folk-logic, quietly interfering</span></div>
+                {#each substrate.traditions || [] as t (t.name)}
+                  <div class="tradcard"><b>{t.name}</b><p>{t.logic}</p></div>
+                {/each}
               </div>
-              {@render wfield('setting', 'Setting', true)}
-              {@render wfield('situation', 'Situation', true)}
+              <div class="subcol">
+                <div class="subh">Place</div><p class="subp">{substrate.place}</p>
+                <div class="subh">People</div>
+                {#each substrate.people || [] as p (p.name)}<p class="persrow"><b>{p.name}</b> — {p.life}</p>{/each}
+              </div>
             </div>
+            <button class="ib gen" onclick={genParticulars} disabled={!!wgBusy}>
+              <Icon name="sparkles" size={13} />{wgBusy === 'parts' ? 'Living in it…' : (particulars.length ? '↻ Re-gather the texture' : 'Gather the world’s texture →')}
+            </button>
+          </div>
+        {/if}
 
-            <div class="genrow">
-              <label class="cnt">characters
-                <input type="number" min="2" max="8" bind:value={castN} />
-              </label>
-              <button class="ib gen" onclick={genCast} disabled={!!busy || !canGen}>
-                <Icon name="sparkles" />{busy === 'cast' ? 'Generating…' : 'Generate cast'}
-              </button>
+        <!-- 3 · Particulars -->
+        {#if particulars.length}
+          <div class="wstep">
+            <div class="stepno">3 · Lived fragments <span class="stephint">the world shown, never explained — the rule is always withheld</span></div>
+            <div class="frags">
+              {#each particulars as p, i (i)}
+                <div class="frag"><span class="fragkind">{p.kind}</span><p>{p.text}</p></div>
+              {/each}
+            </div>
+            <button class="ib gen" onclick={genScene} disabled={!!wgBusy}>
+              <Icon name="sparkles" size={13} />{wgBusy === 'scene' ? 'Writing + refining…' : (scene ? '↻ Rewrite the opening' : 'Write the opening scene →')}
+            </button>
+          </div>
+        {/if}
+
+        <!-- 4 · The opening + the machine (rubric + refine rounds) -->
+        {#if scene}
+          <div class="wstep">
+            <div class="stepno">4 · The opening
+              {#if sceneRounds !== null}<span class="stephint">refined {sceneRounds} round{sceneRounds === 1 ? '' : 's'} · gated by an independent critic</span>{/if}
+            </div>
+            {#if sceneRubric}
+              <div class="rubric">
+                {#each RUBRIC_AXES as a (a)}<span class="raxis" class:ok={sceneRubric[a] >= 4} class:bad={sceneRubric[a] < 4}>{a} {sceneRubric[a]}</span>{/each}
+              </div>
+            {/if}
+            <div class="scenebox">
+              {#if scene.title}<h4 class="scenetitle">{scene.title}</h4>{/if}
+              <p class="sceneprose">{scene.prose}</p>
             </div>
           </div>
-        </div>
-      {:else}
+        {/if}
+
+        <!-- Bridge to Cast -->
+        {#if substrate}
+          <div class="genrow">
+            <span class="cnt">the cast grows from this world — one focused character per dramatic role</span>
+            <button class="ib" onclick={genCast} disabled={!!busy || !canGen}>
+              <Icon name="sparkles" />{busy === 'cast' ? 'Generating…' : (harnesses.length ? 'Regenerate cast' : 'Generate cast →')}
+            </button>
+          </div>
+        {/if}
+      </div>
+
+    {:else if gTab === 'cast'}
         <div class="qbar">
           <span class="qhead">Cast · {confirmedCount}/{harnesses.length} confirmed</span>
-          <span class="qhint">click a node to inspect · ★ marks the MC (you) — bonds point toward them</span>
+          <span class="qhint">click a name to inspect · ★ marks the MC (you)</span>
           {#if facingCount}<span class="qhint gen"><Icon name="sparkles" size={11} /> rendering {facingCount} portrait{facingCount > 1 ? 's' : ''}…</span>{/if}
         </div>
 
-        <div class="potwrap">
-          <div class="potgraph">
-            <RelationshipGraph cast={draftCast} relationships={potentialRels} size={400}
-                               focus={leadId} selected={activeId} onSelect={selectNode} legend={false} directed={false} youFocus={true} />
-            <p class="glegend"><b>★</b> MC (you) · <span class="lg solid"></span> drawn to you · <span class="lg dash"></span> open · click a node</p>
-          </div>
+        <div class="castlist wide">
+          {#each groupedCast as [gname, members] (gname)}
+            <div class="glabel">{gname}</div>
+            {#each members as h (h.id)}
+              {@const rel = h.id === leadId ? null : relWith(h.id)}
+              <button class="crow" class:active={activeId === h.id} onclick={() => selectNode(h.id)}>
+                {#if h.face}<img class="cav" src={h.face} alt="" />
+                {:else}<span class="cav ci">{(h.name || h.role || '?').trim().charAt(0).toUpperCase()}</span>{/if}
+                <span class="cn">{h.name || h.role}</span>
+                {#if h.function}<span class="fnbadge {h.function}">{fnLabel(h.function)}</span>{/if}
+                {#if h.id === leadId}<span class="leadtag">★ lead</span>
+                {:else if rel}<span class="bnat {rel.stance || 'neutral'}">{rel.dynamic || rel.stance || 'defined'}</span>
+                {:else}<span class="bnat open">undefined</span>{/if}
+              </button>
+            {/each}
+          {/each}
+        </div>
 
           {#if activeChar}
-            <aside class="potpanel detail">
+            <div class="cardback" role="presentation" onclick={() => (activeId = '')}>
+            <aside class="potpanel cardmodal" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
               <div class="pprow">
                 <span class="ppair">
                   {view === 'character' && activeChar.name ? activeChar.name : (activeChar.role || 'character')}
@@ -532,17 +693,32 @@
                 </div>
               {/if}
             </aside>
-          {:else}
-            <aside class="potpanel empty"><p class="none">Click a character in the web to inspect them — see their card, toggle harness ⇄ character, and shape their bond with the lead.</p></aside>
+            </div>
           {/if}
-        </div>
         <datalist id="draft-groups">{#each groups as g (g)}<option value={g}></option>{/each}</datalist>
 
-        <div class="webacts">
-          <button class="soft ib" onclick={reweave} disabled={!!busy}><Icon name="refresh" />{busy === 'weave' ? 'Weaving…' : 'Re-weave'}</button>
-          <button class="ib" onclick={() => derive()} disabled={!!busy}>{busy === 'derive' ? 'Deriving…' : 'Derive stories'}<Icon name="arrowRight" /></button>
-        </div>
-      {/if}
+    {:else if gTab === 'web'}
+      <p class="tabhint">Each character’s bond to the <b>lead</b> is shaped in their card on the <b>Cast</b> tab — pick a potential per person. <b>Re-weave</b> lets the model re-derive the whole web from the current cast in one pass.</p>
+      <div class="castlist weblist">
+        {#each activeHarnesses.filter((h) => h.id !== leadId) as h (h.id)}
+          {@const rel = relWith(h.id)}
+          <button class="crow" onclick={() => { gTab = 'cast'; selectNode(h.id); }}>
+            {#if h.face}<img class="cav" src={h.face} alt="" />{:else}<span class="cav ci">{(h.name || h.role || '?').trim().charAt(0).toUpperCase()}</span>{/if}
+            <span class="cn">{h.name || h.role}</span>
+            {#if rel}<span class="bnat {rel.stance || 'neutral'}">{rel.dynamic || rel.stance || 'defined'}</span>
+            {:else}<span class="bnat open">undefined</span>{/if}
+          </button>
+        {/each}
+      </div>
+      <div class="webacts">
+        <button class="soft ib" onclick={reweave} disabled={!!busy}><Icon name="refresh" />{busy === 'weave' ? 'Weaving…' : 'Re-weave the whole web'}</button>
+      </div>
+
+    {:else if gTab === 'plot'}
+      <p class="tabhint">Derive story candidates from the cast and their bonds — each is a dramatic question with a protagonist and stakes. Build the one that pulls hardest.</p>
+      <div class="webacts">
+        <button class="ib" onclick={() => derive()} disabled={!!busy}>{busy === 'derive' ? 'Deriving…' : (candidates.length ? 'Re-derive stories' : 'Derive stories')}<Icon name="arrowRight" /></button>
+      </div>
       {#if candidates.length}
         <div class="storybar">
           <input class="nm" bind:value={newName} placeholder="Story name (defaults to the candidate title)" />
@@ -568,17 +744,16 @@
         </div>
         <button class="soft more ib" onclick={() => derive('a different, darker angle on the same web')} disabled={!!busy}><Icon name="refresh" />Derive different stories</button>
       {/if}
-
     {/if}
 
-    </div>
   </div>
 </div></div>
 
 <!-- New story: the chat is the entry — its first message explains how to start; it reshapes the
      DRAFT cast queue (nothing persists until you build). -->
-<AgentChat storyKey={''} dock="left" propose initialMode={stories.draft?.chat?.mode || '_smith_tools'} firstMessage={FIRST_MSG}
+<AgentChat storyKey={''} dock="left" propose initialMode={stories.draft?.chat?.mode || '_smith_tools'} syncMode={chatMode} nextStep={nextStep} firstMessage={FIRST_MSG}
            artifact={draftArtifact} label="CAST" target="draft" commit={false} onArtifact={applyDraft} model={genModel}
+           onFocus={onAgentFocus}
            initialConvo={stories.draft?.chat?.convo || []} initialHistory={stories.draft?.chat?.history || []}
            initialBehaviour={stories.draft?.chat?.activeBehaviour || ''} onConvo={onChat} />
 
@@ -588,14 +763,56 @@
   .err { color: var(--bad); font-size: 12.5px; margin: 8px 0 0; }
   .ib { display: inline-flex; align-items: center; gap: 6px; }
   .main { min-width: 0; }
+  /* The story chat is a fixed LEFT pane (340px + gutter) — clear it so the content isn't underneath. */
   .page.withchat { padding-left: 356px; }
+  .page.withchat .col.wide { max-width: 720px; margin: 0 auto; }
+  /* a short explainer line at the top of a tab's content */
+  .tabhint { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 0 0 12px; max-width: 620px; }
+  .weblist { max-width: 480px; margin-bottom: 12px; }
+  .world-sg.wide { align-self: stretch; justify-content: center; margin-top: 10px; }
 
-  /* new-story empty state — points to the chat (the entry) */
-  .newhint { margin: 36px auto 18px; max-width: 440px; text-align: center; color: var(--muted);
+  /* ── The World pipeline made visible (seed → substrate → particulars → scene) ── */
+  .steps { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
+  .wstep { display: flex; flex-direction: column; gap: 10px; padding: 14px 16px; border-radius: 12px;
+    border: 1px solid var(--border-soft); background: var(--elev-2); }
+  .stepno { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--accent); }
+  .stephint { font-weight: 400; text-transform: none; letter-spacing: 0; color: var(--faint); margin-left: 8px; }
+  .gen { align-self: flex-start; padding: 7px 14px; justify-content: center; }
+  /* substrate — the ache + traditions + place + people */
+  .ache { font-size: 14px; line-height: 1.55; color: var(--text); padding: 10px 12px; border-radius: 10px;
+    background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
+  .achek { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--accent); margin-right: 8px; }
+  .subgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .subcol { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+  .subh { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin-top: 4px; }
+  .subp { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.5; }
+  .tradcard { padding: 8px 10px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border-soft); }
+  .tradcard b { font-size: 12.5px; color: var(--text); }
+  .tradcard p { margin: 3px 0 0; font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .persrow { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .persrow b { color: var(--text); }
+  /* particulars — lived fragments */
+  .frags { display: flex; flex-direction: column; gap: 8px; }
+  .frag { display: flex; gap: 10px; padding: 9px 11px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border-soft); }
+  .fragkind { flex: none; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    color: var(--faint); padding-top: 3px; width: 52px; }
+  .frag p { margin: 0; font-size: 13px; color: var(--text); line-height: 1.6; }
+  /* scene + the machine (rubric + rounds) */
+  .rubric { display: flex; flex-wrap: wrap; gap: 6px; }
+  .raxis { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border-soft); }
+  .raxis.ok { color: var(--good, #6ec77f); border-color: color-mix(in srgb, var(--good, #6ec77f) 40%, transparent); }
+  .raxis.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 45%, transparent); }
+  .scenebox { padding: 14px 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--border-soft); }
+  .scenetitle { margin: 0 0 8px; font-size: 14px; font-weight: 680; color: var(--text); }
+  .sceneprose { margin: 0; font-size: 14px; line-height: 1.7; color: var(--text); white-space: pre-wrap; }
+
+  /* overview launchpad — the idea + world-suggest + generate */
+  .newhint { margin: 12px auto 14px; max-width: 520px; text-align: center; color: var(--muted);
     display: flex; flex-direction: column; align-items: center; gap: 10px; }
   .newhint p { margin: 0; line-height: 1.55; font-size: 13.5px; }
-  .genform { width: 100%; display: flex; flex-direction: column; gap: 10px; margin-top: 4px; text-align: left; }
+  .genform { width: 100%; max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; text-align: left; }
   .idearow { display: flex; flex-direction: column; gap: 6px; }
+  .fieldlabel { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
   .seed { width: 100%; resize: none; overflow: hidden; padding: 9px 11px; font: inherit; font-size: 13px; line-height: 1.45;
     border-radius: 10px; background: var(--elev-2); border: 1px solid var(--border-soft); color: var(--text); }
   .seed:focus { outline: none; border-color: var(--accent); }
@@ -619,6 +836,9 @@
   .wf input, .wf textarea { width: 100%; resize: none; overflow: hidden; padding: 6px 9px; font: inherit; font-size: 12.5px;
     line-height: 1.45; border-radius: 8px; background: var(--panel); border: 1px solid var(--border-soft); color: var(--text); }
   .wf input:focus, .wf textarea:focus { outline: none; border-color: var(--accent); }
+  /* the agent just touched this field — a brief accent ring so you see what it's working on */
+  .wf.flash { border-radius: 9px; animation: wfflash 2.6s ease-out; }
+  @keyframes wfflash { 0%,15% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
   .modelpick { display: inline-flex; align-items: center; gap: 6px; }
   .modelpick span { font-size: 10px; text-transform: uppercase; letter-spacing: .3px; font-weight: 600; color: var(--faint); }
   .modelpick select { padding: 5px 8px; font-size: 12px; border-radius: 8px; background: var(--elev);
@@ -657,17 +877,37 @@
   .hb.spin { opacity: .7; animation: hbpulse 1s ease-in-out infinite; }
   @keyframes hbpulse { 0%,100% { opacity: .4; } 50% { opacity: .9; } }
 
-  /* graph-as-cast-queue: ring on the left, the clicked node's inspector on the right */
-  .potwrap { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-top: 4px; }
-  .potgraph { flex: 1; min-width: 300px; position: sticky; top: 8px; }
-  .glegend { display: flex; align-items: center; gap: 6px; justify-content: center; margin: 4px 0 0;
-    font-size: 10.5px; color: var(--faint); }
-  .lg { width: 16px; height: 0; border-top: 2px solid var(--faint); display: inline-block; margin-right: 2px; }
-  .lg.solid { border-color: var(--good, #6ec77f); }
-  .lg.dash { border-top-style: dashed; }
-  .potpanel { flex: 0 0 300px; max-width: 330px; border: 1px solid var(--border-soft); border-radius: 12px;
-    padding: 12px 13px; background: var(--panel); }
-  .potpanel.empty { display: flex; align-items: center; min-height: 120px; }
+  /* Grouped cast list — full width now; clicking a name opens the detail CARD as a centered modal
+     overlay (below), not a pinned side panel. Groups are the free-text tag (family/friends/…). */
+  .castlist { width: 100%; max-width: 560px; max-height: 62vh; overflow-y: auto;
+    display: flex; flex-direction: column; gap: 3px; padding-right: 4px; }
+  .castlist.wide { max-width: 640px; }
+  .glabel { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+    color: var(--faint); margin: 10px 0 2px 2px; }
+  .glabel:first-child { margin-top: 0; }
+  .crow { display: flex; align-items: center; gap: 9px; width: 100%; padding: 7px 10px;
+    border-radius: 9px; background: var(--elev-2); border: 1px solid var(--border-soft);
+    color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+  .crow:hover { border-color: var(--accent); }
+  .crow.active { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--elev-2)); }
+  .cav { width: 24px; height: 24px; border-radius: 50%; flex: none; object-fit: cover; }
+  .cav.ci { display: inline-flex; align-items: center; justify-content: center; font-size: 11px;
+    font-weight: 700; background: var(--elev); color: var(--muted); }
+  .cn { flex: 1; min-width: 0; font-size: 12.5px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Truby function badge — the character's structural role in the story. */
+  .fnbadge { flex: none; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+    padding: 1px 7px; border-radius: 999px; background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); }
+  .fnbadge.protagonist { color: #f5c518; border-color: color-mix(in srgb, #f5c518 40%, transparent); }
+  .fnbadge.opponent { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+  .fnbadge.ally { color: var(--good, #6ec77f); border-color: color-mix(in srgb, var(--good, #6ec77f) 40%, transparent); }
+  .fnbadge.false_ally { color: #e6a54b; border-color: color-mix(in srgb, #e6a54b 40%, transparent); }
+  .fnbadge.mirror { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
+  .potpanel { border: 1px solid var(--border-soft); border-radius: 12px; padding: 12px 13px; background: var(--panel); }
+  /* Detail card as a centered MODAL: a dimmed backdrop (click to close) + a card floating over the pane. */
+  .cardback { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.55);
+    display: flex; align-items: center; justify-content: center; padding: 24px; }
+  .potpanel.cardmodal { width: 380px; max-width: calc(100vw - 48px); max-height: 84vh; overflow-y: auto;
+    box-shadow: 0 20px 60px rgba(0,0,0,.55); }
   .pprow { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
   .ppair { font-size: 14px; font-weight: 640; color: var(--text); display: inline-flex; align-items: center; gap: 7px; }
   .leadtag { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px;
@@ -740,5 +980,4 @@
 
   /* shared with the genesis inspector */
   .x { background: none; border: 0; color: var(--faint); cursor: pointer; padding: 0; display: inline-flex; }
-  .none { font-size: 12px; color: var(--faint); margin: 8px 0; }
 </style>

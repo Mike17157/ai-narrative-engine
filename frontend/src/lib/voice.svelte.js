@@ -22,6 +22,8 @@ export const voice = $state({
   ttsSupported: !!SS,
   tts: true,          // speak the agent's confirmations aloud
   handsFree: false,   // VAD loop: auto-listen after each turn (endpointing does the VAD)
+  voices: [],         // Kokoro voice ids (empty until /api/tts/status resolves)
+  voiceId: '',        // chosen Kokoro voice; '' = backend default (bm_george, the "Jarvis" voice)
 });
 
 // ── TTS voice selection ──────────────────────────────────────────────────────
@@ -57,8 +59,11 @@ let _audio = null;            // current Kokoro <audio>
 let _kokoro = null;           // null=unknown, true/false (cached)
 async function kokoroReady() {
   if (_kokoro !== null) return _kokoro;
-  try { const r = await fetch('/api/tts/status'); _kokoro = !!(await r.json()).available; }
-  catch { _kokoro = false; }
+  try {
+    const j = await (await fetch('/api/tts/status')).json();
+    _kokoro = !!j.available;
+    if (_kokoro) { voice.voices = j.voices || []; if (!voice.voiceId) voice.voiceId = j.voice || ''; }
+  } catch { _kokoro = false; }
   if (_kokoro) voice.ttsSupported = true;   // backend TTS works even without browser Web Speech
   return _kokoro;
 }
@@ -70,7 +75,7 @@ export async function speak(text) {
   if (await kokoroReady()) {
     try {
       const r = await fetch('/api/tts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-                                          body: JSON.stringify({ text: String(text) }) });
+                                          body: JSON.stringify({ text: String(text), voice: voice.voiceId || undefined }) });
       if (r.ok) {
         const url = URL.createObjectURL(await r.blob());
         _audio = new Audio(url);

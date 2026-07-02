@@ -24,7 +24,8 @@ from pathlib import Path
 # One uniform envelope for every op (heterogeneous unions are brittle under strict
 # json_schema / grammar decoding). Unused fields are "" / []. The model fills only
 # what each op needs.
-_OPS = ["set_flag", "move", "mood", "rel", "item_add", "item_remove", "fact", "log", "entity"]
+_OPS = ["set_flag", "move", "mood", "rel", "item_add", "item_remove", "fact", "log", "entity",
+        "detail", "promise", "payoff"]
 
 STATE_DELTA_ITEM = {
     "type": "object", "additionalProperties": False,
@@ -33,7 +34,9 @@ STATE_DELTA_ITEM = {
         "op": {"type": "string", "enum": _OPS,
                "description": "set_flag(key,value) | move(name->value=location) | mood(name,value) | "
                               "rel(name,key=target,value=±N) | item_add(value) | item_remove(value) | "
-                              "fact(title,keywords,value=content) | log(value=text) | entity(name,value=status)"},
+                              "fact(title,keywords,value=content) | log(value=text) | entity(name,value=status) | "
+                              "detail(value=small concrete particular, name=owner if any) | "
+                              "promise(value=setup awaiting payoff) | payoff(value=which promise was fulfilled)"},
         "name": {"type": "string", "description": "character/entity the op concerns ('' if n/a)"},
         "key": {"type": "string", "description": "flag key, or relationship target ('' if n/a)"},
         "value": {"type": "string", "description": "the op's value ('' if n/a)"},
@@ -50,6 +53,9 @@ STATE_DELTAS_SCHEMA = {
 
 _LOG_CAP = 20          # keep the doc bounded; compaction trims the oldest beats
 _REL_MIN, _REL_MAX = -10, 10
+# Continuity ledger caps (the ring buffers behind the CONTINUITY lane — see the harness plan).
+_DETAILS_CAP = 30      # small concrete particulars (objects, gestures, scars, phrases)
+_PROMISES_CAP = 15     # setups awaiting payoff
 
 
 # ── World-op registry ────────────────────────────────────────────────────────────
@@ -70,6 +76,9 @@ WORLD_OPS: dict[str, _Callable] = {}
 class _WorldCtx:
     root: _Any = None        # for side-effecting ops (fact write-back)
     scope: str | None = None
+    # Geography hook (loom/stories/geography.py): (ws, name, target) → allow? Blocks
+    # implausible off-screen teleports at the ENGINE level (prompt rules alone leak).
+    validate_move: _Callable | None = None
 
 
 def world_op(name: str) -> _Callable:
@@ -101,7 +110,7 @@ def normalize(ws: dict | None) -> dict:
     for k in ("flags",):
         if not isinstance(ws.get(k), dict):
             ws[k] = {}
-    for k in ("inventory", "log"):
+    for k in ("inventory", "log", "details", "promises"):
         if not isinstance(ws.get(k), list):
             ws[k] = []
     return ws
@@ -167,13 +176,14 @@ def _coerce_scalar(v: str):
 # ── Apply deltas (with lorebook write-back) ──────────────────────────────────────
 
 def apply_deltas(ws: dict, deltas: list[dict], *, root: Path | None = None,
-                 scope: str | None = None) -> dict:
+                 scope: str | None = None, validate_move=None) -> dict:
     """Apply a list of delta ops to *ws* (mutates + returns) by DISPATCHING each to its
     registered handler in `WORLD_OPS`. `fact` ops are written back into the lorebook
     *scope* (provenance source='auto') so they become retrievable canon. `log` ops append
-    to episodic memory. Unknown ops are ignored."""
+    to episodic memory. Unknown ops are ignored. `validate_move` (geography.py) gates
+    `move` ops — implausible off-screen teleports are dropped."""
     ws = normalize(ws)
-    ctx = _WorldCtx(root=root, scope=scope)
+    ctx = _WorldCtx(root=root, scope=scope, validate_move=validate_move)
     for d in (deltas or []):
         if not isinstance(d, dict):
             continue
@@ -209,8 +219,17 @@ def _op_set_flag(ws, d, ctx):
 
 @world_op("move")
 def _op_move(ws, d, ctx):
-    if d["name"]:
-        _entity(ws, d["name"])["location"] = d["value"]
+    if not d["name"]:
+        return
+    if ctx.validate_move is not None and not ctx.validate_move(ws, d["name"], d["value"]):
+        # Implausible off-screen teleport → drop the move, note it in the episodic log so
+        # the narrator (which reads the log) knows the world didn't actually change.
+        ws["log"].append(f"({d['name']} could not have reached {d['value']} yet)")
+        ws["log"][:] = ws["log"][-_LOG_CAP:]
+        return
+    e = _entity(ws, d["name"])
+    e["location"] = d["value"]
+    e["loc_step"] = int(ws.get("step") or 0)   # when they were last placed (rate-limit basis)
 
 
 @world_op("mood")
@@ -252,6 +271,60 @@ def _op_log(ws, d, ctx):
         ws["log"].append(d["value"])
 
 
+# ── Continuity ledger ops (the harness plan's Phase 3) ───────────────────────────
+# `detail` = a small concrete particular (an object, a gesture, a scar, a phrase) worth keeping
+# true; `promise` = a setup awaiting payoff; `payoff` = the fulfilment. The compiler surfaces
+# ripe entries as the CONTINUITY lane — permission to recur, never an instruction to force.
+
+def _words(t: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z][a-z'\-]{2,}", (t or "").lower())}
+
+
+@world_op("detail")
+def _op_detail(ws, d, ctx):
+    t = " ".join((d["value"] or "").split())
+    if not t:
+        return
+    tw = _words(t)
+    for ex in ws["details"]:
+        ew = _words(ex.get("text", ""))
+        if tw and ew and (tw <= ew or ew <= tw):
+            return                                     # near-dupe of an existing particular
+    ws["details"].append({"text": t, "step": int(ws.get("step") or 0), "name": d["name"]})
+    ws["details"][:] = ws["details"][-_DETAILS_CAP:]
+
+
+@world_op("promise")
+def _op_promise(ws, d, ctx):
+    t = " ".join((d["value"] or "").split())
+    if not t:
+        return
+    tw = _words(t)
+    for ex in ws["promises"]:
+        ew = _words(ex.get("setup", ""))
+        if tw and ew and len(tw & ew) >= max(2, min(len(tw), len(ew)) - 1):
+            return                                     # already tracked
+    ws["promises"].append({"setup": t, "step": int(ws.get("step") or 0), "status": "open"})
+    ws["promises"][:] = ws["promises"][-_PROMISES_CAP:]
+
+
+@world_op("payoff")
+def _op_payoff(ws, d, ctx):
+    tw = _words(d["value"])
+    if not tw:
+        return
+    best, score = None, 0
+    for p in ws["promises"]:
+        if p.get("status") != "open":
+            continue
+        s = len(tw & _words(p.get("setup", "")))
+        if s > score:
+            best, score = p, s
+    if best is not None and score >= 2:
+        best["status"] = "paid"
+        ws["log"].append(f"(paid off: {best['setup'][:70]})")
+
+
 @world_op("fact")
 def _op_fact(ws, d, ctx):
     value = d["value"]
@@ -278,8 +351,10 @@ def _write_fact(root: Path, scope: str, *, title: str, keywords: list[str], cont
 
 # ── Render for the prompt ────────────────────────────────────────────────────────
 
-def render_state(ws: dict) -> str:
-    """The WORLD STATE block injected into the narrator/scribe prompt."""
+def render_state(ws: dict, focus: set[str] | None = None) -> str:
+    """The WORLD STATE block injected into the narrator/scribe prompt. When `focus` is given
+    (a set of lowercased character names), only those entities are listed — so a large cast's
+    state doesn't flood every turn; pass the scene's people. Flags/inventory/log stay global."""
     ws = normalize(ws)
     if not (ws["entities"] or ws["flags"] or ws["inventory"] or ws["log"] or ws["location"]):
         return ""
@@ -289,9 +364,11 @@ def render_state(ws: dict) -> str:
         lines.append(f"Location: {ws['location']}")
     if ws["clock"]:
         lines.append(f"Time: {ws['clock']}")
-    if ws["entities"]:
+    _ents = [(nm, e) for nm, e in ws["entities"].items()
+             if focus is None or nm.lower() in focus]
+    if _ents:
         lines.append("Characters:")
-        for nm, e in ws["entities"].items():
+        for nm, e in _ents:
             bits = []
             if e.get("location"):
                 bits.append(f"at {e['location']}")

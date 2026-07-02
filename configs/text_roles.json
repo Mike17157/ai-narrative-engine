@@ -1,5 +1,5 @@
 {
-  "narrator": "",
-  "scribe": "",
-  "fallback": ""
+ "narrator": "",
+ "scribe": "deepseek/deepseek-v4-pro",
+ "fallback": "openai/gpt-4.1-mini"
 }

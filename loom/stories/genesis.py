@@ -18,6 +18,8 @@ silently corrupts a story (see test_genesis.py).
 """
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+
 
 def _data(res) -> dict:
     return getattr(res, "data", None) or {}
@@ -92,6 +94,150 @@ def design_harnesses(provider, seed: str = "", n: int = 4, grounding: str = "", 
         out.append({
             "id": f"h{i}",
             "role": (h.get("role") or "").strip() or f"character {i + 1}",
+            "temperament": (h.get("temperament") or "").strip(),
+            "want": (h.get("want") or "").strip(),
+            "lie": (h.get("lie") or "").strip(),
+            "wound": (h.get("wound") or "").strip(),
+            "secret": (h.get("secret") or "").strip(),
+            "good_memory": (h.get("good_memory") or "").strip(),
+        })
+    return out
+
+
+# ── Function-first cast (Truby's character web) ──────────────────────────────
+# A cast is a set of POSITIONS in the value contest, not a bag of people (GENESIS.md §6). Each role is
+# a load-bearing dramatic FUNCTION defined RELATIVE to the protagonist — the opponent attacks the lie,
+# the ally aids the need, the false-ally shares the goal and betrays, the mirror drew the opposite lie
+# from the same wound. We generate ONE focused character per role (one model run each) so each gets the
+# full budget AND sees the cast-so-far, filling its slot deliberately instead of colliding in a batch.
+# `steer` = the character's OWN relational ORBIT, pre-assigned so the four supporting roles (generated in
+# parallel, blind to each other) land in DIFFERENT social niches instead of colliding on one (e.g. two
+# "the popstar's fixer"). It nudges territory, not archetype — the interior stays the model's to invent.
+FUNCTION_ROLES = [
+    {"key": "protagonist", "label": "Protagonist", "steer": "",
+     "brief": "the POV lead the story puts on trial — often the unremarkable one hiding behind their lie. "
+              "Everyone else is defined in relation to THEM. If the SEED names or clearly implies a specific "
+              "lead (e.g. 'a shy boy who mends things and the popstar…' → the shy boy), THAT person IS the "
+              "protagonist — build exactly them; do NOT invent a different lead or promote a side character."},
+    {"key": "ally", "label": "Ally",
+     "steer": "Comes from the protagonist's OWN everyday world — a peer beside them in their daily life "
+              "(their work, class, home), NOT from a rival's camp or an authority over them.",
+     "brief": "aids the protagonist's deeper NEED — but is NOT a yes-man. They carry a competing want that "
+              "rubs, and they're the one willing to tell the protagonist the truth they don't want to hear."},
+    {"key": "opponent", "label": "Opponent",
+     "steer": "Occupies the ARENA the protagonist wants into — a direct rival competing for the very same "
+              "place/prize, met on that contested ground, not in the protagonist's private life.",
+     "brief": "attacks the protagonist's central WEAKNESS/lie and competes for a version of the SAME goal. "
+              "Not a cartoon villain — a person with their own justified want; they can be perfectly WARM "
+              "on the surface, which makes them more dangerous."},
+    {"key": "false_ally", "label": "False ally",
+     "steer": "Is embedded ON the protagonist's SIDE — inside their camp, crew, or cause, trusted as one of "
+              "them — which is exactly why the betrayal will land. A DIFFERENT niche from the arena-rival.",
+     "brief": "looks like an ally and shares the protagonist's goal, but for a corrupt or self-serving "
+              "reason, and will BETRAY when it counts — the richest edge, dramatic irony built in."},
+    {"key": "mirror", "label": "Mirror / foil",
+     "steer": "Stands at a REMOVE from the protagonist's immediate circle — a parallel figure from a "
+              "DIFFERENT corner of this world, NOT a member of the protagonist's crew or the rival's "
+              "entourage; they simply happen to share the wound.",
+     "brief": "carries the SAME core wound as the protagonist but drew the OPPOSITE lie from it — the road "
+              "not taken. Shows the reader who the protagonist could have become, for better or worse."},
+]
+
+ONE_HARNESS_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["role", "temperament", "want", "lie", "wound", "secret", "good_memory"],
+    "properties": {
+        "role": {"type": "string"},
+        "temperament": {"type": "string"},
+        "want": {"type": "string"},
+        "lie": {"type": "string"},
+        "wound": {"type": "string"},
+        "secret": {"type": "string"},
+        "good_memory": {"type": "string"},
+    },
+}
+
+DESIGN_ONE_SYS = (
+    "You design ONE REAL PERSON who happens to serve a dramatic function — a PERSON FIRST, a function "
+    "second. The single biggest failure to avoid: a character who is only their theme/role, a vessel with "
+    "no life outside the story's point. A real person is NOT thematically unified — most of what they want "
+    "and do has NOTHING to do with the plot or the world's magic. So build them from the OUTSIDE IN: give "
+    "them a concrete, ordinary daily LIFE (their work, a habit, a small rivalry, a thing they're saving "
+    "for, a person they can't stand, what they do on a day off) and SEVERAL wants, most of them mundane "
+    "and a couple that CONTRADICT each other — the way real people want incompatible things. They should "
+    "feel like they existed before this story found them and would go on if it left. ONLY THEN wire in "
+    "their dramatic function underneath. Ground the interior in real psychology (a coherent Big Five lean, "
+    "an attachment style, the DEFENSE they hit under stress) but SHOW it as behavior, never diagnose it. "
+    "Make `want`, `lie`, `wound`, `secret` FLOW from the makeup. The `lie` is their particular "
+    "DISTORTION of the story's central value — but it is ONE thread of them, not the whole cloth; do NOT "
+    "let two characters have the same shape (e.g. all 'someone who doesn't know if their debt is paid'). "
+    "Fields: a `role` (a SPECIFIC, distinguishing relational "
+    "tag naming their function + a defining detail — 'the popstar's ledger-keeping fixer', never a bare "
+    "'friend'; NOT a name); `temperament` (ONE plain line on how they COME ACROSS in everyday life — a "
+    "concrete manner, a habit, how they treat people — the way you'd describe a real neighbour. ABSOLUTELY "
+    "NO psychology terms or trait names: never write 'adventurousness', 'dutifulness', 'intellect', "
+    "'openness', 'high/low ___', 'attachment', 'defense'. Show the person, never the profile); "
+    "`want` (concrete external goal); `lie`; `wound` (a CONCRETE past "
+    "event, a real scene); `secret`; `good_memory` (a CONCRETE cherished moment). Make them DISTINCT from "
+    "any characters already in the cast. Give this person their OWN independent standing and stakes in the "
+    "world — do NOT default them to being another lead's manager, fixer, handler, assistant, agent, "
+    "secretary, publicist, or bodyguard: that support-staff niche is a crutch and makes the whole cast "
+    "collapse into one person's entourage. No name, no appearance. JSON only."
+)
+
+
+def design_by_role(provider, seed: str = "", grounding: str = "", world="", roles=None) -> list[dict]:
+    """Generate ONE focused harness per dramatic FUNCTION (Truby's web) — a separate model run each, so
+    every character gets the full budget and fills its slot. The ONLY dependency is the protagonist
+    (everyone else is defined AGAINST them), so we generate the protagonist first, then the remaining
+    roles CONCURRENTLY (their distinct functions keep them apart — no sequential chain needed). Returns
+    harnesses tagged with `function` (the role key). See GENESIS.md §6."""
+    if provider is None:
+        return []
+    roles = list(roles or FUNCTION_ROLES)
+    if not roles:
+        return []
+    seed = (seed or "").strip()
+    grounding = (grounding or "").strip()
+    wb = world_brief(world)
+
+    def _gen(role: dict, proto_brief: str) -> dict | None:
+        prompt = (
+            (f"WORLD (the shared stage — this person's background MUST belong to it):\n{wb}\n\n" if wb else "")
+            + (f"SEED (the story / pairing / vibe):\n{seed}\n\n" if seed else "")
+            + (f"PSYCHOLOGY NOTES (real behavioural markers — ground them in these):\n{grounding}\n\n"
+               if grounding else "")
+            + (f"THE PROTAGONIST this character is defined AGAINST — make them a distinct person and wire "
+               f"their function to THIS specific protagonist's lie/wound:\n{proto_brief}\n\n" if proto_brief else "")
+            + f"Design ONE character whose DRAMATIC FUNCTION is the {role['label'].upper()}: {role['brief']}"
+            + (f"\n\nTHEIR PLACE IN THE WORLD (occupy this niche, distinct from the rest of the cast): "
+               f"{role['steer']}" if role.get("steer") else "")
+        )
+        try:
+            res = provider.generate_text(system=DESIGN_ONE_SYS, prompt=prompt, emits=ONE_HARNESS_SCHEMA)
+        except Exception:  # noqa: BLE001 — one role failing shouldn't sink the whole cast
+            return None
+        h = _data(res)
+        return h if (isinstance(h, dict) and (h.get("role") or "").strip()) else None
+
+    # Protagonist first (the shared anchor), then the rest in parallel against it.
+    results: dict[int, dict | None] = {0: _gen(roles[0], "")}
+    others = roles[1:]
+    if results[0] is not None and others:
+        proto_brief = _harness_brief([{**results[0], "id": "h0"}])
+        with ThreadPoolExecutor(max_workers=min(4, len(others))) as ex:
+            futs = {ex.submit(_gen, r, proto_brief): i for i, r in enumerate(others, start=1)}
+            for fut in futs:
+                results[futs[fut]] = fut.result()
+
+    out: list[dict] = []
+    for i, r in enumerate(roles):
+        h = results.get(i)
+        if not h:
+            continue
+        out.append({
+            "id": f"h{i}", "function": r["key"],
+            "role": (h.get("role") or "").strip() or r["label"],
             "temperament": (h.get("temperament") or "").strip(),
             "want": (h.get("want") or "").strip(),
             "lie": (h.get("lie") or "").strip(),
@@ -374,8 +520,14 @@ FORMALIZE_SYS = (
     "this person IN MOTION. Do NOT write one tidy line per trait — a line-per-label is a worksheet, not a "
     "person. Each line is a SITUATED moment — someone pushed a button, asked a question, got too close, "
     "offered something — so the line carries the situation that pulled it out of them, never a free-floating "
-    "aphorism. Let the want, lie, wound and defense TANGLE within and across lines, the way they do in a "
-    "real person; a single line can be three of those at once.\n"
+    "aphorism. But the situation must show up ONLY in the WORDS — what they're refusing, reacting to, "
+    "groping for. Each `sayings` item is PLAIN SPOKEN TEXT and NOTHING ELSE: no quotation marks (the app "
+    "adds those), no dialogue tag ('she says', 'he blurts'), no parenthetical stage direction, no trailing "
+    "narrator explanation of what the line means. If you catch yourself writing '(doing something)' or a "
+    "clause after an em dash that explains the line instead of continuing to speak it, cut it — that's "
+    "narration leaking into a quote field, and it renders broken. Let the want, lie, wound and defense "
+    "TANGLE within and across lines, the way they do in a real person; a single line can be three of those "
+    "at once.\n"
     "Across the set, make sure these land — braided, not isolated:\n"
     "  • the WOUND when something touches it — AND, crucially, the DEFENSE firing in the SAME breath. A "
     "defense is only legible against what it dodges: show the feeling press in and the swerve away from it "

@@ -42,6 +42,8 @@ loom/data/
 
 # Runtime-generated state (not source): lorebook DB, wizard drafts, play sessions
 configs/lorebooks.db
+configs/sources.db
+configs/genesis_runs/
 configs/stories/drafts/
 configs/story_sessions/
 

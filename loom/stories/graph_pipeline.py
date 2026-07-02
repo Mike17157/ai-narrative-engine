@@ -132,6 +132,29 @@ def _spine_bits(g: dict) -> str:
     return "STORY SPINE:\n" + "\n".join(bits) if bits else ""
 
 
+def spine_prose(g: dict) -> str:
+    """The dev-graph rendered as labeled PROSE, not raw JSON — models read information context
+    far better as an outline (ids kept inline so edits/ops can still reference them)."""
+    if not isinstance(g, dict) or not g:
+        return "(none yet)"
+    out = [_spine_bits(g)] if _spine_bits(g) else []
+    nodes = [n for n in (g.get("nodes") or []) if isinstance(n, dict)]
+    if nodes:
+        out.append("BEATS (in order):")
+        for n in nodes:
+            nxt = ", ".join(str(x) for x in (n.get("next") or []))
+            out.append(f"- [{n.get('id', '?')}] {n.get('title', '')}\n"
+                       f"    inflection: {n.get('inflection', '')}\n"
+                       f"    going in: {n.get('start', '')} → coming out: {n.get('end', '')}\n"
+                       f"    event: {n.get('what_happened', '')}"
+                       + (f"\n    next: {nxt}" if nxt else ""))
+    extra = {k: v for k, v in g.items()
+             if k not in ("logline", "wound", "lie", "truth", "nodes") and v}
+    for k, v in extra.items():
+        out.append(f"{k.upper()}: {v}")
+    return "\n".join(out) or "(none yet)"
+
+
 # ── Steps ─────────────────────────────────────────────────────────────────────
 
 async def consult(ctx: StepContext[StoryState, StoryDeps, None]) -> str:
@@ -150,8 +173,7 @@ async def extract(ctx: StepContext[StoryState, StoryDeps, None]) -> dict:
     Halves turn latency vs. running it after the prose.
     """
     s = ctx.state
-    cur = (json.dumps(s.working_graph, ensure_ascii=False)
-           if isinstance(s.working_graph, dict) and s.working_graph else "(none yet)")
+    cur = spine_prose(s.working_graph if isinstance(s.working_graph, dict) else {})
     prompt = (
         f"CHARACTER CARD:\n{s.card}\n\n"
         f"CONVERSATION SO FAR:\n{s.prompt}\n\n"
@@ -247,7 +269,7 @@ async def revise(ctx: StepContext[StoryState, StoryDeps, dict]) -> dict:
     prompt = (
         f"CHARACTER CARD:\n{s.card}\n\n"
         f"DRAFTED STORY GRAPH (polish for consistency; keep ids + next exactly):\n"
-        f"{json.dumps(draft, ensure_ascii=False)}\n\nOutput the polished development graph as JSON."
+        f"{spine_prose(draft)}\n\nOutput the polished development graph as JSON."
     )
     res = await _gen(ctx.deps, system=REVISE_SYS, prompt=prompt, emits=REVISE_SCHEMA)
     data = getattr(res, "data", None)

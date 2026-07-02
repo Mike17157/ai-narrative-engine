@@ -13,6 +13,7 @@
   import AgentChat from '$lib/components/story/AgentChat.svelte';
   import NovelChapters from '$lib/components/story/NovelChapters.svelte';
   import SceneRoutes from '$lib/components/story/SceneRoutes.svelte';
+  import StoryTabs from '$lib/components/story/StoryTabs.svelte';
 
   let st = $derived(stories.current);
 
@@ -144,8 +145,19 @@
   // Cast picker state
   let castPickerArcId = $state(null);  // arc id whose picker is open
 
-  // Lens tabs — the right side is the story DOCUMENT or one focused lens, never stacked.
-  let tab = $state('document');   // 'document' | 'plot' | 'relationships' | 'map'
+  // Header tabs — the shared story chrome (Overview·Cast·World·Plot·Web); one focused surface at a time.
+  const STORY_TABS = [
+    { id: 'overview', label: 'Overview' },
+    { id: 'cast', label: 'Cast' },
+    { id: 'world', label: 'World' },
+    { id: 'plot', label: 'Plot' },
+    { id: 'web', label: 'Web' },
+  ];
+  let tab = $state('overview');
+  let webView = $state('relationships');   // Web tab inner lens: 'relationships' | 'map'
+  // The selected tab drives the chat agent's mode (see AgentChat.syncMode).
+  let chatMode = $derived({ overview: '_story_tools', cast: '_smith_tools', world: '_location_fns',
+                            plot: '_story_tools', web: '_smith_tools' }[tab] ?? '');
 
   // Timeline generation state
   let generatingTimelineArc = $state(null);  // arc.id currently generating
@@ -357,15 +369,10 @@
     <span class="type-badge">{st.type === 'vn' ? '🎴 Visual novel' : '📖 Novel'}</span>
   </div>
 
-  <!-- Lens tabs — the right side is the document or one focused lens, never stacked -->
-  <div class="lens-tabs">
-    <button class="lens-tab" class:on={tab === 'document'} onclick={() => (tab = 'document')}>Document</button>
-    <button class="lens-tab" class:on={tab === 'plot'} onclick={() => (tab = 'plot')}>{st.type === 'vn' ? 'Routes' : 'Plot'}</button>
-    <button class="lens-tab" class:on={tab === 'relationships'} onclick={() => (tab = 'relationships')}>Relationships</button>
-    <button class="lens-tab" class:on={tab === 'map'} onclick={() => (tab = 'map')}>Map</button>
-  </div>
+  <!-- Header tabs — shared story chrome; one focused surface at a time -->
+  <StoryTabs tabs={STORY_TABS} bind:active={tab} />
 
-  {#if tab === 'document'}
+  {#if tab === 'overview'}
   <!-- Heart callout (read-only — the storyboard's emotional core) -->
   {#if st.storyboard?.heart}
     <div class="heart-callout">
@@ -432,27 +439,61 @@
     </div>
   </details>
 
-  <!-- Cast roster — the story's characters -->
-  <details class="dp-details" open>
-    <summary class="dp-summary">🎬 Cast <span class="dp-count">{(st.cast || []).length || ''}</span></summary>
+  <!-- Memory window — how far the narrative thread keeps turns verbatim -->
+  <details class="dp-details">
+    <summary class="dp-summary">🧠 Memory window <span class="dp-count">{st.recent_window ?? 8} turns</span></summary>
     <div class="dp-body">
-      <div class="cast-roster">
-        {#each st.cast || [] as m, i (m.character)}
-          <span class="chip cast-chip" class:locked={m.primary} title={m.primary ? 'Protagonist' : ''}>
-            {m.primary ? '★ ' : ''}{charName(m.character) || m.character}
-            {#if !m.primary}<button class="cast-rm" onclick={() => removeCastMember(i)} title="Remove from cast">×</button>{/if}
-          </span>
-        {/each}
-      </div>
-      <div class="addrow">
-        <Combobox items={castAddItems} bind:value={addPick} placeholder="add character…" />
-        <button class="ghost sm" onclick={addCastMember} disabled={!addPick}>＋ Add</button>
+      <p class="dp-hint">How many of the most recent play turns the story keeps <b>verbatim</b>. Older turns get compressed into each character’s memory when the player sleeps or dies. Smaller = leaner context; larger = more recent detail carried forward.</p>
+      <div class="win-row">
+        <input class="win-slider" type="range" min="2" max="40" step="1"
+          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
+        <input class="win-num" type="number" min="2" max="40"
+          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
+        <span class="win-unit">turns</span>
       </div>
     </div>
   </details>
 
+  {:else if tab === 'cast'}
+  <!-- Cast roster — the story's characters -->
+  <div class="tabhint">The characters in this story. ★ marks the protagonist. Click a face in <b>Web</b> to open a full character card.</div>
+  <div class="cast-roster">
+    {#each st.cast || [] as m, i (m.character)}
+      <button class="chip cast-chip lg" class:locked={m.primary} onclick={() => openCharModal(m.character)} title={m.primary ? 'Protagonist' : 'Open card'}>
+        {m.primary ? '★ ' : ''}{charName(m.character) || m.character}
+        {#if !m.primary}<span class="cast-rm" role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); removeCastMember(i); }} title="Remove from cast">×</span>{/if}
+      </button>
+    {/each}
+  </div>
+  <div class="addrow">
+    <Combobox items={castAddItems} bind:value={addPick} placeholder="add character…" />
+    <button class="ghost sm" onclick={addCastMember} disabled={!addPick}>＋ Add</button>
+  </div>
+
+  <!-- Default personas — the playable "you" cards this story suggests -->
+  <details class="dp-details" open>
+    <summary class="dp-summary">🎭 Default personas <span class="dp-count">{(st.default_personas || []).length || ''}</span></summary>
+    <div class="dp-body">
+      <p class="dp-hint">Playable cards this story suggests you embody. They float to the top of the <b>Playing as</b> menu when someone plays — pick the “you” that fits this world.</p>
+      {#if playableCards.length}
+        <div class="dp-chips">
+          {#each playableCards as c (c.key)}
+            <button class="dp-chip" class:on={isDefaultPersona(c.key)} onclick={() => toggleDefaultPersona(c.key)} title={blurb(c)}>
+              {#if c.reference || c.avatar}<img src={c.reference || c.avatar} alt={c.name} />{:else}<span class="dp-ph">🎭</span>{/if}
+              {c.name || c.key}
+              <span class="dp-mark">{isDefaultPersona(c.key) ? '✓' : '+'}</span>
+            </button>
+          {/each}
+        </div>
+      {:else}
+        <p class="dp-empty">No playable characters yet — make one in <a href="/characters/personas">Characters ▸ Personas</a>.</p>
+      {/if}
+    </div>
+  </details>
+
+  {:else if tab === 'world'}
   <!-- Locations — bare environments; group under an area to sketch a light map -->
-  <details class="dp-details">
+  <details class="dp-details" open>
     <summary class="dp-summary">📍 Locations <span class="dp-count">{(st.locations || []).length || ''}</span></summary>
     <div class="dp-body">
       <p class="dp-hint">The world’s bare places (no people/events). Pick an <b>area</b> to nest a location inside a larger region — a light map, no coordinates.</p>
@@ -480,26 +521,11 @@
   </details>
 
   <!-- Places & scenes — story-authored containers + character-anchored spots -->
-  <details class="dp-details">
+  <details class="dp-details" open>
     <summary class="dp-summary">🗺 Places & scenes <span class="dp-count">{(st.places || []).length || ''}</span></summary>
     <div class="dp-body">
       <p class="dp-hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
       <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
-    </div>
-  </details>
-
-  <!-- Memory window — how far the narrative thread keeps turns verbatim -->
-  <details class="dp-details">
-    <summary class="dp-summary">🧠 Memory window <span class="dp-count">{st.recent_window ?? 8} turns</span></summary>
-    <div class="dp-body">
-      <p class="dp-hint">How many of the most recent play turns the story keeps <b>verbatim</b>. Older turns get compressed into each character’s memory when the player sleeps or dies. Smaller = leaner context; larger = more recent detail carried forward.</p>
-      <div class="win-row">
-        <input class="win-slider" type="range" min="2" max="40" step="1"
-          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
-        <input class="win-num" type="number" min="2" max="40"
-          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
-        <span class="win-unit">turns</span>
-      </div>
     </div>
   </details>
 
@@ -649,19 +675,25 @@
     <div class="empty-plot">No plot yet — ask the Author to draft arcs, or generate a storyboard.</div>
   {/if}
 
-  {:else if tab === 'relationships'}
-    <StoryCanvas layer="relationships" story={st} storyKey={st.key} cast={castOptions}
-                 focus={selectedCharKey || primaryCharKey} onSelectChar={openCharModal} />
-
-  {:else if tab === 'map'}
-    <StoryCanvas layer="map" story={st} storyKey={st.key} cast={castOptions}
-                 onSelectNode={selectGraphNode} />
+  {:else if tab === 'web'}
+    <!-- Web = the two graph lenses: how the cast relate, and how places connect -->
+    <div class="view-toggle webtoggle">
+      <button class="vt-btn" class:active={webView === 'relationships'} onclick={() => (webView = 'relationships')}>Relationships</button>
+      <button class="vt-btn" class:active={webView === 'map'} onclick={() => (webView = 'map')}>Map</button>
+    </div>
+    {#if webView === 'relationships'}
+      <StoryCanvas layer="relationships" story={st} storyKey={st.key} cast={castOptions}
+                   focus={selectedCharKey || primaryCharKey} onSelectChar={openCharModal} />
+    {:else}
+      <StoryCanvas layer="map" story={st} storyKey={st.key} cast={castOptions}
+                   onSelectNode={selectGraphNode} />
+    {/if}
   {/if}
 
 </div></div>
 
 <!-- Voice story agent (Phase 1): speak an edit; it applies via graph-ops + highlights the change -->
-<AgentChat storyKey={st.key} primaryChar={primaryCharKey} onApplied={handleApplied} onSpeaker={(s) => speaker = s} />
+<AgentChat storyKey={st.key} primaryChar={primaryCharKey} syncMode={chatMode} onApplied={handleApplied} onSpeaker={(s) => speaker = s} />
 {#if agentMsg}
   <div class="agent-toast">{agentMsg}</div>
 {/if}
@@ -760,12 +792,10 @@
   .title-row .ip-title { flex: 1; }
   .type-badge { flex: none; font-size: 11.5px; color: var(--muted); padding: 3px 9px; border-radius: 999px;
     border: 0.5px solid var(--border); background: var(--elev); white-space: nowrap; }
-  /* ── lens tabs ── */
-  .lens-tabs { display: flex; gap: 16px; border-bottom: 0.5px solid var(--border); margin: 10px 0 16px; }
-  .lens-tab { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 2px; margin-bottom: -1px;
-    font-size: 13.5px; color: var(--muted); cursor: pointer; }
-  .lens-tab:hover { color: var(--text); }
-  .lens-tab.on { color: var(--text); border-bottom-color: var(--text); }
+  .tabhint { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 0 0 4px; }
+  .webtoggle { align-self: flex-start; margin-bottom: 12px; }
+  .cast-chip.lg { font-size: 12.5px; padding: 5px 12px; cursor: pointer; }
+  .cast-chip.lg:hover { border-color: var(--accent); color: var(--text); }
   .empty-plot { padding: 28px 4px; color: var(--faint); font-size: 13px; }
   .ip-meta    { display: flex; flex-wrap: wrap; gap: 8px; margin-left: -8px; }
   .ip-tone    { flex: 0 0 220px; font-size: 12.5px; }

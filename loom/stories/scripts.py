@@ -312,7 +312,9 @@ def set_start(doc, *, _id, id):
                   "add a cast member", "introduce a character"],
         params={"name": "the character's name (optional — blank for a draft harness)",
                 "role": "their role in the story (e.g. mentor, rival)",
-                "persona": "who they are — personality, voice, wants (a paragraph) (optional)",
+                "persona": "a DESCRIPTION of who they are — appearance, personality, voice, wants, in "
+                           "prose (a paragraph). Never a quote or a line of spoken dialogue — describe "
+                           "them, don't voice them (optional)",
                 "temperament": "psychology in a phrase — Big Five markers, attachment style, defenses (optional)",
                 "want": "what they consciously pursue (optional)",
                 "lie": "the false belief they act on (optional)",

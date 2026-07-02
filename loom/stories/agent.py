@@ -52,6 +52,60 @@ def _story_context(ctx, skey: str, fields: list) -> str:
     return block
 
 
+def _graph_prose(graph: dict) -> str:
+    """The editable doc rendered as labeled PROSE, never raw JSON — models read information
+    context far better as an outline. Ids stay inline ([c3]) so the model's ops can still
+    reference them. Unknown sections fall back to YAML (readable, lossless)."""
+    if not isinstance(graph, dict) or not graph:
+        return "(empty)"
+    import yaml as _yaml
+    out: list[str] = []
+    known = {"title", "name", "premise", "tone", "themes", "cast", "relationships",
+             "locations", "world"}
+    for k in ("title", "name"):
+        if graph.get(k):
+            out.append(f"TITLE: {graph[k]}")
+            break
+    if graph.get("premise"):
+        out.append(f"PREMISE: {graph['premise']}")
+    if graph.get("tone"):
+        out.append(f"TONE: {graph['tone']}")
+    if graph.get("themes"):
+        out.append("THEMES: " + ", ".join(str(t) for t in graph["themes"]))
+    cast = [c for c in (graph.get("cast") or []) if isinstance(c, dict)]
+    if cast:
+        out.append("CAST:")
+        for c in cast:
+            head = f"- [{c.get('id', '?')}] {c.get('name') or '(unnamed)'}"
+            if c.get("role"):
+                head += f" — {c['role']}"
+            out.append(head)
+            for f in ("persona", "temperament", "want", "lie", "wound", "secret",
+                      "good_memory", "appearance"):
+                if c.get(f):
+                    out.append(f"    {f}: {c[f]}")
+    rels = [r for r in (graph.get("relationships") or []) if isinstance(r, dict)]
+    if rels:
+        nm = {c.get("id"): (c.get("name") or c.get("id")) for c in cast}
+        out.append("RELATIONSHIPS:")
+        for r in rels:
+            bits = " / ".join(str(r[k]) for k in ("nature", "dynamic", "stance", "note") if r.get(k))
+            out.append(f"- [{r.get('id', '?')}] {nm.get(r.get('source'), r.get('source'))} → "
+                       f"{nm.get(r.get('target'), r.get('target'))}: {bits}")
+    locs = [l for l in (graph.get("locations") or []) if isinstance(l, dict)]
+    if locs:
+        out.append("LOCATIONS:")
+        for l in locs:
+            out.append(f"- [{l.get('id', '?')}] {l.get('name', '')}"
+                       + (f" (in {l['parent']})" if l.get("parent") else "")
+                       + (f": {l['description']}" if l.get("description") else ""))
+    # `world` is rendered separately as the ESTABLISHED WORLD brief — skipped here (no dup).
+    rest = {k: v for k, v in graph.items() if k not in known and v not in (None, "", [], {})}
+    if rest:
+        out.append("OTHER:\n" + _yaml.safe_dump(rest, allow_unicode=True, sort_keys=False).strip())
+    return "\n".join(out) or "(empty)"
+
+
 def _propose_label(fn: str, params: dict, graph: dict | None = None) -> str:
     """A short title for an option/approval card (the action + its key nouns). Resolves id-valued
     params (e.g. remove_character's `id`, a relationship's source/target) to the entity's name via
@@ -72,11 +126,16 @@ def _propose_label(fn: str, params: dict, graph: dict | None = None) -> str:
 
 
 def _propose_detail(params: dict) -> str:
-    """The descriptive body of an option card — so a SERIES of options is choosable, not just labels."""
+    """A CONCISE gist for an option card — the first sentence or two, so a row of options is scannable
+    at a glance (the full persona is applied on approve and shown in the character card). A wall of
+    prose 'tells you nothing' when you're comparing five cards; the hook does."""
     for k in ("persona", "premise", "description", "note", "value"):
         v = params.get(k)
         if isinstance(v, str) and v.strip():
-            return v.strip()[:800]   # show the whole sketch — a runaway guard only, not a clip
+            s = v.strip()
+            sents = re.findall(r".*?[.!?](?:\s|$)", s)   # split on sentence enders, keep them
+            gist = "".join(sents[:2]).strip() or s        # first 1-2 sentences = the hook
+            return gist[:240]
     return ""
 
 
@@ -185,7 +244,7 @@ def run_turn(ctx, body: dict) -> dict:
         (f"\nSTORY CONTEXT:\n{story_ctx}" if story_ctx else ""),
         (f"\n{craft_block}" if craft_block else ""),
         (f"\n{char_ground}" if char_ground else ""),
-        f"\nCURRENT {label} (the editable graph):\n" + json.dumps(graph, ensure_ascii=False),
+        f"\nCURRENT {label} (the editable document — reference entries by their [id]):\n" + _graph_prose(graph),
         (f"\n{cfg.get('tool_rules', '')}" if cfg.get("tool_rules") else ""),
     ] if p)
 
@@ -211,17 +270,24 @@ def run_turn(ctx, body: dict) -> dict:
             "defense they hit under stress to keep them coherent, but that is your INTERNAL scaffold ONLY. "
             "Write the persona as NATURAL PROSE that reveals them ENTIRELY through concrete, specific, "
             "idiosyncratic behaviour: a real habit, the exact thing they're into, how they actually talk, "
-            "what they avoid. NEVER name a personality trait, facet, or framework in the prose — no "
-            "'extraversion', 'gregariousness', 'neuroticism', 'conscientiousness', 'openness', "
-            "'agreeableness', 'attachment', 'high/low ___'. SHOW the person; never diagnose them. Weave "
-            "in, in the same prose, how they relate to EACH OTHER and to "
-            "the established main characters. Set `role` to a short plain RELATIONAL tag (e.g. 'Mara's "
-            "friend', 'one of the crew') — never a personality label; leave `name` blank unless the writer "
-            "gave one. Do NOT call set_relationship or fill the structured want/lie/wound/secret/"
-            "temperament params — the system formalizes those AFTER each character is ratified. "
-            "(create_character is unavailable here.) Revise an existing entry with set_character_field. "
-            "Propose 2-5 distinct characters as cards. When the writer's prompt is terse, INVENT the depth "
-            "— never echo a generic stub like 'the boy'; give a real, particular person."
+            "what they avoid. LEAD the persona with its single most DISTINCTIVE, story-relevant image — the "
+            "first sentence alone must tell the reader who this is and what tension they bring, because the "
+            "writer skims it as a card before reading the rest. NEVER name a personality trait, facet, or "
+            "framework in the prose — no 'extraversion', 'gregariousness', 'neuroticism', "
+            "'conscientiousness', 'openness', 'agreeableness', 'attachment', 'high/low ___'. SHOW the "
+            "person; never diagnose them. Weave in, in the same prose, how they relate to EACH OTHER and to "
+            "the established main characters. Set `role` to a SPECIFIC, DISTINGUISHING relational tag that "
+            "names their function AND a defining detail (e.g. 'the popstar's ledger-keeping fixer', 'the "
+            "lute-dragging hype man', 'the apprentice gardener who mends things') — never a bare, generic "
+            "tag like 'her friend', 'blunt friend', or 'protective friend' that could fit three different "
+            "people; the role is the card's HEADLINE, so it must set this person apart at a glance. Leave "
+            "`name` blank unless the writer gave one. Do NOT call set_relationship or fill the structured "
+            "want/lie/wound/secret/temperament params — the system formalizes those AFTER each character is "
+            "ratified. (create_character is unavailable here.) Revise an existing entry with "
+            "set_character_field. Propose 2-5 characters that are DISTINCT FROM ONE ANOTHER — different "
+            "function, different relationship, different hook; NEVER offer two variations on the same "
+            "archetype (e.g. two 'blunt protective friends'). When the writer's prompt is terse, INVENT the "
+            "depth — never echo a generic stub like 'the boy'; give a real, particular person."
             "\n\nONE CONNECTED CAST — they share a story. Give the cast a COMMON WORLD (the same school, "
             "town, band, workplace, neighbourhood) and make sure they plausibly belong together with REAL "
             "reasons to cross paths. Weave a concrete CONNECTION into each persona — how they know each "
@@ -270,14 +336,24 @@ def run_turn(ctx, body: dict) -> dict:
     # PROPOSE mode (the Structure creation step): nothing applies until the writer approves, so be
     # generous — when they wonder/explore/ask for options, offer a SERIES of distinct options as cards.
     if body.get("propose"):
-        system += ("\n\nPROPOSE MODE — the writer is BUILDING and will APPROVE before anything takes "
-                   "effect (every tool call you make is shown as a card; nothing is applied until they "
-                   "accept it). So be generous and concrete: when they wonder, explore, or ask for "
-                   "options/ideas, propose a SERIES of 2-4 DISTINCT, story-grounded options by calling "
-                   "the richest matching tool ONCE PER OPTION (e.g. several create_character calls) — "
-                   "they surface as option cards to choose from. For a specific single change, propose "
-                   "just that one. Each option must be specific to THIS story, distinct from the others, "
-                   "and not already present.")
+        system += ("\n\nPROPOSE MODE — you are the writer's CO-AUTHOR, not a vending machine. The writer is "
+                   "BUILDING; every tool call surfaces as a card they APPROVE before it takes effect, and "
+                   "your PROSE reply is shown ABOVE the cards. The UI already shows the writer a computed "
+                   "'Next' step, so your job is to ACT, not to guide with questions:"
+                   "\n• KEEP PROSE TO ONE SHORT SENTENCE — a quick reaction, nothing more. NEVER ask a "
+                   "question, NEVER end with a question mark, NEVER prompt the writer for a tone/name/"
+                   "direction (invent it and act). Do NOT restate, list, or summarize the cards (they're "
+                   "shown separately), do NOT narrate what you're about to do ('Proceeding to add…'). Never "
+                   "answer with bare cards and no words, but never more than a sentence either."
+                   "\n• When the DIRECTION is clear enough to act, propose 2-4 DISTINCT, story-grounded "
+                   "options by calling the richest matching tool ONCE PER OPTION (e.g. several "
+                   "create_character calls) — they surface as cards to react to. For a specific single "
+                   "change, propose just that one."
+                   "\n• When the brief is thin, DON'T stall for clarification — INVENT the shape (genre, "
+                   "stakes, who-pulls-against-whom) yourself, commit to it, and propose cards for it. A "
+                   "concrete guess the writer can reject beats a question that costs a turn."
+                   "\n• Be OPINIONATED and proactive: make the next move. Every option must be specific to "
+                   "THIS story, distinct from the others, and not already present.")
     prompt = transcript or f"Apply the appropriate tools to the {label.lower()}."
 
     # Two opt-in flows gate tool application for a suggest→approve UX (the client sets the flag):
@@ -310,6 +386,23 @@ def run_turn(ctx, body: dict) -> dict:
                 pp = GO._call_params(c)
                 proposed.append({"fn": fn, "params": pp,
                                  "label": _propose_label(fn, pp, graph), "detail": _propose_detail(pp)})
+            # Co-author voice: when the model tool-called but emitted NO prose (common with OpenAI-style
+            # tool calling — content is null when tool_calls are present), do ONE cheap text-only pass so a
+            # card-dump still arrives with a thinking note + a forward-looking question, never silent. Skipped
+            # when the model already spoke or proposed nothing — zero cost on the discuss path.
+            if proposed and not reply_text:
+                sketch = "; ".join(p["label"] for p in proposed)
+                try:
+                    note = provider.generate_text(
+                        system="You are the writer's CO-AUTHOR. You just proposed these as approval cards: "
+                               + sketch + ". Reply with ONE short sentence reacting — that's ALL. NEVER ask a "
+                               "question or end with a question mark; the UI already shows the writer what's "
+                               "next. Do NOT restate, list, or summarize the cards; no preamble, no "
+                               "'Proceeding to…'.",
+                        prompt="Write the one-sentence co-author note.")
+                    reply_text = (getattr(note, "text", "") or "").strip()
+                except Exception:  # noqa: BLE001 — the note is a nicety; never sink the proposal
+                    pass
             return {"ok": True, "graph": graph, "proposed": proposed, "reply": reply_text,
                     "offered": [f.name for f in off], "active_behavior": behavior_sig,
                     "context_cut": context_cut}

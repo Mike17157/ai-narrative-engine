@@ -10,15 +10,15 @@ import importlib.util
 import io
 import threading
 
-DEFAULT_VOICE = "af_heart"          # warm female American English
+DEFAULT_VOICE = "bm_george"         # deep, measured British male — the "Jarvis" default
 # A curated subset of Kokoro's voices (a=American, b=British; f=female, m=male).
 VOICES = [
-    "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky",
+    "bm_george", "bm_lewis", "bf_emma", "bf_isabella",
     "am_michael", "am_adam", "am_echo", "am_liam",
-    "bf_emma", "bf_isabella", "bm_george", "bm_lewis",
+    "af_heart", "af_bella", "af_nicole", "af_sarah", "af_sky",
 ]
 
-_pipeline = None
+_pipelines: dict[str, object] = {}   # lang_code -> KPipeline; British voices need 'b' G2P, American 'a'
 _lock = threading.Lock()
 _available: bool | None = None
 
@@ -43,15 +43,19 @@ def _bind_espeak() -> None:
         pass
 
 
-def _get_pipeline():
-    global _pipeline
-    if _pipeline is None:
+def _get_pipeline(voice: str):
+    """The KPipeline for this voice's language, cached per lang. British voices (bf_/bm_) phonemize
+    with lang_code='b'; using the American pipeline on them mangles the accent."""
+    lang = "b" if voice.startswith(("bf_", "bm_")) else "a"
+    pipe = _pipelines.get(lang)
+    if pipe is None:
         with _lock:
-            if _pipeline is None:
+            pipe = _pipelines.get(lang)
+            if pipe is None:
                 _bind_espeak()
                 from kokoro import KPipeline
-                _pipeline = KPipeline(lang_code="a")     # 'a' = American English
-    return _pipeline
+                _pipelines[lang] = pipe = KPipeline(lang_code=lang)
+    return pipe
 
 
 def synth_wav(text: str, voice: str | None = None) -> bytes:
@@ -59,8 +63,9 @@ def synth_wav(text: str, voice: str | None = None) -> bytes:
     import numpy as np
     import soundfile as sf
 
-    pipe = _get_pipeline()
-    chunks = [audio for _gs, _ps, audio in pipe(text, voice=(voice or DEFAULT_VOICE))]
+    v = voice or DEFAULT_VOICE
+    pipe = _get_pipeline(v)
+    chunks = [audio for _gs, _ps, audio in pipe(text, voice=v)]
     if not chunks:
         return b""
     wav = np.concatenate(chunks)

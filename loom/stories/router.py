@@ -845,6 +845,186 @@ def register(app, ctx):
                                 status_code=502)
         return {"harnesses": hs}
 
+    @app.post("/api/stories/genesis/roles")
+    def genesis_roles(body: dict):
+        """Function-first cast — generate ONE focused harness per Truby dramatic role (protagonist / ally /
+        opponent / false-ally / mirror), each a separate model run in context of the cast so far. See
+        GENESIS.md §6. Body: { seed?, world?, model? } → { harnesses: [{id, function, role, …}] }."""
+        from .genesis import design_by_role
+        body = body or {}
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        seed = body.get("seed", "")
+        from .pipeline import grounding as _G
+        try:
+            psyche = _G.psyche_notes(ctx.root, seed or "character personality behaviour", k=6)
+        except Exception:  # noqa: BLE001 — grounding is best-effort; never block generation
+            psyche = ""
+        try:
+            hs = design_by_role(provider, seed=seed, grounding=psyche, world=body.get("world") or "")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"role design failed: {exc}"}, status_code=500)
+        if not hs:
+            return JSONResponse({"error": "the model returned no characters — try a different model in "
+                                 "the ⚙ picker."}, status_code=502)
+        return {"harnesses": hs}
+
+    @app.post("/api/stories/genesis/worldgen")
+    def genesis_worldgen(body: dict):
+        """BOTTOM-UP world gen: accrete N radically distinct, procedurally-ruled SYSTEMS that interlock
+        (à la The Wandering Inn's faerie magic beside the [System]); then let a concrete opening EMERGE
+        from their sharpest collision. Body: { seed?, n?, systems?, model? } → { systems, scenario }."""
+        from .worldgen import accrete_systems, scenario_from_systems, gen_particulars
+        body = body or {}
+        provider, systems_err = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems_err}, status_code=400)
+        seed = body.get("seed", "")
+        try:
+            if body.get("mode") == "particulars":   # anti-slop: lived fragments, systems implicit
+                sub = body.get("substrate") if isinstance(body.get("substrate"), dict) else None
+                parts = gen_particulars(provider, seed, int(body.get("n") or 6), substrate=sub)
+                if not parts:
+                    return JSONResponse({"error": "the model returned nothing — try a different model."}, status_code=502)
+                return {"particulars": parts}
+            systems = body.get("systems") if isinstance(body.get("systems"), list) else accrete_systems(provider, seed, int(body.get("n") or 4))
+            scenario = scenario_from_systems(provider, systems, seed) if systems else {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"worldgen failed: {exc}"}, status_code=500)
+        if not systems:
+            return JSONResponse({"error": "the model returned no systems — try a different model."}, status_code=502)
+        return {"systems": systems, "scenario": scenario}
+
+    @app.post("/api/stories/genesis/premise")
+    def genesis_premise(body: dict):
+        """Targeted PREMISE — a concrete dramatic situation (want/obstacle/stakes/spark), NOT a theme.
+        Body: { seed?, model? } → { premise }."""
+        from .worldgen import build_premise
+        body = body or {}
+        provider, err = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": err}, status_code=400)
+        try:
+            p = build_premise(provider, body.get("seed", ""))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"premise failed: {exc}"}, status_code=500)
+        if not p:
+            return JSONResponse({"error": "the model returned no premise — try a different model."}, status_code=502)
+        return {"premise": p}
+
+    @app.post("/api/stories/genesis/substrate")
+    def genesis_substrate(body: dict):
+        """The invisible SUBSTRATE — the world's ache + a few real traditions + place + people (the skeleton
+        the author knows, never shows). Body: { seed?, model? } → { substrate }."""
+        from .worldgen import build_substrate
+        body = body or {}
+        provider, err = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": err}, status_code=400)
+        try:
+            sub = build_substrate(provider, body.get("seed", ""))
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"substrate failed: {exc}"}, status_code=500)
+        if not sub:
+            return JSONResponse({"error": "the model returned no substrate — try a different model."}, status_code=502)
+        return {"substrate": sub}
+
+    @app.post("/api/stories/genesis/scene-loop")
+    def genesis_scene_loop(body: dict):
+        """Loop-based scene gen — draft → critique → revise, N rounds, converging to the bar (no culling).
+        Model-agnostic: tests whether looping lifts a WEAK model to strong-model quality. Body: { brief,
+        rounds?, model?, critic_model?, } → { scene, trace, rounds_used }."""
+        from .worldgen import loop_scene
+        body = body or {}
+        provider, systems_err = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems_err}, status_code=400)
+        critic = provider
+        cm = (body.get("critic_model") or "").strip()
+        if cm:
+            try:
+                critic = ctx.text_provider_for(cm, {}, None) or provider
+            except Exception:  # noqa: BLE001
+                critic = provider
+        try:
+            out = loop_scene(provider, body.get("brief") or "", int(body.get("rounds") or 3), critic_provider=critic)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"scene-loop failed: {exc}"}, status_code=500)
+        if not out.get("scene"):
+            return JSONResponse({"error": "the model returned no scene — try a different model."}, status_code=502)
+        return out
+
+    @app.post("/api/stories/genesis/generate")
+    async def genesis_generate(body: dict):
+        """Grow a WHOLE story in one streamed pydantic-graph run — premise → substrate → particulars →
+        cast → weave → scene, each a focused node. Returns {job}; GenStream renders per-node progress
+        (events: {type:'node', node, status}). The per-step endpoints above stay for manual editing.
+        Body: { seed?, world?, rounds?, model?, critic_model? }."""
+        from .genesis_graph import (run_genesis, GenesisState, GenesisDeps, genesis_state_from,
+                                     save_run, load_run)
+        import uuid as _uuid
+        body = body or {}
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        critic = provider
+        cm = (body.get("critic_model") or "").strip()
+        if cm:
+            try:
+                critic = ctx.text_provider_for(cm, {}, None) or provider
+            except Exception:  # noqa: BLE001
+                critic = provider
+        seed = body.get("seed", "")
+        # RESUME: a run is keyed by run_id; its checkpoint (the accumulated graph state) is stored as
+        # configs/genesis_runs/<run_id>.json. Reload it → completed nodes short-circuit, rest re-run.
+        run_id = (body.get("run_id") or "").strip() or _uuid.uuid4().hex[:12]
+        saved = load_run(ctx.root, run_id) if body.get("run_id") else None
+        if isinstance(saved, dict) and saved:
+            state = genesis_state_from(saved)
+        else:
+            # Ground the cast in the modern-psych scaffold (same _psyche book as genesis_roles).
+            from .pipeline import grounding as _G
+            try:
+                psyche = _G.psyche_notes(ctx.root, seed or "character personality behaviour", k=6)
+            except Exception:  # noqa: BLE001 — grounding is best-effort
+                psyche = ""
+            state = GenesisState(seed=seed, world=body.get("world") or "", grounding=psyche,
+                                 rounds=int(body.get("rounds") or 2))
+
+        def work(emit, cancelled):
+            import asyncio as _aio
+            emit({"type": "run", "run_id": run_id})    # client keeps this to resume an interrupted run
+            def checkpoint(state_dict):
+                save_run(ctx.root, run_id, state_dict)
+            deps = GenesisDeps(provider=provider, root=ctx.root, critic_provider=critic,
+                               on_event=emit, cancel=cancelled, on_checkpoint=checkpoint)
+            return _aio.run(run_genesis(state, deps))
+
+        job = _start_stream_job("genesis", "Grow story", (seed[:60] or "story"), "stories/genesis", work)
+        return {"job": job.id}
+
+    @app.post("/api/stories/genesis/systems")
+    async def genesis_systems(body: dict):
+        """Bottom-up WORLD gen as a streamed pydantic-graph run — accrete interlocking systems →
+        scenario. Returns {job}; GenStream renders per-node progress. Body: { seed?, n?, model? }.
+        (The sync /genesis/worldgen stays for the particulars mode + non-streamed callers.)"""
+        from .genesis_graph import run_systems, SystemsState, GenesisDeps
+        body = body or {}
+        provider, systems = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": systems}, status_code=400)
+        state = SystemsState(seed=body.get("seed", ""), n=int(body.get("n") or 4))
+
+        def work(emit, cancelled):
+            import asyncio as _aio
+            deps = GenesisDeps(provider=provider, on_event=emit, cancel=cancelled)
+            return _aio.run(run_systems(state, deps))
+
+        job = _start_stream_job("genesis", "World systems", (body.get("seed", "")[:60] or "world"),
+                                "stories/genesis", work)
+        return {"job": job.id}
+
     @app.post("/api/stories/genesis/weave")
     def genesis_weave(body: dict):
         """Step 2 — wire the tension web between harnesses.
@@ -1470,10 +1650,11 @@ def register(app, ctx):
         # it back so the model builds on their changes rather than its own last draft.
         working_spine = body.get("spine") or body.get("graph")
         if isinstance(working_spine, dict) and working_spine:
+            from .graph_pipeline import spine_prose as _spine_prose
             system = system + (
                 "\n\nCURRENT WORKING STORY GRAPH (the writer may have edited this in the graph "
                 "pane; treat their edits as authoritative and continue from them):\n"
-                + json.dumps(working_spine, ensure_ascii=False)
+                + _spine_prose(working_spine)
             )
 
         # Serialize the conversation history as a readable transcript for the prompt.
@@ -2903,344 +3084,31 @@ def register(app, ctx):
         opts = {**tconn.to_model_options(), "max_tokens": 40000}
         if body.get("chat_model"):
             opts["model"] = body["chat_model"]
+        if isinstance(body.get("chat_params"), dict):    # e.g. {"reasoning_effort": "none"} for GLM non-thinking
+            opts.update(body["chat_params"])
         provider = build_provider(ModelDef(provider=tconn.provider, kind="text", options=opts))
 
-        # Compose the director's brief from the story.
-        from ..server.services.emotions import EMOTION_KEYS, NORMAL_KEYS
-
-        def _char_emotion_keys(char_key: str) -> list[str]:
-            """Return this character's affect.range keys (new or old manifest format)."""
-            mf = ctx.portrait_manifest(char_key)
-            raw = (mf.get("affect") or {}).get("range") if isinstance(mf.get("affect"), dict) else None
-            if isinstance(raw, list) and raw:
-                if isinstance(raw[0], dict):
-                    return [e["emotion"] for e in raw if e.get("emotion") in EMOTION_KEYS]
-                return [k for k in raw if k in EMOTION_KEYS]
-            return list(NORMAL_KEYS)
-
-        def cast_line(m):
-            c = ctx.base_settings.characters.get(m.character)
-            name = c.name if c else m.character
-            desc = ((c.system or "").splitlines()[0] if c else "")[:140]
-            keys = _char_emotion_keys(m.character)
-            return f"- {name}: {desc}\n  emotions: {', '.join(keys)}"
-
-        cast = "\n".join(cast_line(m) for m in st.cast) or "(none)"
-        locs = "\n".join(f"- {l.id} | {l.name}: {l.description}" for l in st.locations) or "(none)"
-
-        # Story-authored PLACES (containers) + their character-anchored SCENES — the world's
-        # spots ("mom's kitchen", "the baker's bakery"). Rendered so the director knows who is
-        # usually where, and can place characters in their spots without being told each turn.
-        def _cname(k: str) -> str:
-            c = ctx.base_settings.characters.get(k)
-            return (c.name if c else k) or k
-
-        def _scene_line(s) -> str:
-            anchors = [_cname(k) for k in ([s.character] if s.character else []) + list(s.characters or [])]
-            who = ", ".join(a for a in anchors if a) or "shared"
-            tail = f" — {s.backstory}" if s.backstory else ""
-            home = " [HOME slot]" if s.role == "persona_home" else ""
-            return f"    · {s.name or s.id} [{who}]{home}{tail}"
-
-        def _place_block(p) -> str:
-            lines = [f"- {p.name}" + (f": {p.description}" if p.description else "")]
-            lines += [_scene_line(s) for s in p.scenes]
-            return "\n".join(lines)
-
-        places = "\n".join(_place_block(p) for p in st.places)
-        # World lore is no longer dumped here — it lives in the `story-<key>` book and is
-        # retrieved (ranked) into the WORLD INFO block below, like every other lorebook.
-        cur = body.get("location") or st.start or (st.locations[0].id if st.locations else "")
-        # The protagonist. The frontend passes who *you* are this playthrough. Two shapes:
-        #  - EMBODIED: player.character = a playable character KEY → the human puppets a real
-        #    card. We pull its name + full backstory (`system`) and attach its per-character
-        #    lorebook scope so the puppet's canon flows into context like any other lore. The
-        #    binding is per-playthrough (not stored on the story) → the puppet ports anywhere.
-        #  - LEGACY: player.{name,description} = the thin persona (or a bare "Player").
-        player = body.get("player") or {}
-        player_char = (player.get("character") or "").strip()
-        player_scope = None
-        player_back = ""
-        pc = ctx.base_settings.characters.get(player_char) if player_char else None
-        if pc is not None:
-            player_name = pc.name or (player.get("name") or "Player")
-            player_back = (pc.system or "").strip()
-            player_desc = (player_back.splitlines()[0][:200] if player_back else "")
-            player_scope = re.sub(r"[^\w\-]+", "_", player_char)
-        else:
-            player_name = (player.get("name") or "Player").strip() or "Player"
-            player_desc = (player.get("description") or "").strip()
-        player_line = (
-            f"PLAYER (the human DRIVES this character — narrate TO them and react to their "
-            f"actions; never decide their choices or speak for them): {player_name}"
-            + (f" — {player_desc}" if player_desc else "")
-        )
-        system = (
-            f"You are the narrator and director of an interactive visual novel titled \"{st.name}\".\n"
-            f"PREMISE: {st.premise}\nTONE: {st.tone}\n"
-            + f"{player_line}\n"
-            f"CAST (use these names):\n{cast}\n"
-            f"LOCATIONS (the scene is in exactly one; use the id):\n{locs}\n"
-            + (f"PLACES (containers holding character 'spots' — honor who is usually where; a "
-               f"character at home is in their spot unless the scene says otherwise):\n{places}\n" if places else "")
-            + "\n"
-            "Narrate the next moment in-world and in the established tone, responding to the player. "
-            "Then report the scene state in your structured output:\n"
-            "- reply: the narration (second person to the player, plus character action/dialogue). Vivid but concise.\n"
-            "- location: the id of the location the scene is currently in (one of the listed ids).\n"
-            "- present: ALWAYS list the names of EVERY cast character physically in the scene right now "
-            "(anyone who speaks, acts, or is described as present) — never leave it empty if someone is there.\n"
-            "- emotions: for each present character, pick the ONE emotion key from their listed emotions "
-            "that best matches how they feel right now. Use the exact key string — it selects their "
-            "portrait sprite directly. Judge honestly from the moment; default to 'neutral' if unsure.\n"
-            "- movement: true ONLY when this moment invites the player to move to a different location "
-            "(they suggest leaving, a path opens, the beat concludes) — otherwise false."
-        )
-
-        # EMBODIMENT: hand the narrator each cast member's OWN exemplars (life/saying/reaction) from
-        # their per-character lorebook, so it VOICES them as the specific person — not just a name.
-        # This is the per-character lorebook actually lighting up in play (the cast line alone is thin).
-        def _embody(m):
-            c = ctx.base_settings.characters.get(m.character)
-            if c is None:
-                return ""
-            scope = re.sub(r"[^\w\-]+", "_", str(m.character))
-            ex = _LS0.top_by_priority(ctx.root, scope, 5)
-            lines = "\n".join(f"    · [{e.facet or 'life'}] {e.content}" for e in ex if e.content)
-            return f"- {c.name}:\n{lines}" if lines else ""
-        embodiment = "\n".join(b for b in (_embody(m) for m in st.cast) if b)
-        if embodiment:
-            system += ("\n\nEMBODY THE CAST — voice each character from THEIR OWN remembered moments "
-                       "below; stay true to these, they ARE the person:\n" + embodiment)
-
-        # Embodied player: fold the puppet's full backstory into the brief so the director
-        # treats the player as a real person in this world (their history, ties, and voice
-        # are canon) while still letting the human steer every choice.
-        if player_back:
-            system += (
-                f"\n\nWHO THE PLAYER IS — {player_name}'s backstory (canon; weave it into the "
-                f"world and the cast's reactions, but the human chooses what they do and say):\n"
-                f"{player_back}"
-            )
-        # Persona HOME swap: the embodied puppet brings their OWN home(s). A persona can carry
-        # several portable home scenes (they're at home in various places); these stand in for a
-        # story 'persona_home' slot. Falls back to a free-text home_note when no scenes are set.
-        if pc is not None:
-            _homes = list(getattr(pc, "home_scenes", []) or [])
-            if _homes:
-                _hl = "\n".join(
-                    f"  · {h.name or h.id}" + (f" — {h.backstory}" if h.backstory else "") for h in _homes)
-                system += (f"\n\n{player_name}'S HOME (the player's OWN places they carry with them — "
-                           f"their home spots; one stands in for any 'persona_home' slot above):\n{_hl}")
-            else:
-                _home = ((pc.fields or {}).get("home_note") or "").strip()
-                if _home:
-                    system += (f"\n\n{player_name}'S HOME (the player's own place — use this as their "
-                               f"home, standing in for any 'persona_home' slot above): {_home}")
-
-        history = body.get("history") or []
-        lines = []
-        for m in history:
-            who = player_name if m.get("role") == "user" else "Narrator"
-            lines.append(f"{who}: {m.get('text', '')}")
-        transcript = "\n".join(lines) or "(the story is just beginning)"
-
-        # NSFW injection: when the recent transcript hits trigger keywords, prepend the
-        # matching guidance — `_nsfw` (general intimacy style note) + `_nsfw_acts` (specific
-        # act/position guides). Deterministic word-match; capped so the prompt stays lean.
-        # All editable as normal lorebook entries (PUT /api/lorebook/_nsfw[_acts]).
-        from ..server.services import lorebook_store as _LS
-        _recent = " ".join(str(m.get("text", "")) for m in history[-3:]).lower()
-        _inject: list[str] = []
-        for _scope in ("_nsfw", "_nsfw_acts"):
-            for _e in _LS.load_lorebook(ctx.root, _scope):
-                if not (_e.enabled and _e.content):
-                    continue
-                if any(re.search(rf"\b{re.escape(k.lower())}\b", _recent) for k in _e.keywords if k):
-                    _inject.append(_e.content)
-                    if len(_inject) >= 4:
-                        break
-            if len(_inject) >= 4:
-                break
-        if _inject:
-            system = "\n\n".join(_inject) + "\n\n" + system
-
-        # Canon retrieval: attached lorebooks (world/RPG/story books pinned to this thread)
-        # PLUS the thread's own established-facts scope (engine write-back). Inject what the
-        # recent transcript calls for as a WORLD INFO block.
-        from ..server.services.lorebook import format_lore_block
-        attached = body.get("lorebooks")
-        world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in (attached or []) if s]
-        world_scopes += [story_scope, thread_scope]   # the story's own book + this thread's facts
-        if player_scope:
-            world_scopes.append(player_scope)         # the embodied puppet's own per-character lore
-        hits = _LS.retrieve(ctx.root, _recent or transcript, world_scopes, top_k=6)
-        if hits:
-            system = system + "\n\n" + format_lore_block(hits)
-
-        # WORLD STATE: the mutable working memory of this playthrough (read every turn).
-        from . import state_engine as _SE
-        _state_block = _SE.render_state(world_state)
-        if _state_block:
-            system = system + "\n\n" + _state_block
-
-        # RELATIONSHIP PROJECTION: inject ONLY the web edges among characters on stage or just
-        # mentioned — never the whole web every turn (context economy + perspectival). "Mentioned" =
-        # a cast name in the recent transcript. Opening / nobody named → the whole small web. For a
-        # DB-backed story the relevant edges are PULLED by an INDEXED query (relationships_for) keyed
-        # on the focus set, instead of scanning the full list. See story_db.py + GENESIS.md §8.
-        from . import story_db as _SDB
-        from .genesis import project_web
-        _hay = (transcript or "").lower()
-        def _mentioned(nm: str) -> bool:
-            toks = [t for t in re.split(r"\s+", (nm or "").lower()) if len(t) > 2]
-            return any(re.search(rf"\b{re.escape(t)}\b", _hay) for t in toks)
-        _focus = {m.character for m in st.cast
-                  if _mentioned(getattr(ctx.base_settings.characters.get(m.character), "name", "") or "")}
-        if not _focus:
-            _focus = {m.character for m in st.cast}          # opening: small web, inject all
-        _db = ctx._story_db(key)
-        _relset = (_SDB.relationships_for(_db, _focus) if _db is not None
-                   else [r.model_dump() for r in st.relationships])
-        if _relset:
-            _proj = project_web(_relset, _focus)
-            if _proj:
-                _plines = []
-                for _k, _es in _proj.items():
-                    _txt = "; ".join(
-                        f"{'→' if e['outward'] else '←'} {_cname(e['other'])}"
-                        + (f" ({e['nature']})" if e['nature'] else "")
-                        + (f": {e['dynamic'] or e['stance']}" if (e['dynamic'] or e['stance']) else "")
-                        for e in _es)
-                    _plines.append(f"- {_cname(_k)} {_txt}")
-                system += ("\n\nRELATIONSHIPS (only those on stage or just mentioned — honor these "
-                           "dynamics in how they speak and act toward each other):\n" + "\n".join(_plines))
-
-        system = system + (
-            "\n\nAlso report `state_deltas`: a list of update objects for what changed THIS turn. "
-            "Each object has an `op` and ONLY the fields that op needs; set unused fields to \"\" or []. "
-            "`name` is always a CHARACTER's name (never the op word). Examples:\n"
-            "- relationship shift toward the player: {\"op\":\"rel\",\"name\":\"Aria\",\"key\":\"you\",\"value\":\"-1\",\"title\":\"\",\"keywords\":[]}\n"
-            "- a character moves: {\"op\":\"move\",\"name\":\"Aria\",\"key\":\"\",\"value\":\"the pier\",\"title\":\"\",\"keywords\":[]}\n"
-            "- mood change: {\"op\":\"mood\",\"name\":\"Aria\",\"key\":\"\",\"value\":\"guarded\",\"title\":\"\",\"keywords\":[]}\n"
-            "- player gains an item: {\"op\":\"item_add\",\"name\":\"\",\"key\":\"\",\"value\":\"brass key\",\"title\":\"\",\"keywords\":[]}\n"
-            "- a real story variable: {\"op\":\"set_flag\",\"name\":\"\",\"key\":\"met_aria\",\"value\":\"true\",\"title\":\"\",\"keywords\":[]}\n"
-            "- a new fact to remember as canon: {\"op\":\"fact\",\"name\":\"\",\"key\":\"\",\"value\":\"Aria distrusts strangers after being burned before.\",\"title\":\"Aria distrusts strangers\",\"keywords\":[\"Aria\",\"trust\"]}\n"
-            "- a one-line beat summary: {\"op\":\"log\",\"name\":\"\",\"key\":\"\",\"value\":\"Daniel introduced himself; Aria sized him up warily.\",\"title\":\"\",\"keywords\":[]}\n"
-            "Be thorough: for EVERY character present whose mood or stance toward the player shifted "
-            "this turn, emit a `mood` and/or `rel` delta using their EXACT name from the CAST list "
-            "above; emit `move` when someone changes location and `item_add`/`item_remove` when the "
-            "player's belongings change. Always include exactly one `log` op summarizing the beat. Do "
-            "NOT invent flags; only set_flag for genuine story variables. Empty list only if truly "
-            "nothing changed.")
-
-        moved = body.get("choice")
-        directive = ""
-        if moved:
-            # A scene id (a spot inside a Place) takes priority over a flat location id —
-            # narrate arrival into that spot and bring its anchored character(s) on-stage.
-            _sc = _pl = None
-            for _p in st.places:
-                for _s in _p.scenes:
-                    if _s.id == moved:
-                        _sc, _pl = _s, _p
-                        break
-                if _sc:
-                    break
-            # An embodied puppet's OWN home scene (portable, not in st.places) is also a target.
-            _hs = next((h for h in (getattr(pc, "home_scenes", []) or []) if h.id == moved), None) if pc else None
-            if _sc is not None:
-                _anchors = [_cname(k) for k in ([_sc.character] if _sc.character else []) + list(_sc.characters or [])]
-                _who = ", ".join(a for a in _anchors if a)
-                _line = f"The player moves to {_sc.name or _sc.id}" + (f" in {_pl.name}" if _pl else "") + "."
-                if _who:
-                    _line += f" {_who} {'are' if ',' in _who else 'is'} here."
-                if _sc.backstory:
-                    _line += f" ({_sc.backstory})"
-                directive = (f"\n\n[{_line} Narrate the transition and arrival; bring the named "
-                             f"character(s) into the scene and include them in `present`.]")
-            elif _hs is not None:
-                _line = f"The player goes to their own home, {_hs.name or _hs.id}."
-                if _hs.backstory:
-                    _line += f" ({_hs.backstory})"
-                directive = f"\n\n[{_line} Narrate the transition and arrival at the player's home.]"
-            else:
-                dest = next((l.name for l in st.locations if l.id == moved), moved)
-                directive = f"\n\n[The player moves to: {dest}. Narrate the transition and arrival there; set location to '{moved}'.]"
-        prompt = (f"CURRENT LOCATION: {cur}\n\nTRANSCRIPT:\n{transcript}{directive}\n\n"
-                  f"Narrate the next turn and report the scene state.")
-
-        # Director narrates AND reports world-state changes in one structured call
-        # (PLAY_SCHEMA + state_deltas). The call is refusal-guarded: on a refusal /
-        # error / invalid output it re-runs on the configured fallback model.
-        import copy as _copy
-        from .guards import generate_guarded
+        # THE TURN IS A GRAPH (play_graph.py): compile → prose → scribe → apply — the shipped
+        # shape of the narrative harness (the bench exercises this same path). The endpoint
+        # keeps only HTTP/session concerns; everything else lives in the nodes.
+        import asyncio as _aio
         from ..server.services import config_files as _cf
-        play_schema = _copy.deepcopy(PLAY_SCHEMA)
-        play_schema["properties"]["state_deltas"] = {"type": "array", "items": _SE.STATE_DELTA_ITEM}
-        play_schema["required"] = list(play_schema["required"]) + ["state_deltas", "player_status"]
+        from .play_graph import run_play_turn, PlayState, PlayDeps
+        _roles = _cf.load_text_roles(ctx.root)
+        fallback = ctx.text_provider_for(_roles.get("fallback")) if _roles.get("fallback") else None
+        # The scribe is a structured REPORTER — always non-thinking (cheap + fast; DS4-pro's big
+        # context comfortably holds the state block + narration).
+        scribe_prov = (ctx.text_provider_for(_roles.get("scribe"), {"reasoning_effort": "none"})
+                       if _roles.get("scribe") else None) or provider
 
-        _fb_key = _cf.load_text_roles(ctx.root).get("fallback")
-        fallback = ctx.text_provider_for(_fb_key) if _fb_key else None
-        guarded = generate_guarded(provider, system=system, prompt=prompt, root=ctx.root,
-                                   emits=play_schema, fallback=fallback)
-        data = guarded["data"] or {}
-        if not data:
-            return JSONResponse({"error": guarded.get("error") or "director returned no structured data "
-                                          "(model may not support structured output)"}, status_code=500)
-        # map present/emotion names -> character keys for the UI's sprite lookup
-        name_to_key = {(ctx.base_settings.characters[m.character].name if m.character in ctx.base_settings.characters
-                        else m.character).lower(): m.character for m in st.cast}
-        present_keys = [name_to_key.get((n or "").lower()) for n in data.get("present", [])]
-        # Direct key resolution. The director names an emotion key from the character's range.
-        # If the key is valid (in EMOTION_KEYS), use it. If it's unrecognised, fall back to neutral.
-        emotions = {}
-        for e in data.get("emotions", []):
-            ck = name_to_key.get((e.get("character") or "").lower())
-            if not ck:
-                continue
-            key = (e.get("emotion") or "neutral").strip().lower()
-            if key not in EMOTION_KEYS:
-                key = "neutral"
-            emotions[ck] = key
-        loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
-
-        # Evolve + persist the world state from this turn's deltas. `fact` deltas are
-        # written back into the thread's lorebook scope (retrievable next turn).
-        try:
-            world_state = _SE.apply_deltas(world_state, data.get("state_deltas") or [],
-                                           root=ctx.root, scope=thread_scope)
-            world_state["location"] = loc or world_state.get("location") or ""
-            # Index this turn as a STEP and record who witnessed it — a character who first
-            # appears here JOINS now (sees only from this step on, never the backlog). Store the
-            # turn's narration at the same index so perception can scope each character's memory.
-            from . import perception as _PC
-            this_step = _PC.record_step(world_state, [k for k in present_keys if k])
-            world_state.setdefault("transcript", []).append(data.get("reply", ""))
-            save_session(ctx.root, sid, {**_sess, "state": _SE.with_world(_sess.get("state"), world_state)})
-        except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
-            pass
-
-        # Lifecycle trigger: ONLY the player sleeping or dying consolidates memory. Sleep → the
-        # cast compresses the scenes they witnessed; death → also rewind to a significant moment.
-        consolidation = None
-        status = (data.get("player_status") or "active").strip().lower()
-        if status in ("sleeping", "dead") and key:
-            from . import stage_tools as _ST
-            consolidation = _ST.consolidate_on_rest(ctx, key, world_state, status)
-            save_session(ctx.root, sid, {**_sess, "state": _SE.with_world(_sess.get("state"), world_state)})
-
-        return {
-            "reply": data.get("reply", ""), "location": loc,
-            "present": [k for k in present_keys if k],
-            "step": world_state.get("step"),   # this turn's indexed step (perception)
-            "emotions": emotions,
-            "movement": bool(data.get("movement")),
-            "player_status": status,
-            "consolidation": consolidation,    # {memories, rewind} on sleep/death, else None
-            "state": _SE.summary(world_state),
-            "guard": {"tripped": guarded.get("tripped"), "used_fallback": guarded.get("used_fallback")},
-        }
+        pstate = PlayState(body=body, world_state=world_state)
+        pdeps = PlayDeps(ctx=ctx, st=st, key=key, sid=sid, sess=_sess,
+                         provider=provider, scribe_provider=scribe_prov, fallback=fallback,
+                         story_scope=story_scope, thread_scope=thread_scope)
+        _aio.run(run_play_turn(pstate, pdeps))
+        if pstate.error:
+            return JSONResponse({"error": pstate.error}, status_code=500)
+        return pstate.result
 
     @app.post("/api/stories/{key}/dream")
     def story_dream(key: str, body: dict):
@@ -3261,6 +3129,49 @@ def register(app, ctx):
         ws = _SE.world_of((load_session(ctx.root, sid) or {}).get("state"))
         dream = _ST.generate_dream(ctx, key, ws, present=body.get("present"), you=(body.get("you") or "").strip())
         return {"dream": dream}
+
+    @app.post("/api/stories/{key}/geography")
+    def story_geography(key: str, body: dict):
+        """Generate the story's LIVED GEOGRAPHY — areas → spots → who habitually occupies them
+        (orbits) + travel notes — grounded in the cast's daily lives, weaving in existing
+        locations. `apply` (default true) writes locations/places/fields.travel onto the story,
+        which arms the whereabouts lines + the move rate-limiter in play (geography.py).
+        Body: { model?, apply? } → { geography, applied, locations, places, travel }."""
+        from .geography import gen_geography, apply_geography
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        provider, err = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": err}, status_code=400)
+
+        name_to_key, cast_lines = {}, []
+        for m in st.cast:
+            c = ctx.base_settings.characters.get(m.character)
+            nm = (c.name if c else m.character) or m.character
+            name_to_key[nm] = m.character
+            cast_lines.append({"name": nm,
+                               "about": ((c.system or "").splitlines()[0] if c else "")[:160]})
+        try:
+            geo = gen_geography(provider, premise=st.premise, tone=st.tone,
+                                world_note=(st.storyboard.logline if st.storyboard else ""),
+                                cast=cast_lines, existing=[l.name for l in st.locations],
+                                root=ctx.root)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"geography generation failed: {exc}"}, status_code=500)
+        if not geo:
+            return JSONResponse({"error": "the model returned no geography — try another model."},
+                                status_code=502)
+        out = apply_geography(geo, st, name_to_key)
+        applied = False
+        if body.get("apply", True):
+            fields = {**(st.fields or {}), "travel": out["travel"]}
+            ctx.update_story_fields(key, {"locations": out["locations"],
+                                          "places": out["places"], "fields": fields})
+            applied = True
+        return {"geography": geo, "applied": applied, **out}
 
     @app.post("/api/stories/{key}/plan-wardrobe")
     async def story_plan_wardrobe(key: str, body: dict):

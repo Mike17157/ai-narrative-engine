@@ -240,11 +240,17 @@ def _dedupe_outfit_tags(tags: list) -> list:
 
 PLAY_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["reply", "location", "present", "emotions", "movement"],
+    "required": ["reply", "location", "present", "pov", "emotions", "movement"],
     "properties": {
         "reply": {"type": "string"},
         "location": {"type": "string"},
         "present": {"type": "array", "items": {"type": "string"}},
+        # The character the narration currently FOLLOWS (close-third viewpoint), or the player's
+        # name for their own view. Sticky: it carries between turns and shifts only on an explicit
+        # trigger (the POV character leaves, the player moves, a scene break) — see the play prompt.
+        "pov": {"type": "string",
+                "description": "name of the character whose perspective the narration follows this "
+                               "turn (or the player's name for their own viewpoint)"},
         # Per present character: pick ONE emotion key from that character's listed range.
         # The key is used directly for sprite lookup — no coordinate translation.
         "emotions": {"type": "array", "items": {
