@@ -3095,6 +3095,15 @@ def register(app, ctx):
         from ..server.services import config_files as _cf
         from .play_graph import run_play_turn, PlayState, PlayDeps
         _roles = _cf.load_text_roles(ctx.root)
+        # The WRITER: an explicit body.chat_model wins; else the configured `narrator` role (ONE
+        # chokepoint for "which model writes the prose" — without it play silently rides the
+        # active connection's default). Prose is always NON-thinking on hybrid reasoners.
+        if not body.get("chat_model") and _roles.get("narrator"):
+            _np = ctx.text_provider_for(_roles["narrator"],
+                                        {"max_tokens": 40000, "reasoning_effort": "none",
+                                         **(body.get("chat_params") or {})})
+            if _np is not None:
+                provider = _np
         fallback = ctx.text_provider_for(_roles.get("fallback")) if _roles.get("fallback") else None
         # The scribe is a structured REPORTER — always non-thinking (cheap + fast; DS4-pro's big
         # context comfortably holds the state block + narration).
@@ -3117,10 +3126,11 @@ def register(app, ctx):
 
     @app.post("/api/stories/{key}/prologue")
     def story_prologue(key: str, body: dict):
-        """Generate (and cache) the novel's PROLOGUE — the protagonist's ordinary life, slow, in
-        close third, establishing the world/people/pressure before the strange thing intrudes. So
-        a reader has real context before play begins. Body: { sid?, model?, regenerate? } →
-        { sections:[{title,text}], cached }. Cached on the play session (slow: ~80s to write)."""
+        """The novel's PROLOGUE — the protagonist's ordinary life, slow, in close third,
+        establishing the world/people/pressure before the strange thing intrudes. A STORY
+        CONSTANT, like a card's first message: written ONCE, identical for every playthrough
+        — stored on the story itself (st.fields.prologue), never per-session. Body:
+        { sid?, model?, regenerate? } → { sections:[{title,text}], cached }."""
         from .worldgen import generate_prologue
         from ..server.services.story_sessions import load_session, save_session
 
@@ -3129,14 +3139,31 @@ def register(app, ctx):
             return JSONResponse({"error": "no such story"}, status_code=404)
         body = body or {}
         sid = body.get("sid") or f"play-{key}"
+        stored = (st.fields or {}).get("prologue") or {}
+        if stored.get("sections") and not body.get("regenerate"):
+            return {"sections": stored["sections"], "cached": True}
+        # Migration: a prologue already written under the old per-session cache gets PROMOTED
+        # to the story instead of being regenerated (~80s saved).
         sess = load_session(ctx.root, sid) or {}
-        if sess.get("prologue", {}).get("sections") and not body.get("regenerate"):
-            return {"sections": sess["prologue"]["sections"], "cached": True}
+        if not body.get("regenerate") and sess.get("prologue", {}).get("sections"):
+            pro = sess["prologue"]
+            try:
+                data = ctx._read_story_data(key)
+                data.setdefault("fields", {})["prologue"] = pro
+                ctx._write_story_data(key, data)
+            except FileNotFoundError:
+                pass                               # legacy YAML story: session copy stands
+            return {"sections": pro["sections"], "cached": True}
 
         # The prologue is plain prose — non-thinking writer (thinking would be ~8x slower for the
-        # four sections). Use the passed play model, else the premise-stage provider.
+        # four sections). Passed model wins, else the `narrator` role (the same model that will
+        # narrate play — the prologue is its opening pages), else the premise-stage provider.
+        from ..server.services import config_files as _cf
+        _narr = _cf.load_text_roles(ctx.root).get("narrator")
         if (body.get("model") or "").strip():
             provider = ctx.text_provider_for(body["model"], {"reasoning_effort": "none"})
+        elif _narr:
+            provider = ctx.text_provider_for(_narr, {"reasoning_effort": "none"})
         else:
             provider, _ = ctx.builder_ctx(body, "premise")
         if provider is None:
@@ -3170,8 +3197,135 @@ def register(app, ctx):
         if not pro.get("sections"):
             return JSONResponse({"error": "the model returned no prologue — try another model."},
                                 status_code=502)
-        save_session(ctx.root, sid, {**sess, "prologue": pro})
+        # Persist on the STORY (the constant); legacy YAML stories fall back to the session.
+        try:
+            data = ctx._read_story_data(key)
+            data.setdefault("fields", {})["prologue"] = pro
+            ctx._write_story_data(key, data)
+        except FileNotFoundError:
+            save_session(ctx.root, sid, {**sess, "prologue": pro})
         return {"sections": pro["sections"], "cached": False}
+
+    @app.get("/api/stories/{key}/arc")
+    def story_arc_get(key: str, sid: str = ""):
+        """The ACTIVE arc on this thread's world model (null if none planned)."""
+        from ..server.services.story_sessions import load_session
+        from . import state_engine as _SE
+        if ctx.base_settings.stories.get(key) is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        sess = load_session(ctx.root, sid or f"play-{key}") or {}
+        return {"arc": _SE.world_of(sess.get("state")).get("arc") or None}
+
+    @app.post("/api/stories/{key}/arc")
+    def story_arc(key: str, body: dict):
+        """Plan a story ARC — a staged progression (purpose / concrete milestone / small
+        planned moments per stage) installed on the thread's world model. The one-line
+        `request` IS the template ("a village romance: he draws up his courage…"). The
+        per-scene director + consequence step steer toward the current stage; the scribe
+        advances stages when milestones land. Body: { sid?, request } → { arc }."""
+        from ..server.services.story_sessions import load_session, save_session
+        from ..server.services import config_files as _cf
+        from . import state_engine as _SE
+        from .storymaster import generate_arc
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        request = (body.get("request") or "").strip()
+        if not request:
+            return JSONResponse({"error": "give the arc a one-line request"}, status_code=400)
+        sid = body.get("sid") or f"play-{key}"
+        sess = load_session(ctx.root, sid) or {}
+        ws = _SE.world_of(sess.get("state"))
+        _roles = _cf.load_text_roles(ctx.root)
+        prov = ctx.text_provider_for(_roles.get("director") or _roles.get("narrator"),
+                                     {"reasoning_effort": "medium"})
+        if prov is None:
+            return JSONResponse({"error": "no director model configured"}, status_code=400)
+        arc = generate_arc(prov, ctx, st, ws, request)
+        if not arc:
+            return JSONResponse({"error": "the model returned no arc"}, status_code=502)
+        save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
+        return {"arc": arc}
+
+    @app.get("/api/stories/{key}/manuscript")
+    def story_manuscript(key: str, sid: str = ""):
+        """The MANUSCRIPT — this playthrough's prose as literature: the prologue plus the
+        play narration grouped by SCENE (each page = one turn's text + its beat line). Sessions
+        from before the manuscript existed fall back to the flat transcript as one scene."""
+        from ..server.services.story_sessions import load_session
+        from . import state_engine as _SE
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        sess = load_session(ctx.root, sid or f"play-{key}") or {}
+        ws = _SE.world_of(sess.get("state"))
+        scenes = ws.get("manuscript") or []
+        if not scenes and ws.get("transcript"):
+            scenes = [{"loc": "The story so far", "opened": 0,
+                       "pages": [{"step": i, "text": t, "beat": "", "ti": i}
+                                 for i, t in enumerate(ws["transcript"]) if (t or "").strip()]}]
+        prologue = ((st.fields or {}).get("prologue") or {}).get("sections") or []
+        return {"prologue": prologue, "scenes": scenes}
+
+    @app.post("/api/stories/{key}/manuscript/edit")
+    def story_manuscript_edit(key: str, body: dict):
+        """Manually edit one paragraph-block of the manuscript. Body: either
+        { prologue: <section index>, text } (edits the story-constant prologue) or
+        { sid?, scene: i, page: j, text } (edits a play page + its transcript entry, so the
+        narrator's own history window sees the corrected prose)."""
+        from ..server.services.story_sessions import load_session, save_session
+        from . import state_engine as _SE
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        text = (body.get("text") or "").strip()
+        if not text:
+            return JSONResponse({"error": "empty text"}, status_code=400)
+        if body.get("prologue") is not None:
+            try:
+                data = ctx._read_story_data(key)
+                secs = ((data.get("fields") or {}).get("prologue") or {}).get("sections") or []
+                secs[int(body["prologue"])]["text"] = text
+                ctx._write_story_data(key, data)
+                return {"ok": True}
+            except (FileNotFoundError, IndexError, KeyError):
+                return JSONResponse({"error": "no editable prologue"}, status_code=400)
+        sid = body.get("sid") or f"play-{key}"
+        sess = load_session(ctx.root, sid) or {}
+        ws = _SE.world_of(sess.get("state"))
+        try:
+            scenes = ws.get("manuscript") or []
+            if scenes:
+                page = scenes[int(body["scene"])]["pages"][int(body["page"])]
+            else:                                      # legacy flat-transcript session
+                page = {"ti": int(body["page"])}
+            ti = page.get("ti")
+            if ti is not None and 0 <= int(ti) < len(ws.get("transcript") or []):
+                ws["transcript"][int(ti)] = text
+            page["text"] = text
+        except (IndexError, KeyError, ValueError, TypeError):
+            return JSONResponse({"error": "no such page"}, status_code=400)
+        save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
+        return {"ok": True}
+
+    @app.get("/api/stories/{key}/state-card")
+    def story_state_card(key: str, sid: str = ""):
+        """THE STATE CARD — the story's current state as one readable card (scene + its plan,
+        arc, people by place, established/promised, hard state). A pure derived VIEW over the
+        thread's delta-maintained world model: reading it is instant, and it is always current
+        because the per-turn deltas already updated the model underneath (no LLM, no rewrite)."""
+        from ..server.services.story_sessions import load_session
+        from . import state_engine as _SE
+        from .storymaster import state_card
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        sess = load_session(ctx.root, sid or f"play-{key}") or {}
+        ws = _SE.world_of(sess.get("state"))
+        return {"card": state_card(ws, st), "step": ws.get("step"), "revision": ws.get("revision")}
 
     @app.post("/api/stories/{key}/dream")
     def story_dream(key: str, body: dict):

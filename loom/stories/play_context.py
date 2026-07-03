@@ -170,12 +170,35 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     _beat = " ".join(str(m.get("text", "")) for m in history[-2:]).lower()   # the current beat
     _mentioned = {k for k in _cast_keys if _named_in(_hay, k)}
 
+    from .storymaster import StoryMaster
+    _cur_ln = next((l.name for l in st.locations if l.id == cur), cur)
+    _sm = StoryMaster(ctx, st, world_state, location=_cur_ln)
+    _prior_space = (prior_scene.get("space") or "")
+    _arrived = bool(_prior_space) and cur != _prior_space   # scene boundary by travel
+
     if moved:
         on_screen = move_keys & set(_cast_keys)          # a move brings its anchors on stage
+    elif _arrived:
+        # Travel boundary: presence RE-DERIVES from the world model — only who is actually
+        # recorded AT the new place is here; the old room does NOT teleport along. An empty
+        # roster falls back to the scribe's arrival report in apply (then locks next turn).
+        _at_here = {n.lower() for n in _sm._names_at(_cur_ln)}
+        on_screen = {k for k in _cast_keys if _cname(k).lower() in _at_here}
     else:                                                 # else the scene's members carry over
         on_screen = (prior_members or set(_PC0.present_at(world_state, int(world_state.get("step") or 0) - 1))) & set(_cast_keys)
     if not prior_members and not on_screen:
         on_screen = set(_cast_keys)                       # true opening → whole (small) cast
+
+    # AUTHORITATIVE ROSTER — the StoryMaster decides who is present; the narrator obeys absolutely.
+    # Sticky co-location + at most one CONTROLLED entrance (someone recorded at this place whom the
+    # player's action actually seeks). This governs `roster` (returned to apply as the real present)
+    # and the "PRESENT — exactly these" instruction; the narrator can't summon or drop anyone.
+    _last_u = next((m.get("text", "") for m in reversed(history) if m.get("role") == "user"), "")
+    roster = _sm.plan_scene(present=[_cname(k) for k in _cast_keys if k in on_screen], action=_last_u)
+    _n2k = {_cname(k).lower(): k for k in _cast_keys}
+    on_screen = {k for k in (_n2k.get(n.lower()) for n in roster) if k}   # cast members in the roster
+    if not on_screen and not roster:
+        on_screen = {k for k in _cast_keys if k in (move_keys or set())} or set(_cast_keys)
     referenced = (_mentioned - on_screen) & set(_cast_keys)
     absent = set(_cast_keys) - on_screen - referenced
 
@@ -254,7 +277,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # physically enters or leaves. Feeding last turn's pov/members is what makes the flow stable.
     loc_now = next((l.name for l in st.locations if l.id == cur), cur)
     _pov_name = (_cname(prior_pov) if prior_pov else player_name)
-    _member_names = ", ".join(_cname(k) for k in (prior_scene.get("members") or []) if k)
+    _member_names = ", ".join(roster) if roster else ""
     if prior_pov or _member_names:
         system += (
             f"\n\nPERSPECTIVE — tell this turn through ONE viewpoint (close third, or the player's "
@@ -262,10 +285,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
             f"{_pov_name} can perceive; never head-hop into another character's private thoughts. "
             f"Shift the viewpoint ONLY when {_pov_name} leaves the scene, the player moves "
             f"elsewhere, or a clear scene break occurs.\n"
-            + (f"SCENE — the scene is in {loc_now}, with: {_member_names}. These characters are "
-               f"co-located; keep them together in this space. Do NOT introduce anyone else unless "
-               f"they physically enter; do not let a character in this space silently vanish.\n"
-               if _member_names else "")
+            + (f"SCENE — you are in {loc_now}. PRESENT, exactly: {_member_names}. Write ONLY these "
+               f"people — you may NOT bring anyone else on stage and may NOT remove anyone here. "
+               f"The story decides who enters or leaves; if someone should arrive, the directive "
+               f"below will say so.\n" if _member_names else "")
         )
     else:
         system += (
@@ -481,6 +504,15 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         "Be thorough: a mood/rel delta for every present character who shifted; an empty list "
         "only if truly nothing changed."
     )
+    # ARC MILESTONE WATCH: when a planned arc is active, the scribe (already reading every
+    # turn) checks the narration against the current stage's completion condition — free
+    # advancement, no extra call. See storymaster.arc_milestone/advance_arc.
+    from .storymaster import arc_milestone
+    _ms = arc_milestone(world_state)
+    if _ms:
+        scribe_system += ("\n- arc_milestone: true ONLY if the narration just accomplished "
+                          f"this exact story milestone: \"{_ms}\". A step toward it is NOT "
+                          "it — the moment itself must happen on the page. Else false.")
 
     # Lane log — per-turn context sizes (chars). This is the harness's own gauge: with a bigger
     # world/cast, these must stay ~flat (stores grow; the window doesn't). Surfaced in the /play
@@ -496,31 +528,39 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         _pres_line = ("SCENE OPENING — no one is established on stage yet. If the player's action "
                       "finds, meets, enters on, or addresses a cast member, that character IS here "
                       "— bring them in. Do NOT narrate an empty scene when the action seeks someone.")
+    from .storymaster import plot_direction, scene_block
+    _plot_block = plot_direction(world_state, st)
+    # The per-SCENE director's standing agenda (planned once at the scene boundary by
+    # step_scene; here we surface it on every LATER turn of the same scene — zero LLM cost).
+    _plan = world_state.get("scene_plan") if isinstance(world_state.get("scene_plan"), dict) else {}
+    _scene_dir = scene_block(_plan) if (_plan.get("space") or "") == cur else ""
     consequence_system = (
-        "You are the LOGIC of this story world — not a writer. Given the situation and what the "
-        "player does, work out what ACTUALLY happens: concrete physical and social consequences "
-        "in causal order. What does the action directly cause? How does each character present "
-        "react — in character, for real reasons? What changes, and what new problem, cost, or "
-        "opening does it create? Reason it through; be concrete and causal, never atmospheric. "
-        "Keep every established fact true. Bring people on GRADUALLY — at most ONE new person "
-        "steps into the scene at a time; people merely mentioned or remembered stay offstage. "
-        "End on the real choice or problem the player now faces. "
+        "You are the DIRECTOR of this story — you work out what ACTUALLY happens AND move the story "
+        "forward. Given the situation and what the player does: what does the action directly "
+        "cause? How does each character present react — in character, for real reasons? What "
+        "changes, and what new problem, cost, or opening does it create? Reason it through; be "
+        "concrete and causal, never atmospheric. Don't merely react — ADVANCE the story toward its "
+        "arc (below): let pressure build, complications land, and ripe threads pay off when the "
+        "moment allows (never force it). Keep every established fact true. Bring people on "
+        "GRADUALLY — at most ONE new person steps into the scene at a time; people merely mentioned "
+        "or remembered stay offstage. End on the real choice or problem the player now faces. "
         "Output a short numbered list of what happens, in order — not prose.\n\n"
-        f"WHERE: {loc_now}. {_pres_line}\n"
+        + (f"{_plot_block}\n\n" if _plot_block else "")
+        + (f"{_scene_dir}\n\n" if _scene_dir else "")
+        + f"WHERE: {loc_now}. {_pres_line}\n"
         f"CAST (who exists in this story; anyone on stage or brought in by the action is present):\n{cast}\n"
         + (f"\n{_state_block}\n" if _state_block else "")
         + (f"\n{_cont_block}\n" if _cont_block else "")
         + (f"\n{_rel_block}\n" if _rel_block else "")
-        + (f"\nWORLD: {st.premise}\n" if st.premise else "")
     )
 
     lanes = {"craft": len(PLAY_CRAFT), "cast": len(cast), "places": len(places),
              "embodiment": len(embodiment), "player_back": len(player_back),
              "lore": len(_lore_block), "state": len(_state_block), "relationships": len(_rel_block),
              "continuity": len(_cont_block), "history": len(transcript),
-             "consequence": len(consequence_system),
+             "scene_dir": len(_scene_dir), "consequence": len(consequence_system),
              "system": len(system), "scribe": len(scribe_system)}
 
     return {"system": system, "prompt": prompt, "scribe_system": scribe_system,
-            "consequence_system": consequence_system,
+            "consequence_system": consequence_system, "roster": roster,
             "cur": cur, "prior_pov": prior_pov, "lanes": lanes}

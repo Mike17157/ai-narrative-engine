@@ -299,6 +299,151 @@ def _regionize_prompt(text: str, mode: str | None = None, family: str | None = N
     return re.sub(r"\s+", " ", text).strip()
 
 
+# ── Sprite prompt discipline ────────────────────────────────────────────────────────
+# Two measured failure modes (user: "not expressive, style varies too much"):
+#   1. The unified attire paragraphs END with their own baked-in stance/expression sentence
+#      ("…head tilted with a faint smirk…") — it preceded and fought EVERY emotion, so all
+#      faces came out samey. Strip those sentences; the target emotion leads instead.
+#   2. No style anchor: with nothing pinning the art style, each fresh-seed render freely
+#      reinterprets it. A FIXED style preamble opens every sprite/base prompt.
+SPRITE_STYLE = ("Polished 2D anime illustration, crisp clean lineart, rich defined cel shading "
+                "with deep two-tone shadows and bright highlights, detailed fabric folds and "
+                "texture, saturated yet natural colors, high-quality visual-novel character "
+                "sprite, plain seamless light-grey studio background, consistent character-sheet "
+                "art style.")
+
+
+def style_anchor(root=None) -> str:
+    """The GLOBAL art-style anchor every character render opens with. A BROADCAST style
+    (configs/image_style.json — distilled by a vision model from an image the user chose)
+    overrides the built-in default, so one liked render can set the style for the whole
+    cast. Falls back to SPRITE_STYLE."""
+    if root is not None:
+        try:
+            import json as _json
+            from pathlib import Path as _Path
+            f = _Path(root) / "configs" / "image_style.json"
+            if f.is_file():
+                s = (_json.loads(f.read_text(encoding="utf-8")) or {}).get("style", "").strip()
+                if s:
+                    return s if s.endswith(".") else s + "."
+        except (ValueError, OSError):
+            pass
+    return SPRITE_STYLE
+
+
+# Distills a reference image into a REUSABLE style card — style only, no content — so any
+# character can be rendered "in the style of" the chosen image via the text anchor.
+_STYLE_DISTILL_SYSTEM = (
+    "You are an art director writing a reusable ART-STYLE specification from ONE reference "
+    "image. Describe ONLY the style — never the character, clothing, pose, or scene content — "
+    "so that ANY character could be drawn indistinguishably in this style. In 60-90 words of "
+    "comma-separated descriptive prose cover: medium/render type; lineart (weight, colour, "
+    "cleanliness); shading technique (cel/soft/painterly, hardness, light direction); colour "
+    "palette (temperature, saturation, value range); finish/texture; background treatment. "
+    "Start with the overall style family (e.g. 'flat 2D anime illustration'). One paragraph, "
+    "no lists, no preamble.")
+
+_EXPR_SENT = re.compile(
+    r"\b(stands?|standing|poses?|posing|leans?|leaning|smirk\w*|smil\w*|grin\w*|frown\w*|"
+    r"gaze|expression|eyebrows?|chin (?:lifted|raised)|head tilt\w*)\b", re.I)
+
+# Canonical STRONG facial descriptors per emotion — physically explicit and exaggerated, because
+# the turbo distill renders subtle persona-tinged prompts ("tight controlled glare, simmering
+# fury") as NEUTRAL faces (measured 1/10) while explicit physical cues hit 7-9/10. The persona's
+# own expression prompt is appended after these as flavor, never as the carrier.
+STRONG_FACE: dict[str, str] = {
+    "happy": "big warm open-mouthed smile, beaming, eyes crinkled with joy",
+    "amused": "lopsided grin, one raised eyebrow, sparkling eyes holding back laughter",
+    "excited": "huge grin, wide shining eyes, leaning forward eagerly, fists raised in delight",
+    "proud": "chin high, chest out, satisfied closed-lip smile, half-lidded confident eyes",
+    "hopeful": "brows raised and drawn together, soft open smile, bright upturned eyes",
+    "intrigued": "one eyebrow arched high, head cocked, small curious smile, narrowed studying eyes",
+    "curious": "wide inquisitive eyes, parted lips, leaning in, eyebrows lifted",
+    "blushed": "deep red blush across cheeks and ears, averted eyes, small flustered smile",
+    "shy": "heavy blush, gaze down and away, shoulders drawn in, hands fidgeting together",
+    "sacred": "eyes wide in awe, lips parted, brows lifted, face tilted up reverently",
+    "longing": "soft yearning gaze, brows tilted up at the inner corners, lips slightly parted, hand near heart",
+    "lustful": "heavy-lidded smoldering stare, biting lower lip, flushed cheeks",
+    "pleasure": "eyes closed, head tipped back, deep blissful smile, flushed face",
+    "confused": "scrunched brows, squinting one eye, mouth twisted to one side, head tilted, scratching head",
+    "shocked": "eyes blown wide, jaw dropped open, hands raised, body recoiling",
+    "begging": "huge pleading watery eyes, brows knit upward, hands clasped together under chin",
+    "embarrassed": "burning blush, grimacing awkward smile, hand behind head, eyes screwed shut",
+    "guilty": "eyes sliding away, wincing, shoulders hunched, biting lip, hand rubbing arm",
+    "sad": "crying, visible tears rolling down the cheeks, trembling downturned mouth, brows crumpled upward, head hanging low, shoulders slumped",
+    "tired": "heavy drooping eyelids, dark under-eye shadows, slack mouth, slumped shoulders",
+    "exhausted": "eyes barely open, deep shadows, mouth hanging open, whole body sagging",
+    "annoyed": "flat unimpressed stare, one twitching brow, pressed thin lips, arms crossed",
+    "disappointed": "long sigh face, closed eyes, brows drawn, mouth pulled down, shaking head",
+    "frustrated": "teeth clenched bare, brows crushed down, fists balled, steam-about-to-burst grimace",
+    "disgusted": "nose wrinkled hard, upper lip curled, recoiling, tongue slightly out in revulsion",
+    "scorn": "cold sneer, one lip corner raised, half-lidded contemptuous stare down the nose",
+    "angry": "deep scowl, eyebrows slammed down, glaring wide eyes, bared gritted teeth, clenched fists",
+    "rage": "screaming open mouth, teeth bared, veins at temple, wild furious eyes, fists shaking",
+    "anticipation": "eager grin, eyebrows high, hands rubbing together, bouncing on toes",
+    "desire": "intense locked-on gaze, parted lips, flushed face, leaning closer",
+    "teasing": "sly sideways smirk, one eye winking, tongue at lip corner, playful tilt of head",
+    "comfort": "gentle relaxed smile, soft warm eyes, loose easy shoulders",
+    "relief": "long exhale, eyes closed, hand on chest, melting grateful smile",
+    "ecstasy": "head thrown back, eyes shut tight, mouth open in bliss, deep full-face flush",
+    "arousal": "dark heavy-lidded eyes, deep blush, parted breathing lips, trembling",
+    "intensity": "burning locked stare, jaw set hard, brows low, utterly focused face",
+    "release": "slack blissful face, unfocused half-open eyes, deep flush, easing shoulders",
+    "submission": "head bowed, eyes up through lashes, exposed neck, hands folded low",
+    "arrogant": "smug closed smile, chin tipped up, looking down half-lidded, hand on hip",
+    "condescension": "pitying little smile, tilted head, slow patronizing half-closed eyes",
+    "discomfort": "tight cringing grimace, body angled away, stiff shoulders, uneasy sideways eyes",
+    "humiliation": "face buried in burning blush, eyes brimming, jaw trembling, shrinking posture",
+    "pain": "face screwed tight, teeth clenched in a grimace, one eye shut, clutching at the hurt",
+}
+
+
+# Distils a character's CANONICAL IDENTITY — body/face only, NO clothing — so it can anchor
+# every render without fighting the per-outfit attire. Grounded on the base image when present.
+_IDENTITY_SYSTEM = (
+    "You write a character's CANONICAL PHYSICAL IDENTITY for image generation — the traits that "
+    "never change between outfits. Cover ONLY: sex/age read, hair (colour, length, style), eyes "
+    "(colour, shape), skin tone, build/height, face, and any permanent marks (scars, freckles). "
+    "NEVER mention clothing, accessories, held items, pose, expression, background, or art style. "
+    "Output ONE plain sentence (or two), 25-45 words, present tense, no name, no preamble.")
+
+
+def strip_clothing_note() -> str:
+    return _IDENTITY_SYSTEM   # exported alias for callers that only need the constant
+
+
+def identity_core(attire: str) -> str:
+    """The FIRST sentence of a unified attire prompt — the identity line (hair, eyes, skin,
+    build). Img2img sprite renders must carry this in TEXT: with no identity words, denoise
+    ~0.7 freely repaints hair colour (measured: a dark-haired base produced blond sprites)."""
+    first = re.split(r"(?<=[.!?])\s+", (attire or "").strip())[:1]
+    return (first[0] if first else "")[:200]
+
+
+def sprite_prompt(appearance: str, attire: str, expr: str, pose: str, framing: str,
+                  emotion: str = "", style: str | None = None) -> str:
+    """One expression sprite's positive prompt, with the EMOTION in charge. MEASURED on the
+    turbo distill (cfg 1, 8 steps): a ~200-word attire paragraph washes the emotion out entirely
+    (anger read 1/10), while a SHORT, emotion-led prompt hits 9/10 — turbo follows short punchy
+    text and ignores instructions buried in long prose. So: style anchor → framing → the emotion,
+    named and vivid → a CAPPED attire core (its own stance/expression sentences stripped) → pose."""
+    sents = [s for s in re.split(r"(?<=[.!?])\s+", attire or "") if s and not _EXPR_SENT.search(s)]
+    core = ""
+    for s in sents:                                   # keep identity + full garment detail (richer
+        if core and len(core) + len(s) > 640:         # cloth/material shading); STRONG_FACE lead
+            break                                     # still carries the emotion past the long text
+        core = f"{core} {s}".strip()
+    core = core or (attire or "")[:640]
+    nm = (emotion or "").strip()
+    strong = STRONG_FACE.get(nm.lower(), "")
+    face = "; ".join(p for p in (strong, expr if expr != nm else "") if p)
+    lead = (f"The character is strongly {nm.upper() or 'EMOTIONAL'}, the whole face and body "
+            f"showing it, exaggerated and unmistakable: {face}") if face else ""
+    bits = ((style or SPRITE_STYLE).rstrip("."), framing, lead, appearance, core, pose)
+    return _safe_image_tags(". ".join(p.strip().rstrip(".") for p in bits if p and p.strip()) + ".")
+
+
 def _base_prompt(ch) -> str:
     """The default positive prompt for a character's base image: their own physical `appearance`
     (falls back to the persona/name — never a hard-coded gender) framed as a clean FULL-BODY

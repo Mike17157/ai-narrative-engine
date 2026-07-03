@@ -37,11 +37,9 @@ NEUTRAL_POSE = "standing, standing straight, arms at sides, relaxed posture"
 
 
 def geometry_default(key: str) -> dict:
-    """Default shot geometry for an emotion: neutral/base = full body on a tall canvas; everything else
-    = a 3/4 cowboy shot on a portrait canvas. (Overridable per emotion in configs/poses.json.)"""
-    if key == "neutral":
-        return {"framing": "fullbody", "aspect": "tall"}
-    return {"framing": _DEFAULT_FRAMING, "aspect": _DEFAULT_ASPECT}
+    """Default shot geometry: EVERY sprite is FULL BODY on a tall canvas (user requirement — VN
+    sprites are whole-body). Overridable per emotion in configs/poses.json."""
+    return {"framing": "fullbody", "aspect": "tall"}
 
 
 def resolve_geometry(key: str, overrides: dict | None) -> dict:

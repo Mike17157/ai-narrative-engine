@@ -70,6 +70,53 @@ class StoryMaster:
     def known(self) -> set[str]:
         return self._cast_names() | {n.lower() for n in (self.world.get("people") or {})}
 
+    # ── scene authority — the StoryMaster decides who is present; the narrator OBEYS ────────────
+    def _names_at(self, location: str) -> list[str]:
+        """Everyone the world model places AT `location` — recorded people plus cast entities
+        whose tracked location is here. These are who CAN be brought on at this place."""
+        loc = (location or "").strip().lower()
+        out = [n for n, r in (self.world.get("people") or {}).items()
+               if (r.get("at") or "").strip().lower() == loc]
+        for nm, e in (self.world.get("entities") or {}).items():
+            if (e.get("location") or "").strip().lower() == loc:
+                out.append(nm)
+        return out
+
+    def plan_scene(self, *, present: list[str], action: str) -> list[str]:
+        """THE authoritative roster for this turn. Sticky co-location carries over; the player's
+        action may bring in AT MOST ONE person who is actually recorded at this location (so the
+        narrator can't summon the unreachable, and can't drop who's here). The narrator is handed
+        this verbatim and may not deviate."""
+        roster = [n for n in (present or []) if n]
+        low = {n.lower() for n in roster}
+        act = (action or "").lower()
+        for nm in self._names_at(self.location):
+            if nm.lower() in low:
+                continue
+            toks = [t for t in nm.lower().split() if len(t) > 2]
+            if toks and any(t in act for t in toks):
+                roster.append(nm)                 # one controlled entrance: sought AND reachable
+                break
+        return roster
+
+    # ── scene lifecycle — the StoryMaster fires PER SCENE, not per turn ───────────
+    # A scene = one location until the story moves. Cheap reflexes (roster, ingest, derived
+    # plot) run every turn; the EXPENSIVE coordination — an actual director reasoning pass —
+    # fires only at a boundary, where its cost amortizes over the whole scene.
+
+    def scene_boundary(self, loc_id: str) -> bool:
+        """True when a new scene starts: nothing planned yet, or the location changed.
+        # ponytail: boundary = location change; add time-skip/cast-turnover detection when
+        # long single-location scenes need re-direction."""
+        plan = self.world.get("scene_plan") or {}
+        return (plan.get("space") or "") != (loc_id or "")
+
+    def open_scene(self, *, loc_id: str, recent: str = "") -> dict:
+        """Fire the per-scene event through the bus and return the fresh plan."""
+        self.emit("scene", loc_id=loc_id, recent=recent)
+        self._drain()
+        return self.world.get("scene_plan") or {}
+
     # ── the turn hook ──────────────────────────────────────────────────────────────
     def ingest(self, *, people: list[dict], present: list[str], narration: str) -> list[str]:
         """Process one turn's scribe report into events, then run the network. `people` = every
@@ -85,6 +132,7 @@ class StoryMaster:
         for nm in (present or []):
             if nm and nm.lower() not in known:
                 self.emit("encounter", name=nm)
+        self.emit("beat", step=int(self.world.get("step") or 0))
         self._drain()
         return self._fleshed_now
 
@@ -136,6 +184,259 @@ def _h_fleshed(sm: StoryMaster, d: dict) -> None:
     """Seam for the sprite-render job (Slice 2, needs ComfyUI). For now just note it in the log so
     the world records that a face was born."""
     sm.world.setdefault("log", []).append(f"(a new person entered the story: {d['name']})")
+
+
+# ── The per-SCENE director: plan the scene ONCE at its boundary ─────────────────────
+# One real reasoning call per scene (too slow per turn, free amortized over a scene): what
+# is this scene FOR, what tension does it hold, what naturally ends it. Every turn of the
+# scene then steers by the plan at zero added latency.
+
+_SCENE_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["goal", "pressure", "exit"],
+    "properties": {
+        "goal": {"type": "string", "description": "what this scene is FOR — the one concrete "
+                 "thing it should accomplish for the story"},
+        "pressure": {"type": "string", "description": "the tension or complication kept alive "
+                     "under the surface of the scene"},
+        "exit": {"type": "string", "description": "what would naturally end the scene"},
+    },
+}
+
+
+@StoryMaster.on("scene")
+def _h_scene(sm: StoryMaster, d: dict) -> None:
+    """Scene boundary → close the old scene into the log, direct the new one. The plan is
+    written BEFORE the LLM call so a failed call still marks the boundary (no re-fire loop);
+    an empty plan degrades gracefully — the derived plot direction still steers."""
+    w = sm.world
+    old = w.get("scene_plan") or {}
+    if old.get("goal"):
+        w.setdefault("log", []).append(f"(scene closes at {old.get('loc') or '?'}: {old['goal']})")
+    plan = {"space": d.get("loc_id") or "", "loc": sm.location,
+            "opened": int(w.get("step") or 0), "goal": "", "pressure": "", "exit": ""}
+    w["scene_plan"] = plan
+    if sm.provider is None:
+        return
+    from .guards import generate_guarded
+    cast_lines = []
+    for m in sm.st.cast:
+        c = sm.ctx.base_settings.characters.get(m.character)
+        nm = (c.name if c else m.character) or m.character
+        desc = ((c.system or "").splitlines()[0] if c else "")[:100]
+        cast_lines.append(f"- {nm}" + (f": {desc}" if desc else ""))
+    cast_block = ("CAST (the people who EXIST in this story — plan the scene with THEM; do NOT "
+                  "invent new named characters or beings):\n" + "\n".join(cast_lines)) \
+        if cast_lines else ""
+    bits = [b for b in (plot_direction(w, sm.st), cast_block,
+                        people_by_location(w, sm.location)) if b]
+    system = ("You direct ONE scene of an interactive novel. Decide what the scene is FOR: the "
+              "one concrete thing it should accomplish for the story, the tension to keep alive "
+              "under its surface, and what would naturally end it. Concrete and causal, never "
+              "atmospheric. One line each."
+              + ("\n\n" + "\n\n".join(bits) if bits else ""))
+    prompt = (f"A new scene opens at: {sm.location or plan['space']}.\n"
+              + (f"JUST BEFORE IT:\n{d['recent']}\n" if d.get("recent") else "")
+              + "\nPlan the scene.")
+    g = generate_guarded(sm.provider, system=system, prompt=prompt, root=sm.ctx.root,
+                         emits=_SCENE_SCHEMA)
+    data = g.get("data") or {}
+    for k in ("goal", "pressure", "exit"):
+        plan[k] = (data.get(k) or "").strip()
+
+
+def scene_block(plan: dict) -> str:
+    """The director's per-scene agenda as a consequence-context block ('' if unplanned)."""
+    if not (isinstance(plan, dict) and plan.get("goal")):
+        return ""
+    out = ["THIS SCENE (planned when it opened — steer toward it, never announce it):",
+           f"- what the scene is for: {plan['goal']}"]
+    if plan.get("pressure"):
+        out.append(f"- keep alive: {plan['pressure']}")
+    if plan.get("exit"):
+        out.append(f"- it ends when: {plan['exit']}")
+    return "\n".join(out)
+
+
+# ── Plot progression: the arc north-star the per-turn consequence step steers toward ───────────
+# Cheap/derived for now (no LLM call → no added latency): phase from how far in we are, the thread
+# to press from the oldest open promise. Upgrade path: a periodic LLM "director" call that
+# re-reasons the pressure — same handler, richer body. This is the other half of the StoryMaster
+# (the DM function) that previously only ran on sleep (dreams/consolidation).
+
+_PHASES = [(4, "setup"), (12, "rising action"), (22, "the turn"), (10 ** 9, "toward resolution")]
+
+
+@StoryMaster.on("beat")
+def _h_plot(sm: StoryMaster, d: dict) -> None:
+    w = sm.world
+    step = int(d.get("step") or w.get("step") or 0)
+    threads = [p.get("setup", "") for p in (w.get("promises") or [])
+               if p.get("status") == "open" and p.get("setup")]
+    phase = next(name for lim, name in _PHASES if step < lim)
+    w["plot"] = {"question": (getattr(sm.st, "premise", "") or sm.st.name),
+                 "phase": phase, "focus": threads[0] if threads else "",
+                 "threads": threads[:3], "beat": step}
+
+
+# ── The ARC: a PLANNED staged progression the story lives through ──────────────────
+# One LLM call plans it from a one-line request (the request IS the template — "a village
+# romance: he draws up his courage…"); the per-scene director + per-turn consequence step
+# then steer toward the CURRENT stage via plot_direction. Advancement is free: the scribe
+# (already reading every turn) reports the stage's concrete milestone; code advances.
+
+_ARC_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["name", "question", "stages"],
+    "properties": {
+        "name": {"type": "string"},
+        "question": {"type": "string", "description": "the arc's dramatic question in YOUR OWN "
+                     "words — one line, never a copy of the request"},
+        "stages": {"type": "array", "minItems": 3, "maxItems": 7, "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["title", "purpose", "milestone", "events"],
+            "properties": {
+                "title": {"type": "string"},
+                "purpose": {"type": "string", "description": "what this stage does to the "
+                            "characters — one line, earned and ordinary-human"},
+                "milestone": {"type": "string", "description": "the ONE concrete, observable "
+                              "moment that completes this stage (an action, not a feeling)"},
+                "events": {"type": "array", "items": {"type": "string"},
+                           "description": "2-4 small planned events / touching moments to "
+                           "weave into scenes — particular, quiet, no melodrama"}}}}},
+}
+
+
+def generate_arc(provider, ctx, st, world: dict, request: str) -> dict:
+    """Plan an ARC from a one-line request and install it on the world model (stage 0).
+    Returns the arc ({} on failure). The request is the reusable template."""
+    from .guards import generate_guarded
+    cast = []
+    for m in st.cast:
+        c = ctx.base_settings.characters.get(m.character)
+        nm = (c.name if c else m.character) or m.character
+        cast.append(f"- {nm}: {((c.system or '').splitlines()[0] if c else '')[:120]}")
+    system = (
+        "You plan ONE story arc for an interactive novel — a staged emotional progression the "
+        "story will live through, scene by scene. Stages are earned and ordinary-human, never "
+        "melodrama. Each stage has: a purpose (what it does to the characters), ONE concrete "
+        "observable milestone that completes it (an action someone takes, not a feeling), and "
+        "a few small planned events — particular, quiet moments a scene can weave in naturally. "
+        "Use ONLY the people who exist. Fit the story's world and its pressures.")
+    prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST:\n" + "\n".join(cast)
+              + f"\n\nARC REQUEST: {request}\n\nPlan the arc.")
+    g = generate_guarded(provider, system=system, prompt=prompt, root=ctx.root,
+                         emits=_ARC_SCHEMA)
+    data = g.get("data") or {}
+    if not data.get("stages"):
+        return {}
+    data["stage"] = 0
+    world["arc"] = data
+    return data
+
+
+def arc_milestone(world: dict) -> str:
+    """The current stage's completion condition ('' when no active arc) — handed to the
+    scribe so every turn's narration is checked against it for free."""
+    arc = world.get("arc") if isinstance(world.get("arc"), dict) else {}
+    stages = arc.get("stages") or []
+    i = int(arc.get("stage") or 0)
+    return stages[i]["milestone"] if i < len(stages) else ""
+
+
+def advance_arc(world: dict) -> str:
+    """The scribe observed the milestone → advance one stage (deterministic, no LLM).
+    Returns the new stage title ('complete' at the end, '' if no active arc)."""
+    arc = world.get("arc") if isinstance(world.get("arc"), dict) else {}
+    stages = arc.get("stages") or []
+    i = int(arc.get("stage") or 0)
+    if not stages or i >= len(stages):
+        return ""
+    arc["stage"] = i + 1
+    nxt = stages[i + 1]["title"] if i + 1 < len(stages) else "complete"
+    world.setdefault("log", []).append(f"(arc: '{stages[i]['title']}' completes → {nxt})")
+    return nxt
+
+
+def plot_direction(world: dict, st) -> str:
+    """The story's north-star for the consequence step and the per-scene director. An ACTIVE
+    ARC (the planned progression) takes precedence; else the derived plot. Advance TOWARD it,
+    never force it."""
+    arc = world.get("arc") if isinstance(world.get("arc"), dict) else {}
+    stages = arc.get("stages") or []
+    i = int(arc.get("stage") or 0)
+    if stages and i < len(stages):
+        sg = stages[i]
+        out = ["STORY ARC (the planned progression. Build TOWARD the current stage's milestone "
+               "— but the milestone MOMENT belongs to the PLAYER: set it up, invite it, make "
+               "space for it; NEVER perform it for them or run ahead of them. A stage should "
+               "take several scenes — weave in at most ONE planned moment per scene, never "
+               "announce the plan):",
+               f"- the arc: {arc.get('name', '')}: {arc.get('question', '')}",
+               f"- current stage ({i + 1}/{len(stages)}): {sg['title']} — {sg['purpose']}",
+               f"- this stage completes when: {sg['milestone']}"]
+        if sg.get("events"):
+            out.append("- planned moments to weave in: " + "; ".join(sg["events"]))
+        if i + 1 < len(stages):
+            out.append(f"- after that: {stages[i + 1]['title']}")
+        return "\n".join(out)
+    plot = world.get("plot") if isinstance(world.get("plot"), dict) else {}
+    q = plot.get("question") or getattr(st, "premise", "") or ""
+    if not q and not plot.get("focus"):
+        return ""
+    out = ["STORY (the arc — advance the story TOWARD this; escalate, complicate, or pay off a "
+           "thread when the moment allows, but never force it):"]
+    if q:
+        out.append(f"- what the story is about: {q}")
+    out.append(f"- phase: {plot.get('phase') or 'setup'}")
+    if plot.get("focus"):
+        out.append(f"- press toward: {plot['focus']}")
+    if plot.get("threads"):
+        out.append("- open threads: " + "; ".join(plot["threads"]))
+    return "\n".join(out)
+
+
+def record_page(world: dict, *, loc: str, text: str, beat: str, step: int) -> None:
+    """The MANUSCRIPT — the story's prose grouped by SCENE, for the reading/editing pane.
+    A new scene entry opens when the location changes; each turn appends one page (its
+    narration + the scribe's one-line beat). `ti` ties the page to its transcript entry so
+    a manual edit updates both. Pure bookkeeping, no LLM."""
+    if not (text or "").strip():
+        return
+    ms = world.setdefault("manuscript", [])
+    if not ms or (ms[-1].get("loc") or "") != (loc or ""):
+        ms.append({"loc": loc or "?", "opened": step, "pages": []})
+    ms[-1]["pages"].append({"step": step, "text": text, "beat": (beat or "").strip(),
+                            "ti": len(world.get("transcript") or []) - 1})
+
+
+def state_card(world: dict, st) -> str:
+    """THE STATE CARD — the story's current state as ONE readable card: the scene and what
+    it's for, the arc, who's where, what's established and promised, the hard world state.
+    A pure VIEW over the delta-maintained world model, so updating it is FREE: the scribe's
+    deltas + the bus handlers keep the model current each turn; no LLM ever rewrites a card."""
+    from . import state_engine as _SE
+    parts = [f"STATE CARD — {getattr(st, 'name', '') or '?'} · step {int(world.get('step') or 0)}"]
+    plan = world.get("scene_plan") if isinstance(world.get("scene_plan"), dict) else {}
+    where = plan.get("loc") or world.get("location") or ""
+    if where:
+        parts.append(f"SCENE — at {where}" + (f" (opened step {plan.get('opened')})"
+                                              if plan.get("goal") else ""))
+    for block in (scene_block(plan), plot_direction(world, st),
+                  people_by_location(world, where)):
+        if block:
+            parts.append(block)
+    dets = [d.get("text", "") for d in (world.get("details") or []) if d.get("text")][-5:]
+    if dets:
+        parts.append("ESTABLISHED (recent):\n" + "\n".join(f"- {t}" for t in dets))
+    proms = [p.get("setup", "") for p in (world.get("promises") or [])
+             if p.get("status") == "open" and p.get("setup")][:5]
+    if proms:
+        parts.append("OPEN PROMISES:\n" + "\n".join(f"- {t}" for t in proms))
+    hard = _SE.render_state(world)
+    if hard:
+        parts.append(hard)
+    return "\n\n".join(parts)
 
 
 def people_by_location(world: dict, current: str) -> str:

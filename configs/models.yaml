@@ -374,3 +374,17 @@ models:
         positive: { node: "7", field: "positive_prompt" }
       output_node: "12"         # VHS_VideoCombine (mp4)
       timeout_s: 900
+
+  # krea2_turbo_sprite_i2i — EXPRESSION sprites via img2img FROM THE OUTFIT BASE + Inspyrenet
+  # cutout. The base image is the style/identity anchor (text alone plateaued at ~5% style
+  # drift); denoise is set per-call by the sprite endpoint (~0.7 so the face can change).
+  krea2_turbo_sprite_i2i:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_i2i_cutout_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "22"
+      timeout_s: 600

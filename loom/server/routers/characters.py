@@ -273,6 +273,140 @@ def register(app, ctx):
             return JSONResponse({"error": "not found"}, status_code=404)
         return FileResponse(p, media_type="image/png")
 
+    @app.post("/api/characters/{key}/normalize-identity")
+    def normalize_identity(key: str, body: dict | None = None):
+        """Backfill a CLEAN, clothing-free canonical `appearance` (fields.appearance) — the
+        identity anchor every render leads with. Grounded on the character's best rendered base
+        image via vision (falls back to the reference image, else rewrites the existing text to
+        strip clothing). Fixes drift from an empty OR clothing-polluted appearance. → {appearance}."""
+        c = ctx.base_settings.characters.get(key)
+        if c is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        from ..services.prompts import _IDENTITY_SYSTEM
+        # Source image: a rendered outfit base (grounded in what actually renders), else the reference.
+        img_uri = None
+        m = ctx.portrait_manifest(key)
+        for o in (m.get("outfits") or []):
+            f = ctx.portrait_dir(key) / str(o.get("id")) / "base.png"
+            if o.get("base") and f.is_file():
+                img_uri = "data:image/png;base64," + base64.b64encode(f.read_bytes()).decode()
+                break
+        if img_uri is None:
+            ref = ctx.reference_path(key)
+            if ref is not None:
+                img_uri = "data:image/png;base64," + base64.b64encode(ref.read_bytes()).decode()
+        prov = ctx.ip_provider()
+        cur = (c.fields or {}).get("appearance") or ""
+        txt_prompt = (f"Persona:\n{_persona_text(c)}\n\nExisting appearance notes "
+                      f"(rewrite as pure identity, strip ALL clothing/accessories):\n{cur or c.system or ''}")
+        appearance = ""
+        # Prefer vision (grounded on the base render); on ANY failure (model lacks image support,
+        # etc.) fall back to a TEXT rewrite that strips clothing — always produces a clean anchor.
+        if img_uri and prov is not None and hasattr(prov, "generate_text"):
+            try:
+                appearance = _gen_text(prov, _IDENTITY_SYSTEM,
+                                       f"Persona:\n{_persona_text(c)}\n\nWrite this character's canonical identity.",
+                                       images=[img_uri])
+            except Exception:  # noqa: BLE001 — vision unsupported → text fallback below
+                appearance = ""
+        if not appearance:
+            # A mechanical rewrite — use a fast non-thinking model, not the (possibly reasoning)
+            # vision provider, so this stays quick.
+            tprov = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"}) \
+                or (prov if (prov is not None and hasattr(prov, "generate_text")) else None)
+            if tprov is None or not hasattr(tprov, "generate_text"):
+                return JSONResponse({"error": "no text/vision model available"}, status_code=400)
+            try:
+                appearance = _gen_text(tprov, _IDENTITY_SYSTEM, txt_prompt)
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": f"identity extraction failed: {exc}"}, status_code=500)
+        if not appearance or len(appearance) < 15:
+            return JSONResponse({"error": "no usable identity produced"}, status_code=502)
+        data = ctx._read_character_data(key)
+        if data is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        data["fields"] = {**(data.get("fields") or {}), "appearance": appearance}
+        ctx._write_character_data(key, data)   # validates + routes + reloads
+        return {"appearance": appearance}
+
+    @app.post("/api/prompt/mutate")
+    def prompt_mutate(body: dict):
+        """Rewrite an image prompt per a plain-English instruction — the Base Studio's mutate
+        box, powered by DeepSeek V4 Pro (non-thinking; a prompt edit needs no reasoning chain).
+        Body: { prompt, instruction } → { prompt }."""
+        body = body or {}
+        prompt = (body.get("prompt") or "").strip()
+        instruction = (body.get("instruction") or "").strip()
+        if not prompt or not instruction:
+            return JSONResponse({"error": "need prompt + instruction"}, status_code=400)
+        prov = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+        if prov is None or not hasattr(prov, "generate_text"):
+            return JSONResponse({"error": "no text model available"}, status_code=400)
+        system = ("You revise IMAGE-GENERATION prompts. Apply the INSTRUCTION to the PROMPT: "
+                  "change exactly what it asks for, keep every other detail (identity, garments, "
+                  "colours, pose) intact, keep the same prose format and similar length. "
+                  "Output ONLY the revised prompt — no preamble, no quotes.")
+        try:
+            out = _gen_text(prov, system, f"PROMPT:\n{prompt}\n\nINSTRUCTION: {instruction}")
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"mutate failed: {exc}"}, status_code=500)
+        if not out:
+            return JSONResponse({"error": "the model returned nothing"}, status_code=502)
+        return {"prompt": out}
+
+    @app.get("/api/style")
+    def style_get():
+        """The active BROADCAST art style ({} = the built-in default anchor)."""
+        import json as _json
+        f = ctx.root / "configs" / "image_style.json"
+        try:
+            return _json.loads(f.read_text(encoding="utf-8")) if f.is_file() else {}
+        except (ValueError, OSError):
+            return {}
+
+    @app.post("/api/style")
+    def style_broadcast(body: dict):
+        """STYLE BROADCASTING: distill ONE chosen image into a reusable style card and make it
+        the GLOBAL anchor every character render opens with (bases + sprites; sprites then lock
+        to their base via img2img, so the whole cast converges on the chosen style as images are
+        re-rendered). Body: { image: dataURI | /api/characters/.../portraits/img/... , source? }
+        or { reset: true } to return to the built-in anchor. Returns {style}."""
+        import json as _json
+        from datetime import date
+        body = body or {}
+        f = ctx.root / "configs" / "image_style.json"
+        if body.get("reset"):
+            f.unlink(missing_ok=True)
+            return {"style": "", "reset": True}
+        img = (body.get("image") or "").strip()
+        if img.startswith("data:image"):
+            uri = img.split("?")[0]
+        else:
+            mm = re.match(r"^/api/characters/([\w\-]+)/portraits/img/([\w\-]+)/([\w\-]+\.png)", img)
+            if not mm:
+                return JSONResponse({"error": "give a data URI or a portrait image URL"}, status_code=400)
+            p = ctx.portrait_dir(mm.group(1)) / mm.group(2) / mm.group(3)
+            if not p.is_file():
+                return JSONResponse({"error": "image not found on disk"}, status_code=404)
+            uri = "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
+        provider = ctx.ip_provider()
+        if provider is None or not hasattr(provider, "generate_text"):
+            return JSONResponse({"error": "connect an image-prompt (vision) model first (⚙ Models)"}, status_code=400)
+        from ..services.prompts import _STYLE_DISTILL_SYSTEM
+        try:
+            style = _gen_text(provider, _STYLE_DISTILL_SYSTEM,
+                              "Write the reusable art-style specification for this image.",
+                              images=[uri])
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"style distillation failed: {exc}"}, status_code=500)
+        if not style or len(style) < 40:
+            return JSONResponse({"error": "the vision model returned no usable style"}, status_code=502)
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text(_json.dumps({"style": style, "source": body.get("source") or img[:120],
+                                  "saved": date.today().isoformat()}, indent=2, ensure_ascii=False),
+                     encoding="utf-8")
+        return {"style": style}
+
     @app.post("/api/characters/{key}/portraits/describe")
     def portrait_describe(key: str, body: dict | None = None):
         """Vision-caption the reference image into a canonical appearance prompt."""
@@ -633,17 +767,23 @@ def register(app, ctx):
         # Per-outfit expression prompt (legacy global as fallback for old data).
         expr = ((outfit.get("expression_prompts") or {}).get(emotion)
                 or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
-        # Every outfit picture is FULL BODY (the expression sprite shows the whole look + the face).
+        # TXT2IMG (not img2img): each emotion gets its OWN full-body pose + facial expression.
+        # img2img from the neutral base locked every emotion to the same standing pose (measured:
+        # identical, inexpressive). Consistency instead rides the TEXT: the style anchor (broadcast)
+        # + the clean clothing-free `appearance` (identity) + the outfit `attire` (garments) — all
+        # constant every render — while the STRONG_FACE lead + pose_tags drive per-emotion variety.
+        from ..services.prompts import sprite_prompt, style_anchor
+        _style = style_anchor(ctx.root)
         provider, model_id = ctx.role_image_provider("sprite", body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
-            ", ".join(p for p in (appearance, attire, expr, ctx.pose_tags(key, emotion), ctx.pose_framing(emotion)) if p))))
+        prompt = sprite_prompt(appearance, attire, expr,
+                               ctx.pose_tags(key, emotion), ctx.pose_framing(emotion), emotion=emotion,
+                               style=_style)
         _randomize_seeds(provider.workflow)
-        # txt2img — identity comes from the appearance tags (the model is consistent enough that
-        # img2img from the base added little). The workflow removes the background (→ transparent).
         try:
-            png = await _render(provider, prompt, out_prefix=ctx.output_prefix_for(model_id, "sprite", key),
+            png = await _render(provider, prompt,
+                                out_prefix=ctx.output_prefix_for(model_id, "sprite", key),
                                 latent=ctx.pose_latent(emotion))
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"render failed: {exc}"}, status_code=500)
@@ -674,7 +814,7 @@ def register(app, ctx):
         return {"ok": True, "url": f"/api/characters/{key}/portraits/img/{oid}/{emo}.png"}
 
     @app.post("/api/characters/{key}/portraits/render-emotions")
-    def render_emotions(key: str, body: dict):
+    async def render_emotions(key: str, body: dict):   # async: _start_stream_job needs the loop
         """Render the FULL fixed emotion taxonomy as sprites UPFRONT — for one outfit
         (body.outfit_id) or ALL outfits. ONE full-body image per (outfit × emotion), saved straight
         into the manifest; streamed as a job (phase per outfit, item per emotion). The per-cell
@@ -705,9 +845,12 @@ def register(app, ctx):
                 pass
             done = 0
 
-            # Collect all prompts across outfits for batch processing
-            all_jobs = []  # [(outfit, emotion, prompt_dict, out_dir)]
+            from ..services.prompts import sprite_prompt, style_anchor
+            _style = style_anchor(ctx.root)
 
+            # TXT2IMG (see sprite-candidate): each emotion its OWN full-body pose + expression.
+            # Consistency rides the TEXT — style anchor + clean appearance + outfit attire.
+            all_jobs = []
             for o in outfits:
                 if cancelled():
                     break
@@ -719,27 +862,17 @@ def register(app, ctx):
 
                 for emo in EMOTION_KEYS:
                     expr = canon.get(emo) or (o.get("expression_prompts") or {}).get(emo) or emo
-                    # Unified outfits already embed appearance — skip the separate appearance prefix.
-                    base_parts = (attire, expr, ctx.pose_tags(key, emo, outfit_id=oid), ctx.pose_framing(emo)) if is_unified \
-                        else (appearance, attire, expr, ctx.pose_tags(key, emo, outfit_id=oid), ctx.pose_framing(emo))
-                    prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(
-                        ", ".join(p for p in base_parts if p))))
-
-                    all_jobs.append({
-                        "outfit": o,
-                        "emotion": emo,
-                        "prompt": prompt,
-                        "out_dir": odir,
-                        "latent": ctx.pose_latent(emo)
-                    })
+                    prompt = sprite_prompt("" if is_unified else appearance, attire, expr,
+                                           ctx.pose_tags(key, emo, outfit_id=oid), ctx.pose_framing(emo),
+                                           emotion=emo, style=_style)
+                    all_jobs.append({"outfit": o, "emotion": emo, "prompt": prompt,
+                                     "out_dir": odir, "latent": ctx.pose_latent(emo)})
 
             if cancelled():
                 return {"ok": True, "rendered": 0, "outfits": 0}
 
             emit({"type": "phase", "label": f"Rendering {len(all_jobs)} sprites across {len(outfits)} outfits"})
 
-            # Fan out through the shared dispatcher: concurrent on the serverless endpoint
-            # (or the local GPU), per-image progress, cancellation that stops in-flight jobs.
             batch_prompts = [{"prompt": j["prompt"], "latent": j["latent"]} for j in all_jobs]
             results = render_batch(
                 provider, batch_prompts, ctx=ctx, out_prefix_template=oprefix,
@@ -811,18 +944,22 @@ def register(app, ctx):
         outfit = ctx.portrait_outfit(m, oid)
         if outfit is None:
             return JSONResponse({"error": "no such outfit"}, status_code=404)
-        attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
+        # Base Studio overrides: a one-off `attire` prompt and/or an explicit `style` card
+        # (else the active global anchor). Persisting a mutated attire is the caller's call.
+        attire = ((body or {}).get("attire") or "").strip()             or outfit.get("attire_prompt") or outfit.get("prompt") or ""
         is_unified = outfit.get("unified", False)
         provider, model_id = ctx.role_image_provider("sprite", (body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        # Unified outfits embed appearance; legacy outfits need it prepended.
-        if is_unified:
-            parts = (attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral"))
-        else:
-            appearance = (ch.fields or {}).get("appearance") or ""
-            parts = (appearance, attire, ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral"))
-        prompt = _regionize_prompt(_snap_prompt(_safe_image_tags(", ".join(p for p in parts if p))))
+        # The base is just the NEUTRAL sprite — render it through the SAME `sprite_prompt` builder
+        # as the emotions (identical scaffold: style anchor + appearance + attire + neutral pose),
+        # or the base and its emotion sprites come out in different art styles (measured mismatch).
+        from ..services.prompts import sprite_prompt, style_anchor
+        _style = ((body or {}).get("style") or "").strip() or style_anchor(ctx.root)
+        appearance = "" if is_unified else ((ch.fields or {}).get("appearance") or "")
+        prompt = sprite_prompt(appearance, attire, "",
+                               ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral"),
+                               emotion="neutral", style=_style)
         _randomize_seeds(provider.workflow)
         # txt2img — identity from the appearance tags (the model is consistent without img2img).
         try:

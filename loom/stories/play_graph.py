@@ -1,6 +1,6 @@
 """The play turn as a pydantic-graph pipeline — the SHIPPED shape of the narrative harness.
 
-    compile → prose → scribe → apply
+    compile → scene → consequence → prose → scribe → apply
 
 Same substrate as genesis_graph.py (typed State/Deps, thin async steps over the sync
 providers). The four nodes are the harness plan's two-pass turn made explicit:
@@ -81,6 +81,34 @@ async def step_compile(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     return s.tc
 
 
+async def step_scene(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
+    """PER-SCENE StoryMaster firing (the coordinator's cadence): on a scene boundary — the
+    opening, or the location changed — the director plans the scene ONCE (goal / pressure /
+    exit → world.scene_plan) and the fresh plan is injected into THIS turn's consequence
+    context. Mid-scene turns skip entirely (no LLM call, no latency; compile already
+    surfaced the standing plan)."""
+    from .storymaster import StoryMaster, scene_block
+    s, d = ctx.state, ctx.deps
+    if s.error or d.cancel():
+        return {}
+    cur = s.tc.get("cur") or ""
+    if not StoryMaster(d.ctx, d.st, s.world_state).scene_boundary(cur):
+        d.on_event({"type": "node", "node": "scene", "boundary": False})
+        return s.world_state.get("scene_plan") or {}
+    loc_name = next((l.name for l in d.st.locations if l.id == cur), cur)
+    sm = StoryMaster(d.ctx, d.st, s.world_state,
+                     provider=d.consequence_provider or d.provider, location=loc_name)
+    hist = s.body.get("history") or []
+    recent = "\n".join(str(m.get("text", "")) for m in hist[-2:])[-800:]
+    plan = await _thread(sm.open_scene, loc_id=cur, recent=recent)
+    blk = scene_block(plan)
+    if blk and s.tc.get("consequence_system"):
+        s.tc["consequence_system"] += "\n\n" + blk
+    d.on_event({"type": "node", "node": "scene", "boundary": True,
+                "goal": plan.get("goal", "")})
+    return plan
+
+
 async def step_consequence(ctx: StepContext[PlayState, PlayDeps, None]) -> str:
     """The LOGIC step (reasoning model): work out what the player's action ACTUALLY causes —
     cause→effect, how each present character reacts, what changes, the new cost/choice. The
@@ -146,8 +174,11 @@ async def step_scribe(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
                               "location name, 'here' if in the scene, or '' if unknown/away"},
                        "note": {"type": "string", "description": "one plain line: who they are / "
                                 "their tie to the viewpoint"}}}}
+    schema["properties"]["arc_milestone"] = {
+        "type": "boolean", "description": "true ONLY if the narration just accomplished the "
+        "current arc stage's milestone (see the system brief); false otherwise or if no arc"}
     schema["required"] = [r for r in schema["required"] if r != "reply"] \
-        + ["state_deltas", "player_status", "people"]
+        + ["state_deltas", "player_status", "people", "arc_milestone"]
     hist = s.body.get("history") or []
     last_user = next((m.get("text", "") for m in reversed(hist) if m.get("role") == "user"), "")
     prompt = (f"PLAYER'S LATEST ACTION: {last_user}\n\n"
@@ -250,17 +281,25 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     name_to_key = {(appctx.base_settings.characters[m.character].name
                     if m.character in appctx.base_settings.characters else m.character).lower():
                    m.character for m in st.cast}
-    present_keys = [name_to_key.get((n or "").lower()) for n in data.get("present", [])]
+    # AUTHORITATIVE present = the StoryMaster's roster (decided at compile, obeyed by the narrator),
+    # NOT whatever the scribe read off the prose. The scribe can't add or drop who's in the scene.
+    roster = s.tc.get("roster") or data.get("present") or []
+    present_keys = [name_to_key.get((n or "").lower()) for n in roster]
     loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
 
-    # THE STORYMASTER owns the character network: it turns the scribe's `people` report into
-    # records pinned to locations (mention → thin record; still-static), and fleshes anyone who
-    # steps on stage (encounter → full card, one per turn, gradual). Slice 1 of the coordinator.
-    from .storymaster import StoryMaster
+    # THE STORYMASTER owns the character network: `people` report → records pinned to locations
+    # (mention → thin record; static), and fleshes anyone in the authoritative roster who isn't a
+    # known character (a controlled entrance → full card, one per turn). Slice 1 of the coordinator.
+    from .storymaster import StoryMaster, state_card as _sm_card
     loc_name = next((l.name for l in st.locations if l.id == loc), loc)
     _sm = StoryMaster(appctx, st, world_state, provider=d.provider, location=loc_name)
-    born_now = _sm.ingest(people=data.get("people") or [], present=data.get("present") or [],
-                          narration=s.narration)
+    born_now = _sm.ingest(people=data.get("people") or [], present=roster, narration=s.narration)
+
+    # ARC advancement: the scribe watched this turn's narration against the current stage's
+    # milestone; on a hit, the stage advances deterministically (no LLM).
+    if data.get("arc_milestone"):
+        from .storymaster import advance_arc
+        advance_arc(world_state)
 
     emotions = {}
     for e in data.get("emotions", []):
@@ -285,6 +324,12 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         # Index this turn as a STEP + record who witnessed it (perception: join = no backlog).
         _PC.record_step(world_state, [k for k in present_keys if k])
         world_state.setdefault("transcript", []).append(data.get("reply", ""))
+        # The MANUSCRIPT: the same prose, grouped by scene for the reading/editing pane.
+        from .storymaster import record_page
+        _beat_line = next((str(dd.get("value", "")) for dd in (data.get("state_deltas") or [])
+                           if dd.get("op") == "log"), "")
+        record_page(world_state, loc=loc_name, text=data.get("reply", ""),
+                    beat=_beat_line, step=int(world_state.get("step") or 0))
         # Carry the SCENE forward: space + co-located members + the sticky POV.
         pov_out = (data.get("pov") or "").strip()
         pov_key = name_to_key.get(pov_out.lower(), pov_out) or prior_pov
@@ -304,6 +349,8 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     return {
         "reply": data.get("reply", ""), "location": loc,
         "beat": s.beat,                 # the consequence reasoning (what-happens), for the UI
+        "scene_plan": world_state.get("scene_plan") or {},   # the per-scene director's agenda
+        "card": _sm_card(world_state, st),   # the STATE CARD: derived view, free every turn
         "born": born_now,               # characters created on the fly this turn (gradual)
         "present": [k for k in present_keys if k],
         "pov": (world_state.get("scene") or {}).get("pov", ""),
@@ -325,9 +372,11 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
 def _build_play_graph():
     gb = GraphBuilder(state_type=PlayState, deps_type=PlayDeps, output_type=dict)
     comp, conseq = gb.step(step_compile), gb.step(step_consequence)
+    scene = gb.step(step_scene)
     prose, scribe, apply_ = gb.step(step_prose), gb.step(step_scribe), gb.step(step_apply)
     gb.add_edge(gb.start_node, comp)
-    gb.add_edge(comp, conseq)         # LOGIC before prose: work out what happens, then write it
+    gb.add_edge(comp, scene)          # per-SCENE StoryMaster firing (boundary-only director)
+    gb.add_edge(scene, conseq)        # LOGIC before prose: work out what happens, then write it
     gb.add_edge(conseq, prose)
     gb.add_edge(prose, scribe)
     gb.add_edge(scribe, apply_)

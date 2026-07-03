@@ -1,5 +1,5 @@
 <script>
-  import { charName, chars, loadChars, blurb } from '$lib/characters.svelte.js';
+  import { charName, chars, loadChars } from '$lib/characters.svelte.js';
   import { stories, deleteStory, expandArc, generateTimelines, loadStory, setStoryMode, persistCurrent } from '$lib/stories.svelte.js';
   import { patch, put, post } from '$lib/api.js';
   import { autosize } from '$lib/autosize.js';
@@ -14,19 +14,12 @@
   import NovelChapters from '$lib/components/story/NovelChapters.svelte';
   import SceneRoutes from '$lib/components/story/SceneRoutes.svelte';
   import StoryTabs from '$lib/components/story/StoryTabs.svelte';
+  import Section from '$lib/components/story/Section.svelte';
+  import DefaultPersonas from '$lib/components/story/DefaultPersonas.svelte';
+  import ArcPanel from '$lib/components/story/ArcPanel.svelte';
 
   let st = $derived(stories.current);
-
-  // ── Default personas: the playable "you" cards this story suggests ──────────
   loadChars();
-  let playableCards = $derived((chars.list || []).filter((c) => c.playable));
-  function isDefaultPersona(k) { return (st?.default_personas || []).includes(k); }
-  async function toggleDefaultPersona(k) {
-    const cur = st.default_personas || [];
-    const next = cur.includes(k) ? cur.filter((x) => x !== k) : [...cur, k];
-    stories.current.default_personas = next;          // reactive
-    await put(`/stories/${st.key}`, { default_personas: next });
-  }
 
   // ── Places & scenes: story-authored containers + character-anchored spots ───
   // Enriched cast: name + role + base image (for the relationship-graph character cards).
@@ -145,19 +138,19 @@
   // Cast picker state
   let castPickerArcId = $state(null);  // arc id whose picker is open
 
-  // Header tabs — the shared story chrome (Overview·Cast·World·Plot·Web); one focused surface at a time.
+  // Header tabs — the shared story chrome; one focused surface at a time. Cast has its own major
+  // section (/stories/[key]/cast); the two graph lenses are first-class tabs (no Web umbrella),
+  // and the Map tab carries the world editors: Overview · Plot · Relationships · Map.
   const STORY_TABS = [
     { id: 'overview', label: 'Overview' },
-    { id: 'cast', label: 'Cast' },
-    { id: 'world', label: 'World' },
     { id: 'plot', label: 'Plot' },
-    { id: 'web', label: 'Web' },
+    { id: 'relationships', label: 'Relationships' },
+    { id: 'map', label: 'Map' },
   ];
   let tab = $state('overview');
-  let webView = $state('relationships');   // Web tab inner lens: 'relationships' | 'map'
   // The selected tab drives the chat agent's mode (see AgentChat.syncMode).
-  let chatMode = $derived({ overview: '_story_tools', cast: '_smith_tools', world: '_location_fns',
-                            plot: '_story_tools', web: '_smith_tools' }[tab] ?? '');
+  let chatMode = $derived({ overview: '_story_tools', plot: '_story_tools',
+                            relationships: '_smith_tools', map: '_location_fns' }[tab] ?? '');
 
   // Timeline generation state
   let generatingTimelineArc = $state(null);  // arc.id currently generating
@@ -357,16 +350,11 @@
 
 <div class="page withchat"><div class="col">
 
-  <!-- Actions row -->
-  <div class="vacts">
-    <span class="sp"></span>
-    <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
-  </div>
-
-  <!-- Title (edit in place) + format badge -->
+  <!-- Header row: title (edit in place) + format badge + actions, one line -->
   <div class="title-row">
     <input class="ip ip-title" bind:value={st.name} oninput={saveSoon} placeholder="Untitled story" />
     <span class="type-badge">{st.type === 'vn' ? '🎴 Visual novel' : '📖 Novel'}</span>
+    <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
   </div>
 
   <!-- Header tabs — shared story chrome; one focused surface at a time -->
@@ -418,118 +406,42 @@
     <input class="ip ip-themes" bind:value={themesStr} oninput={commitThemes} placeholder="themes, comma separated" />
   </div>
 
-  <!-- Default personas — the playable "you" cards this story suggests -->
-  <details class="dp-details">
-    <summary class="dp-summary">🎭 Default personas <span class="dp-count">{(st.default_personas || []).length || ''}</span></summary>
-    <div class="dp-body">
-      <p class="dp-hint">Playable cards this story suggests you embody. They float to the top of the <b>Playing as</b> menu when someone plays — pick the “you” that fits this world.</p>
-      {#if playableCards.length}
-        <div class="dp-chips">
-          {#each playableCards as c (c.key)}
-            <button class="dp-chip" class:on={isDefaultPersona(c.key)} onclick={() => toggleDefaultPersona(c.key)} title={blurb(c)}>
-              {#if c.reference || c.avatar}<img src={c.reference || c.avatar} alt={c.name} />{:else}<span class="dp-ph">🎭</span>{/if}
-              {c.name || c.key}
-              <span class="dp-mark">{isDefaultPersona(c.key) ? '✓' : '+'}</span>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <p class="dp-empty">No playable characters yet — make one in <a href="/characters/personas">Characters ▸ Personas</a>.</p>
-      {/if}
+  <!-- Cast roster — membership lives here (the Cast section is the catalogue/outfit surface) -->
+  <Section icon="👥" title="Cast" count={(st.cast || []).length || ''}>
+    <p class="hint">The characters in this story. ★ marks the protagonist — click a chip to open the card, or manage looks in the <b>Cast</b> section.</p>
+    <div class="cast-roster">
+      {#each st.cast || [] as m, i (m.character)}
+        <button class="chip cast-chip lg" class:locked={m.primary} onclick={() => openCharModal(m.character)} title={m.primary ? 'Protagonist' : 'Open card'}>
+          {m.primary ? '★ ' : ''}{charName(m.character) || m.character}
+          {#if !m.primary}<span class="cast-rm" role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); removeCastMember(i); }} title="Remove from cast">×</span>{/if}
+        </button>
+      {/each}
     </div>
-  </details>
+    <div class="addrow">
+      <Combobox items={castAddItems} bind:value={addPick} placeholder="add character…" />
+      <button class="ghost sm" onclick={addCastMember} disabled={!addPick}>＋ Add</button>
+    </div>
+  </Section>
+
+  <!-- Default personas — the playable "you" cards this story suggests -->
+  <DefaultPersonas />
 
   <!-- Memory window — how far the narrative thread keeps turns verbatim -->
-  <details class="dp-details">
-    <summary class="dp-summary">🧠 Memory window <span class="dp-count">{st.recent_window ?? 8} turns</span></summary>
-    <div class="dp-body">
-      <p class="dp-hint">How many of the most recent play turns the story keeps <b>verbatim</b>. Older turns get compressed into each character’s memory when the player sleeps or dies. Smaller = leaner context; larger = more recent detail carried forward.</p>
-      <div class="win-row">
-        <input class="win-slider" type="range" min="2" max="40" step="1"
-          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
-        <input class="win-num" type="number" min="2" max="40"
-          value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
-        <span class="win-unit">turns</span>
-      </div>
+  <Section icon="🧠" title="Memory window" count={`${st.recent_window ?? 8} turns`}>
+    <p class="hint">How many of the most recent play turns the story keeps <b>verbatim</b>. Older turns get compressed into each character’s memory when the player sleeps or dies. Smaller = leaner context; larger = more recent detail carried forward.</p>
+    <div class="win-row">
+      <input class="win-slider" type="range" min="2" max="40" step="1"
+        value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
+      <input class="win-num" type="number" min="2" max="40"
+        value={st.recent_window ?? 8} oninput={(e) => saveWindow(e.currentTarget.value)} />
+      <span class="win-unit">turns</span>
     </div>
-  </details>
-
-  {:else if tab === 'cast'}
-  <!-- Cast roster — the story's characters -->
-  <div class="tabhint">The characters in this story. ★ marks the protagonist. Click a face in <b>Web</b> to open a full character card.</div>
-  <div class="cast-roster">
-    {#each st.cast || [] as m, i (m.character)}
-      <button class="chip cast-chip lg" class:locked={m.primary} onclick={() => openCharModal(m.character)} title={m.primary ? 'Protagonist' : 'Open card'}>
-        {m.primary ? '★ ' : ''}{charName(m.character) || m.character}
-        {#if !m.primary}<span class="cast-rm" role="button" tabindex="0" onclick={(e) => { e.stopPropagation(); removeCastMember(i); }} title="Remove from cast">×</span>{/if}
-      </button>
-    {/each}
-  </div>
-  <div class="addrow">
-    <Combobox items={castAddItems} bind:value={addPick} placeholder="add character…" />
-    <button class="ghost sm" onclick={addCastMember} disabled={!addPick}>＋ Add</button>
-  </div>
-
-  <!-- Default personas — the playable "you" cards this story suggests -->
-  <details class="dp-details" open>
-    <summary class="dp-summary">🎭 Default personas <span class="dp-count">{(st.default_personas || []).length || ''}</span></summary>
-    <div class="dp-body">
-      <p class="dp-hint">Playable cards this story suggests you embody. They float to the top of the <b>Playing as</b> menu when someone plays — pick the “you” that fits this world.</p>
-      {#if playableCards.length}
-        <div class="dp-chips">
-          {#each playableCards as c (c.key)}
-            <button class="dp-chip" class:on={isDefaultPersona(c.key)} onclick={() => toggleDefaultPersona(c.key)} title={blurb(c)}>
-              {#if c.reference || c.avatar}<img src={c.reference || c.avatar} alt={c.name} />{:else}<span class="dp-ph">🎭</span>{/if}
-              {c.name || c.key}
-              <span class="dp-mark">{isDefaultPersona(c.key) ? '✓' : '+'}</span>
-            </button>
-          {/each}
-        </div>
-      {:else}
-        <p class="dp-empty">No playable characters yet — make one in <a href="/characters/personas">Characters ▸ Personas</a>.</p>
-      {/if}
-    </div>
-  </details>
-
-  {:else if tab === 'world'}
-  <!-- Locations — bare environments; group under an area to sketch a light map -->
-  <details class="dp-details" open>
-    <summary class="dp-summary">📍 Locations <span class="dp-count">{(st.locations || []).length || ''}</span></summary>
-    <div class="dp-body">
-      <p class="dp-hint">The world’s bare places (no people/events). Pick an <b>area</b> to nest a location inside a larger region — a light map, no coordinates.</p>
-      {#each st.locations || [] as loc, i (loc.id)}
-        <div class="loc-box" class:start={st.start === loc.id} class:child={loc.parent}>
-          <div class="loc-top">
-            <input class="ip fld title" bind:value={loc.name} oninput={saveSoon} placeholder="location name" />
-            <select class="area" bind:value={loc.parent} onchange={saveSoon} title="Group under an area">
-              <option value="">— top level —</option>
-              {#each (st.locations || []).filter((o) => o.id !== loc.id) as o (o.id)}<option value={o.id}>in {o.name || o.id}</option>{/each}
-            </select>
-            <label class="startsel"><input type="radio" name="estart" checked={st.start === loc.id}
-              onchange={() => { stories.current.start = loc.id; saveSoon(); }} /> start</label>
-            <button class="cast-rm" onclick={() => removeLocation(i)} title="Delete">×</button>
-          </div>
-          <input class="ip fld" bind:value={loc.description} oninput={saveSoon} placeholder="description (objective, no people)" />
-          <div class="bgrow">
-            <input class="ip fld" bind:value={loc.background_prompt} oninput={saveSoon} placeholder="background prompt — pure environment, Danbooru tags" />
-            <button class="ghost xs" onclick={() => tagifyBg(loc)} disabled={tagging[loc.id]} title="convert prose → tags">{tagging[loc.id] ? '…' : '⇥ tagify'}</button>
-          </div>
-        </div>
-      {/each}
-      <button class="add-loc" onclick={addLocation}>+ Add a location</button>
-    </div>
-  </details>
-
-  <!-- Places & scenes — story-authored containers + character-anchored spots -->
-  <details class="dp-details" open>
-    <summary class="dp-summary">🗺 Places & scenes <span class="dp-count">{(st.places || []).length || ''}</span></summary>
-    <div class="dp-body">
-      <p class="dp-hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
-      <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
-    </div>
-  </details>
+  </Section>
 
   {:else if tab === 'plot'}
+  <!-- The ARC — the planned progression play steers through (view + plan) -->
+  <ArcPanel storyKey={st.key} />
+
   <!-- Plot — novels show the linear chapter manuscript; VNs the arc/timeline outline. -->
   {#if st.type === 'novel'}
     <NovelChapters storyKey={st.key} chapters={st.chapters || []} onChange={() => loadStory(st.key)} />
@@ -622,7 +534,7 @@
                 {/if}
               </div>
             {/each}
-            <button class="expand-btn regen" onclick={() => handleGenerateTimelines(arc)}
+            <button class="ghost sm" onclick={() => handleGenerateTimelines(arc)}
               disabled={!!generatingTimelineArc} title="Re-derive timelines from persona">
               ↻ Regenerate timelines
             </button>
@@ -641,12 +553,12 @@
             </div>
           {:else}
             <div class="arc-actions">
-              <button class="expand-btn primary"
+              <button class="primary sm"
                 onclick={() => handleGenerateTimelines(arc)}
                 disabled={!!generatingTimelineArc || !!expandingArc}>
                 ⑂ Generate timelines
               </button>
-              <button class="expand-btn"
+              <button class="soft sm"
                 onclick={() => handleExpand(arc)}
                 disabled={!!expandingArc || !!generatingTimelineArc}>
                 ⊕ Expand flat
@@ -675,19 +587,44 @@
     <div class="empty-plot">No plot yet — ask the Author to draft arcs, or generate a storyboard.</div>
   {/if}
 
-  {:else if tab === 'web'}
-    <!-- Web = the two graph lenses: how the cast relate, and how places connect -->
-    <div class="view-toggle webtoggle">
-      <button class="vt-btn" class:active={webView === 'relationships'} onclick={() => (webView = 'relationships')}>Relationships</button>
-      <button class="vt-btn" class:active={webView === 'map'} onclick={() => (webView = 'map')}>Map</button>
-    </div>
-    {#if webView === 'relationships'}
-      <StoryCanvas layer="relationships" story={st} storyKey={st.key} cast={castOptions}
-                   focus={selectedCharKey || primaryCharKey} onSelectChar={openCharModal} />
-    {:else}
-      <StoryCanvas layer="map" story={st} storyKey={st.key} cast={castOptions}
-                   onSelectNode={selectGraphNode} />
-    {/if}
+  {:else if tab === 'relationships'}
+    <!-- How the cast relate — click a face to open the character card -->
+    <StoryCanvas layer="relationships" story={st} storyKey={st.key} cast={castOptions}
+                 focus={selectedCharKey || primaryCharKey} onSelectChar={openCharModal} />
+
+  {:else if tab === 'map'}
+    <!-- How places connect — the canvas up top, its data (editors) below -->
+    <StoryCanvas layer="map" story={st} storyKey={st.key} cast={castOptions}
+                 onSelectNode={selectGraphNode} />
+
+      <Section icon="📍" title="Locations" count={(st.locations || []).length || ''}>
+        <p class="hint">The world’s bare places (no people/events). Pick an <b>area</b> to nest a location inside a larger region — a light map, no coordinates.</p>
+        {#each st.locations || [] as loc, i (loc.id)}
+          <div class="loc-box" class:start={st.start === loc.id} class:child={loc.parent}>
+            <div class="loc-top">
+              <input class="ip fld title" bind:value={loc.name} oninput={saveSoon} placeholder="location name" />
+              <select class="area" bind:value={loc.parent} onchange={saveSoon} title="Group under an area">
+                <option value="">— top level —</option>
+                {#each (st.locations || []).filter((o) => o.id !== loc.id) as o (o.id)}<option value={o.id}>in {o.name || o.id}</option>{/each}
+              </select>
+              <label class="startsel"><input type="radio" name="estart" checked={st.start === loc.id}
+                onchange={() => { stories.current.start = loc.id; saveSoon(); }} /> start</label>
+              <button class="cast-rm" onclick={() => removeLocation(i)} title="Delete">×</button>
+            </div>
+            <input class="ip fld" bind:value={loc.description} oninput={saveSoon} placeholder="description (objective, no people)" />
+            <div class="bgrow">
+              <input class="ip fld" bind:value={loc.background_prompt} oninput={saveSoon} placeholder="background prompt — pure environment, Danbooru tags" />
+              <button class="ghost xs" onclick={() => tagifyBg(loc)} disabled={tagging[loc.id]} title="convert prose → tags">{tagging[loc.id] ? '…' : '⇥ tagify'}</button>
+            </div>
+          </div>
+        {/each}
+        <button class="add-loc" onclick={addLocation}>+ Add a location</button>
+      </Section>
+
+      <Section icon="🗺" title="Places & scenes" count={(st.places || []).length || ''}>
+        <p class="hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
+        <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
+      </Section>
   {/if}
 
 </div></div>
@@ -739,7 +676,6 @@
   .col  { display: flex; flex-direction: column; gap: 14px; }
 
   /* ── Actions ──────────────────────────────────────────────────────────────── */
-  .vacts { display: flex; gap: 8px; align-items: center; }
   .del:hover { color: var(--bad, #ff7a7a); border-color: var(--bad, #ff7a7a); }
   .arc-edit {
     width: 22px; height: 22px; flex: none; padding: 0; border-radius: 6px;
@@ -792,8 +728,7 @@
   .title-row .ip-title { flex: 1; }
   .type-badge { flex: none; font-size: 11.5px; color: var(--muted); padding: 3px 9px; border-radius: 999px;
     border: 0.5px solid var(--border); background: var(--elev); white-space: nowrap; }
-  .tabhint { font-size: 12.5px; color: var(--muted); line-height: 1.5; margin: 0 0 4px; }
-  .webtoggle { align-self: flex-start; margin-bottom: 12px; }
+  p.hint { margin: 0 0 4px; line-height: 1.5; }
   .cast-chip.lg { font-size: 12.5px; padding: 5px 12px; cursor: pointer; }
   .cast-chip.lg:hover { border-color: var(--accent); color: var(--text); }
   .empty-plot { padding: 28px 4px; color: var(--faint); font-size: 13px; }
@@ -838,32 +773,6 @@
     font-weight: 600;
   }
   .cast-chip { font-size: 10.5px; }
-
-  /* ── Default personas ─────────────────────────────────────────────────────── */
-  .dp-details { margin: 4px 0; }
-  .dp-summary {
-    cursor: pointer; user-select: none; list-style: none; display: inline-flex; align-items: center; gap: 7px;
-    font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); padding: 4px 0;
-  }
-  .dp-summary::-webkit-details-marker { display: none; }
-  .dp-summary:hover { color: var(--muted); }
-  .dp-count { font-size: 10px; color: var(--accent); }
-  .dp-body { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
-  .dp-hint { margin: 0; font-size: 12px; color: var(--muted); line-height: 1.5; max-width: 560px; }
-  .dp-chips { display: flex; flex-wrap: wrap; gap: 7px; }
-  .dp-chip {
-    display: inline-flex; align-items: center; gap: 7px; padding: 4px 9px 4px 5px; border-radius: 999px;
-    background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer;
-    font-size: 12px;
-  }
-  .dp-chip:hover { color: var(--text); border-color: var(--border); }
-  .dp-chip.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--elev)); }
-  .dp-chip img { width: 20px; height: 20px; border-radius: 50%; object-fit: cover; flex: none; }
-  .dp-ph { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; background: var(--elev-2); flex: none; }
-  .dp-mark { font-size: 11px; color: var(--faint); font-weight: 700; }
-  .dp-chip.on .dp-mark { color: var(--accent); }
-  .dp-empty { font-size: 12px; color: var(--faint); margin: 0; }
-  .dp-empty a { color: var(--accent); }
 
   /* ── Voice agent toast ────────────────────────────────────────────────────── */
   .agent-toast {
@@ -946,24 +855,6 @@
 
   /* Action row for two-button state */
   .arc-actions { display: flex; gap: 8px; flex-wrap: wrap; }
-
-  /* Expand / generate buttons */
-  .expand-btn {
-    align-self: flex-start;
-    font-size: 12.5px; font-weight: 600;
-    padding: 7px 14px; border-radius: 8px;
-    background: var(--elev); border: 1px solid var(--border);
-    color: var(--text); cursor: pointer;
-  }
-  .expand-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
-  .expand-btn:disabled { opacity: .45; cursor: not-allowed; }
-  .expand-btn.primary {
-    background: rgba(109,140,255,.12); border-color: rgba(109,140,255,.35);
-    color: var(--accent);
-  }
-  .expand-btn.primary:hover:not(:disabled) { background: rgba(109,140,255,.22); }
-  .expand-btn.regen { font-size: 11.5px; opacity: .7; }
-  .expand-btn.regen:hover:not(:disabled) { opacity: 1; }
 
   /* Timeline rows in list mode */
   .timeline-section { display: flex; flex-direction: column; gap: 8px; }
@@ -1053,25 +944,6 @@
   }
   .cast-pick-item:hover { background: var(--elev); }
   .cast-pick-empty { font-size: 11.5px; color: var(--faint); padding: 6px 10px; }
-
-  /* ── View toggle ────────────────────────────────────────────────────────── */
-  .view-toggle {
-    display: flex;
-    border: 1px solid var(--border);
-    border-radius: 7px;
-    overflow: hidden;
-  }
-  .vt-btn {
-    padding: 3px 8px;
-    font-size: 13px;
-    background: none;
-    border: none;
-    color: var(--faint);
-    cursor: pointer;
-    line-height: 1;
-  }
-  .vt-btn:hover { color: var(--text); background: var(--elev); }
-  .vt-btn.active { color: var(--accent); background: rgba(109,140,255,.12); }
 
   /* ── Spinner ──────────────────────────────────────────────────────────────── */
   .spin {

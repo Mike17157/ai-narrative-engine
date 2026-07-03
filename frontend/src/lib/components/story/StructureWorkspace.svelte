@@ -13,6 +13,7 @@
   import AgentChat from '$lib/components/story/AgentChat.svelte';
   import Icon from '$lib/components/shared/Icon.svelte';
   import StoryTabs from '$lib/components/story/StoryTabs.svelte';
+  import Combobox from '$lib/components/shared/Combobox.svelte';
 
   let key = $derived($page.params.key);          // undefined on /stories/genesis (a new story)
   let st = $derived(stories.current);
@@ -54,15 +55,16 @@
   // fraction of the cost (vs gpt-5-mini/deepseek which can't reach the bar even with looping). GPT-5 for
   // max richness; Sonnet strong too. See the worldgen writer comparison.
   let genModel = $state('z-ai/glm-5.2');
-  const GEN_MODELS = [
-    { group: 'Z.ai', items: [['z-ai/glm-5.2', 'GLM 5.2'], ['z-ai/glm-5.1', 'GLM 5.1'], ['z-ai/glm-4.7-flash', 'GLM 4.7 Flash']] },
-    { group: 'OpenAI', items: [['openai/gpt-5', 'GPT-5'], ['openai/gpt-5-mini', 'GPT-5 mini'],
-        ['openai/gpt-4.1-mini', 'GPT-4.1 mini'], ['openai/gpt-5-nano', 'GPT-5 nano']] },
-    { group: 'Anthropic', items: [['anthropic/claude-sonnet-4.5', 'Claude Sonnet 4.5'],
-        ['anthropic/claude-haiku-4.5', 'Claude Haiku 4.5']] },
-    { group: 'DeepSeek', items: [['deepseek/deepseek-v3.2', 'DeepSeek 3.2'],
-        ['deepseek/deepseek-v4-pro', 'DeepSeek V4 Pro']] },
-  ];
+  // Model picker = the searchable Combobox (the app convention), grouped by provider.
+  const GEN_MODEL_ITEMS = [
+    ['Z.ai', [['z-ai/glm-5.2', 'GLM 5.2'], ['z-ai/glm-5.1', 'GLM 5.1'], ['z-ai/glm-4.7-flash', 'GLM 4.7 Flash']]],
+    ['OpenAI', [['openai/gpt-5', 'GPT-5'], ['openai/gpt-5-mini', 'GPT-5 mini'],
+        ['openai/gpt-4.1-mini', 'GPT-4.1 mini'], ['openai/gpt-5-nano', 'GPT-5 nano']]],
+    ['Anthropic', [['anthropic/claude-sonnet-4.5', 'Claude Sonnet 4.5'],
+        ['anthropic/claude-haiku-4.5', 'Claude Haiku 4.5']]],
+    ['DeepSeek', [['deepseek/deepseek-v3.2', 'DeepSeek 3.2'],
+        ['deepseek/deepseek-v4-pro', 'DeepSeek V4 Pro']]],
+  ].flatMap(([group, items]) => items.map(([value, label]) => ({ value, label, group })));
   let canGen = $derived(!!(seed.trim() || world.setting.trim() || world.situation.trim()));
   async function suggestWorld() {
     const s = seed.trim();
@@ -488,13 +490,7 @@
     <h2 class="title">New story</h2>
     <label class="modelpick" title="Generation model for this flow">
       <span>Model</span>
-      <select bind:value={genModel}>
-        {#each GEN_MODELS as g (g.group)}
-          <optgroup label={g.group}>
-            {#each g.items as [val, lbl] (val)}<option value={val}>{lbl}</option>{/each}
-          </optgroup>
-        {/each}
-      </select>
+      <Combobox items={GEN_MODEL_ITEMS} bind:value={genModel} placeholder="model…" />
     </label>
   </div>
 
@@ -698,7 +694,7 @@
         <datalist id="draft-groups">{#each groups as g (g)}<option value={g}></option>{/each}</datalist>
 
     {:else if gTab === 'web'}
-      <p class="tabhint">Each character’s bond to the <b>lead</b> is shaped in their card on the <b>Cast</b> tab — pick a potential per person. <b>Re-weave</b> lets the model re-derive the whole web from the current cast in one pass.</p>
+      <p class="hint tabhint">Each character’s bond to the <b>lead</b> is shaped in their card on the <b>Cast</b> tab — pick a potential per person. <b>Re-weave</b> lets the model re-derive the whole web from the current cast in one pass.</p>
       <div class="castlist weblist">
         {#each activeHarnesses.filter((h) => h.id !== leadId) as h (h.id)}
           {@const rel = relWith(h.id)}
@@ -715,7 +711,7 @@
       </div>
 
     {:else if gTab === 'plot'}
-      <p class="tabhint">Derive story candidates from the cast and their bonds — each is a dramatic question with a protagonist and stakes. Build the one that pulls hardest.</p>
+      <p class="hint tabhint">Derive story candidates from the cast and their bonds — each is a dramatic question with a protagonist and stakes. Build the one that pulls hardest.</p>
       <div class="webacts">
         <button class="ib" onclick={() => derive()} disabled={!!busy}>{busy === 'derive' ? 'Deriving…' : (candidates.length ? 'Re-derive stories' : 'Derive stories')}<Icon name="arrowRight" /></button>
       </div>
@@ -767,7 +763,7 @@
   .page.withchat { padding-left: 356px; }
   .page.withchat .col.wide { max-width: 720px; margin: 0 auto; }
   /* a short explainer line at the top of a tab's content */
-  .tabhint { font-size: 12.5px; color: var(--muted); line-height: 1.55; margin: 0 0 12px; max-width: 620px; }
+  .tabhint { line-height: 1.55; margin: 0 0 12px; max-width: 620px; }   /* size/colour from the global .hint */
   .weblist { max-width: 480px; margin-bottom: 12px; }
   .world-sg.wide { align-self: stretch; justify-content: center; margin-top: 10px; }
 
@@ -839,10 +835,8 @@
   /* the agent just touched this field — a brief accent ring so you see what it's working on */
   .wf.flash { border-radius: 9px; animation: wfflash 2.6s ease-out; }
   @keyframes wfflash { 0%,15% { box-shadow: 0 0 0 2px var(--accent); } 100% { box-shadow: 0 0 0 2px transparent; } }
-  .modelpick { display: inline-flex; align-items: center; gap: 6px; }
+  .modelpick { display: inline-flex; align-items: center; gap: 6px; min-width: 200px; }
   .modelpick span { font-size: 10px; text-transform: uppercase; letter-spacing: .3px; font-weight: 600; color: var(--faint); }
-  .modelpick select { padding: 5px 8px; font-size: 12px; border-radius: 8px; background: var(--elev);
-    border: 1px solid var(--border); color: var(--text); cursor: pointer; }
   .genrow { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
   .cnt { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
   .cnt input { width: 52px; padding: 5px 7px; font: inherit; font-size: 13px; text-align: center;

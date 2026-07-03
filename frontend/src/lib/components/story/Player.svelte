@@ -4,6 +4,7 @@
   import { app, setActivePlayerChar } from '$lib/app.svelte.js';
   import { openConfigModal } from '$lib/configModal.svelte.js';
   import { formatChat } from '$lib/chat-format.js';
+  import Manuscript from './Manuscript.svelte';
 
   let { storyKey } = $props();
   const exitPlay = () => goto(`/stories/${storyKey}/structure`);
@@ -28,6 +29,7 @@
   let stateRev = $state(0);
   let showState = $state(false);
   let showBeat = $state(false);      // 🧠 Logic panel — the consequence reasoning behind the last turn
+  let showMs = $state(false);        // 📖 Manuscript — read/edit the playthrough as literature
   let lastBeat = $state('');
   // The narrative as PAGES you step through (VN-style next/back): the prologue's sections first,
   // then each play turn's narration. `cursor` is where you're reading.
@@ -143,7 +145,7 @@
 
   async function loadPrologue() {
     prologueBusy = true;
-    const r = await post(`/stories/${storyKey}/prologue`, { sid: playSid, model: 'z-ai/glm-5.2' });
+    const r = await post(`/stories/${storyKey}/prologue`, { sid: playSid });   // model = the narrator role
     prologueBusy = false;
     const secs = r.ok ? (r.data?.sections || []) : [];
     if (secs.length) {
@@ -276,6 +278,8 @@
       <button class="ghost sm" class:on={showBeat} onclick={() => (showBeat = !showBeat)}
         title="What the story reasoned would happen this turn (before it was written)">⚙︎ Logic</button>
     {/if}
+    <button class="ghost sm" onclick={() => (showMs = true)}
+      title="Read and edit this playthrough as literature — scenes, beats, paragraphs">📖 Manuscript</button>
     <button class="gear" onclick={() => openConfig('models')} title="Models, configs & connections">⚙</button>
     <span class="loc">{scene.location ? (locs[scene.location]?.name || scene.location) : ''}</span>
   </div>
@@ -357,6 +361,9 @@
         <div class="sphead"><b>⚙︎ Logic — what the story worked out this turn</b><button class="x" onclick={() => (showBeat = false)}>✕</button></div>
         <div class="beattext">{lastBeat}</div>
       </div>
+    {/if}
+    {#if showMs}
+      <Manuscript {storyKey} sid={playSid} onclose={() => (showMs = false)} />
     {/if}
     <div class="cast">
       {#each pgPresent as k (k)}
