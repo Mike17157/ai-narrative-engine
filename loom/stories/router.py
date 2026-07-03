@@ -3100,15 +3100,78 @@ def register(app, ctx):
         # context comfortably holds the state block + narration).
         scribe_prov = (ctx.text_provider_for(_roles.get("scribe"), {"reasoning_effort": "none"})
                        if _roles.get("scribe") else None) or provider
+        # The director/consequence step REASONS out what happens — thinking ON (its whole value is
+        # causal logic). Defaults to the writer if the `director` role is unset.
+        director_prov = (ctx.text_provider_for(_roles.get("director"), {"reasoning_effort": "medium"})
+                         if _roles.get("director") else None) or provider
 
         pstate = PlayState(body=body, world_state=world_state)
         pdeps = PlayDeps(ctx=ctx, st=st, key=key, sid=sid, sess=_sess,
-                         provider=provider, scribe_provider=scribe_prov, fallback=fallback,
+                         provider=provider, scribe_provider=scribe_prov,
+                         consequence_provider=director_prov, fallback=fallback,
                          story_scope=story_scope, thread_scope=thread_scope)
         _aio.run(run_play_turn(pstate, pdeps))
         if pstate.error:
             return JSONResponse({"error": pstate.error}, status_code=500)
         return pstate.result
+
+    @app.post("/api/stories/{key}/prologue")
+    def story_prologue(key: str, body: dict):
+        """Generate (and cache) the novel's PROLOGUE — the protagonist's ordinary life, slow, in
+        close third, establishing the world/people/pressure before the strange thing intrudes. So
+        a reader has real context before play begins. Body: { sid?, model?, regenerate? } →
+        { sections:[{title,text}], cached }. Cached on the play session (slow: ~80s to write)."""
+        from .worldgen import generate_prologue
+        from ..server.services.story_sessions import load_session, save_session
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        sess = load_session(ctx.root, sid) or {}
+        if sess.get("prologue", {}).get("sections") and not body.get("regenerate"):
+            return {"sections": sess["prologue"]["sections"], "cached": True}
+
+        # The prologue is plain prose — non-thinking writer (thinking would be ~8x slower for the
+        # four sections). Use the passed play model, else the premise-stage provider.
+        if (body.get("model") or "").strip():
+            provider = ctx.text_provider_for(body["model"], {"reasoning_effort": "none"})
+        else:
+            provider, _ = ctx.builder_ctx(body, "premise")
+        if provider is None:
+            return JSONResponse({"error": "no provider for the prologue model"}, status_code=400)
+
+        def _nm(k):
+            c = ctx.base_settings.characters.get(k)
+            return (c.name if c else k) or k
+
+        def _life(k):
+            c = ctx.base_settings.characters.get(k)
+            return ((c.system or "").splitlines()[0] if c else "")[:180]
+
+        prim = next((m.character for m in st.cast if m.primary), None) \
+            or (st.cast[0].character if st.cast else None)
+        loc = st.locations[0] if st.locations else None
+        sheet = {
+            "protagonist": {"name": _nm(prim) if prim else "the protagonist",
+                            "life": _life(prim) if prim else "", "want": st.premise or ""},
+            "place": {"name": (loc.name if loc else st.name), "era": st.tone or "",
+                      "description": (loc.description if loc else "")},
+            "pressure": st.premise or "",
+            "people": [{"name": _nm(m.character), "life": _life(m.character), "want": ""}
+                       for m in st.cast if m.character != prim][:2],
+            "facts": [], "strange": (st.fields or {}).get("strange", "") or "",
+        }
+        try:
+            pro = generate_prologue(provider, sheet)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"prologue failed: {exc}"}, status_code=500)
+        if not pro.get("sections"):
+            return JSONResponse({"error": "the model returned no prologue — try another model."},
+                                status_code=502)
+        save_session(ctx.root, sid, {**sess, "prologue": pro})
+        return {"sections": pro["sections"], "cached": False}
 
     @app.post("/api/stories/{key}/dream")
     def story_dream(key: str, body: dict):

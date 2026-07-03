@@ -393,6 +393,162 @@ def seed_story(provider, seed: str = "", root=None) -> dict:
     return d
 
 
+# ── CHARACTER BIRTH — transpose a real character (template) into a named story role. The model
+# is bad at inventing a person from a rule, good at moving a real person into a new situation:
+# the substance is borrowed, the model only does the analogical transfer. Output is a PROSE card
+# the narrator reads directly; prominence sets the length (a walk-on stays a walk-on). ──
+
+PROMINENCE_WORDS = {"background": 35, "supporting": 90, "major": 160, "protagonist": 200}
+
+BIRTH_SYS = (
+    "You write ONE character as a short PROSE study a novelist would keep — flowing prose, no "
+    "field labels, no headings. Cover how they talk and carry themselves, what they want, and "
+    "what they would never do, all through concrete particulars (objects, habits, a phrase or "
+    "two) native to the story's setting. Plain, grounded prose. About {n} words — sized to how "
+    "much the story leans on them; a minor character stays a sketch.\n"
+    "When given a TEMPLATE (a real character as a MOLD), transpose their SHAPE — their angle on "
+    "the world, how they deal with people — onto this new individual; give them their own name, "
+    "setting, and details, and NEVER reuse the template's name or specifics. Transpose, don't copy."
+)
+
+
+def _template_source(root, query: str, rank: int = 0) -> str:
+    """The rank-th most similar real character from `_char_sources` (raw mirrored substance)."""
+    try:
+        from ..server.services import lorebook_store as _LS
+        hits = _LS.retrieve(root, query or "person", ["_char_sources"], top_k=max(3, rank + 1))
+        return hits[rank].content if rank < len(hits) else (hits[-1].content if hits else "")
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _lead_name(card: str) -> str:
+    """The leading proper-noun run of a card (the model is told to open with the name)."""
+    m = re.match(r"([A-Z][\w'’]+(?:\s+[A-Z][\w'’]+){0,2})\b", (card or "").strip())
+    return m.group(1) if m else ""
+
+
+def birth_character(provider, *, role: str, story: str, prominence: str = "supporting",
+                    root=None, name: str = "", template=None, rank: int = 0, known: str = "") -> dict:
+    """Create ONE character. `template=None` → retrieve the best real match from `_char_sources`;
+    `template=""` → no template (flesh the given facts, e.g. a protagonist the seed already
+    defines); a string → use it verbatim. `known` = a brief of the cast already made, so this
+    character coheres with them (shared household, no contradictions). Returns
+    {name, prominence, role, card} ({} on failure)."""
+    if provider is None:
+        return {}
+    n = PROMINENCE_WORDS.get(prominence, 90)
+    tmpl = template if template is not None else _template_source(root, f"{role} {story}", rank)
+    parts = [f"STORY:\n{story}", f"ROLE: {role}", f"IMPORTANCE: {prominence}"]
+    if known:
+        parts.append("PEOPLE ALREADY IN THIS STORY (stay consistent with them — shared household, "
+                     f"ties, and facts; contradict nothing, invent no new named people):\n{known}")
+    if name:
+        parts.append(f"The character's name is {name} (keep it).")
+    else:
+        parts.append("Begin the study with the character's name.")
+    if tmpl:
+        parts.append(f"TEMPLATE (the mold — a real character; transpose their shape, not their "
+                     f"details):\n{tmpl[:2000]}")
+    parts.append("Write the character.")
+    res = provider.generate_text(system=BIRTH_SYS.replace("{n}", str(n)), prompt="\n\n".join(parts))
+    card = (getattr(res, "text", "") or "").strip()
+    if not card:
+        return {}
+    return {"name": name or _lead_name(card), "prominence": prominence, "role": role, "card": card}
+
+
+def populate_cast(provider, sheet: dict, root=None) -> dict:
+    """Give a seed sheet real embodiment cards: the protagonist is fleshed from their own facts
+    (no template — the seed authored them); each supporting person is TRANSPOSED from a distinct
+    real template. Births are SEQUENTIAL and context-aware — each character sees the cast already
+    made, so the household coheres (no son who exists in one card and not another). Attaches
+    `sheet['cast']` = [protagonist_card, *people_cards]."""
+    if provider is None or not sheet:
+        return sheet
+    p = sheet.get("protagonist") or {}
+    story = sheet.get("pressure", "") + " " + (sheet.get("place") or {}).get("name", "")
+
+    def _brief(cs: list[dict]) -> str:
+        return "\n".join(f"- {c['name']}: {c['card'].split('.')[0]}." for c in cs)
+
+    cast = [birth_character(provider, name=p.get("name", ""),
+                            role=f"{p.get('life', '')} Wants: {p.get('want', '')}",
+                            story=story, prominence="protagonist", template="")]
+    for i, q in enumerate([q for q in (sheet.get("people") or []) if q.get("name")]):
+        c = birth_character(provider, name=q.get("name", ""),
+                            role=f"{q.get('life', '')} Wants: {q.get('want', '')}",
+                            story=story, prominence="supporting", root=root, rank=i,
+                            known=_brief([c for c in cast if c]))
+        if c:
+            cast.append(c)
+    sheet["cast"] = [c for c in cast if c]
+    return sheet
+
+
+# ── PROLOGUE — the opening of the NOVEL: the protagonist living their ordinary life, slow, in
+# close third, so the reader has real context before anything happens. The world/people/pressure
+# are established through lived detail; the strange thing stays at the edge until the last beat
+# (the inciting intrusion). A SEQUENCE of short sections, each aware of the ones before it. ──
+
+PROLOGUE_BEATS = [
+    ("morning", "Open on {name} in an ordinary moment of their day — waking, working, the plain "
+                "shape of their life. Establish their world and what they want through what they "
+                "physically DO, not through statement. The strange thing does NOT appear yet. "
+                "Ground us fully in this real, particular life."),
+    ("the people", "{name}'s day continues and {person} enters it. Show the relationship and more "
+                   "of this world through the ordinary encounter — how they speak, what passes "
+                   "between them. Still no strangeness."),
+    ("the weight", "The thing pressing on {name}'s life surfaces, concrete and mundane: {pressure}. "
+                   "Keep it ordinary — money, time, an obligation. Still their world, their eyes."),
+    ("the crack", "For the first time, something at the edge of the ordinary intrudes: {strange}. "
+                  "This is the first wrongness in an ordinary life. End here — the story is about "
+                  "to begin."),
+]
+
+PROLOGUE_SYS = (
+    "You write the OPENING of a novel: plain, grounded prose in CLOSE THIRD PERSON, past tense, "
+    "following ONE character so we live inside their day. Slow and lived — establish before you "
+    "disrupt. Concrete particulars over description; no purple prose, no metaphysical narration. "
+    "Continue seamlessly from the story so far in the same voice; do not recap or repeat. Write "
+    "~200-300 words for this section only — do not race ahead of it."
+)
+
+
+def generate_prologue(provider, sheet: dict) -> dict:
+    """Write the novel's opening as a sequence of short sections in the protagonist's POV. Returns
+    {sections: [{title, text}]} ({} on failure). Each section is generated in order, seeing the
+    prose so far, so the prologue reads as one continuous opening."""
+    if provider is None or not sheet:
+        return {}
+    p = sheet.get("protagonist") or {}
+    name = (p.get("name") or "the protagonist").strip()
+    people = [q.get("name") for q in (sheet.get("people") or []) if q.get("name")]
+    strange = (sheet.get("strange") or "").strip()
+    facts = seed_brief(sheet)
+    sections, prev = [], ""
+    for title, instr in PROLOGUE_BEATS:
+        if title == "the crack" and not strange:
+            continue                              # no strange thing → the prologue is pure life
+        directive = instr.format(name=name, person=(people[0] if people else "someone they know"),
+                                 pressure=sheet.get("pressure", ""), strange=strange or "a small wrongness")
+        prompt = (f"FACTS (the world; draw on them, don't list them):\n{facts}\n\n"
+                  + (f"THE OPENING SO FAR (continue it seamlessly — same voice, no repeating):\n"
+                     f"{prev[-1400:]}\n\n" if prev else "")
+                  + f"WRITE THE NEXT SECTION — {directive}")
+        res = provider.generate_text(system=PROLOGUE_SYS, prompt=prompt)
+        text = (getattr(res, "text", "") or "").strip()
+        if text:
+            sections.append({"title": title, "text": text})
+            prev = (prev + "\n\n" + text).strip()
+    return {"sections": sections}
+
+
+def prologue_text(prologue: dict) -> str:
+    """The prologue joined into continuous prose (the novel opening the reader sees)."""
+    return "\n\n".join(s["text"] for s in (prologue or {}).get("sections", []) if s.get("text"))
+
+
 def seed_brief(s: dict) -> str:
     """The fact sheet rendered as the writer's prose brief (labeled facts, zero rules)."""
     if not s:

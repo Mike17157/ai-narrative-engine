@@ -27,6 +27,20 @@
   let stateLevels = $state(null);   // {level: {size}} across the unified State doc
   let stateRev = $state(0);
   let showState = $state(false);
+  let showBeat = $state(false);      // 🧠 Logic panel — the consequence reasoning behind the last turn
+  let lastBeat = $state('');
+  // The narrative as PAGES you step through (VN-style next/back): the prologue's sections first,
+  // then each play turn's narration. `cursor` is where you're reading.
+  let pages = $state([]);        // { kind:'prologue'|'turn', title?, text, present?, emotions? }
+  let cursor = $state(0);
+  let prologueBusy = $state(false);
+  let primaryKey = $state('');
+  let curPage = $derived(pages[cursor] || null);
+  let atEnd = $derived(cursor >= pages.length - 1);
+  let pgPresent = $derived(curPage?.present || (curPage?.kind === 'prologue' && primaryKey ? [primaryKey] : []));
+  let pgEmotions = $derived(curPage?.emotions || {});
+  function nextPage() { if (cursor < pages.length - 1) cursor++; }
+  function backPage() { if (cursor > 0) cursor--; }
   let lastGuard = $state(null);
   // The world-state engine owns the `world` level; the panel also surfaces the sibling
   // levels (graph / sim / facts) so the whole State doc is visible at a glance.
@@ -115,6 +129,7 @@
       if (c.reference) refs[c.key] = c.reference;
       if (c.fields?.height_cm) heights[c.key] = c.fields.height_cm;
     }
+    primaryKey = story.cast.find((m) => m.primary)?.character || story.cast[0]?.character || '';
     for (const m of story.cast) {
       try {
         const p = await get(`/characters/${m.character}/portraits`);
@@ -122,9 +137,23 @@
         if (o?.expressions) sprites[m.character] = o.expressions;
       } catch { /* no sprites yet */ }
     }
-    await turn({ history: [], location: scene.location });   // opening
+    await loadPrologue();   // the novel opens on a prologue you read through; play continues from it
   }
   loadAssets();
+
+  async function loadPrologue() {
+    prologueBusy = true;
+    const r = await post(`/stories/${storyKey}/prologue`, { sid: playSid, model: 'z-ai/glm-5.2' });
+    prologueBusy = false;
+    const secs = r.ok ? (r.data?.sections || []) : [];
+    if (secs.length) {
+      pages = secs.map((s) => ({ kind: 'prologue', title: s.title, text: s.text }));
+      history = secs.map((s) => ({ role: 'assistant', text: s.text }));  // play continues from it
+      cursor = 0;
+    } else {
+      await turn({ history: [], location: scene.location });   // no prologue → live opening turn
+    }
+  }
 
   async function turn(payload) {
     busy = true; err = null;
@@ -144,6 +173,9 @@
     const d = r.data;
     history = [...history, { role: 'assistant', text: d.reply }];
     scene = { location: d.location, present: d.present || [], emotions: d.emotions || {}, movement: !!d.movement };
+    pages = [...pages, { kind: 'turn', text: d.reply, present: d.present || [], emotions: d.emotions || {} }];
+    cursor = pages.length - 1;       // a new turn jumps you to the live edge
+    if (d.beat) lastBeat = d.beat;   // the consequence reasoning behind this turn (🧠 Logic panel)
     if (d.state?.state) worldState = d.state.state;
     if (typeof d.state?.revision === 'number') stateRev = d.state.revision;
     lastGuard = d.guard || null;
@@ -170,7 +202,7 @@
     history = [...history, { role: 'user', text: `(Go to ${where}.)` }];
     await turn({ history, location: scene.location, choice: s.id });
   }
-  const spriteOf = (k) => (sprites[k]?.[scene.emotions[k]] || refs[k] || null);
+  const spriteOf = (k) => (sprites[k]?.[pgEmotions[k]] || refs[k] || null);
   let bg = $derived.by(() => {
     const sb = activeScene?.background || activeScene?._place?.background;
     if (sb) return `${sb}?b=${bust}`;
@@ -240,6 +272,10 @@
       title="Attach lorebooks to this playthrough">📚 {lorebooks.length || ''}</button>
     <button class="ghost sm" class:on={showState} onclick={() => (showState = !showState)}
       title="World state — the evolving model of this playthrough">🧠 State{#if lastGuard?.used_fallback} <span class="fb" title="primary model refused; used fallback">⤵</span>{/if}</button>
+    {#if lastBeat}
+      <button class="ghost sm" class:on={showBeat} onclick={() => (showBeat = !showBeat)}
+        title="What the story reasoned would happen this turn (before it was written)">⚙︎ Logic</button>
+    {/if}
     <button class="gear" onclick={() => openConfig('models')} title="Models, configs & connections">⚙</button>
     <span class="loc">{scene.location ? (locs[scene.location]?.name || scene.location) : ''}</span>
   </div>
@@ -316,8 +352,14 @@
         {/if}
       </div>
     {/if}
+    {#if showBeat}
+      <div class="beatpanel">
+        <div class="sphead"><b>⚙︎ Logic — what the story worked out this turn</b><button class="x" onclick={() => (showBeat = false)}>✕</button></div>
+        <div class="beattext">{lastBeat}</div>
+      </div>
+    {/if}
     <div class="cast">
-      {#each scene.present as k (k)}
+      {#each pgPresent as k (k)}
         {#if spriteOf(k)}
           <div class="sprite" style="height:{spriteH(k)}%"><img src={spriteOf(k)} alt={names[k] || k} /></div>
         {/if}
@@ -326,9 +368,14 @@
 
     <div class="dialogue">
       {#if err}<div class="err">⚠ {err}</div>{/if}
-      <p class="narr">{#if busy && !lastReply}…{:else}{@html formatChat(lastReply)}{/if}</p>
+      {#if curPage?.kind === 'prologue'}<div class="ptag">Prologue · {curPage.title}</div>{/if}
+      <p class="narr">
+        {#if prologueBusy}<span class="loading">Writing the prologue…</span>
+        {:else if busy && atEnd}{@html formatChat(curPage?.text || '')}<span class="loading"> …</span>
+        {:else}{@html formatChat(curPage?.text || '')}{/if}
+      </p>
 
-      {#if scene.movement && moveOptions.length}
+      {#if scene.movement && moveOptions.length && atEnd}
         <div class="choices">
           <span class="clab">Where to?</span>
           {#each moveOptions as l (l.id)}
@@ -337,11 +384,27 @@
         </div>
       {/if}
 
-      <div class="inputrow">
-        <input class="say" placeholder="Say or do something…" bind:value={input}
-          onkeydown={(e) => e.key === 'Enter' && send()} disabled={busy} />
-        <button onclick={send} disabled={busy || !input.trim()}>{busy ? '…' : 'Send'}</button>
+      <!-- VN navigation: step through the narrative both ways -->
+      <div class="navrow">
+        <button class="nav" onclick={backPage} disabled={cursor <= 0} title="Back">‹ Back</button>
+        <span class="pageno">{pages.length ? cursor + 1 : 0} / {pages.length}</span>
+        {#if atEnd}
+          <span class="edge">— now —</span>
+        {:else}
+          <button class="nav" onclick={nextPage} title="Next">Next ›</button>
+        {/if}
       </div>
+
+      {#if atEnd}
+        <div class="inputrow">
+          <input class="say" placeholder={pages.length ? 'What do you do?' : 'Say or do something…'} bind:value={input}
+            onkeydown={(e) => e.key === 'Enter' && send()} disabled={busy || prologueBusy} />
+          <button onclick={send} disabled={busy || prologueBusy || !input.trim()}>{busy ? '…' : 'Send'}</button>
+        </div>
+      {:else}
+        <div class="readback" role="button" tabindex="0" onclick={() => (cursor = pages.length - 1)}
+          onkeydown={(e) => e.key === 'Enter' && (cursor = pages.length - 1)}>reading back — jump to now ⤓</div>
+      {/if}
     </div>
   </div>
 </div>
@@ -444,23 +507,43 @@
   .spline { color: #cdd6e6; padding: 2px 0; }
   .splog { color: var(--muted); font-size: 11px; line-height: 1.4; padding: 1px 0; }
 
+  /* NOVEL/VN hybrid: a PORTRAIT window — sprites stand tall up top, the prose is a short strip
+     at the foot (a novel wants little text on screen at once). Also the sprite/scene testbed. */
   .stage {
-    position: relative; aspect-ratio: 16 / 9; max-height: 70vh; border-radius: 14px; overflow: hidden;
+    position: relative; height: 86vh; aspect-ratio: 4 / 5; max-width: 100%; margin: 0 auto;
+    border-radius: 14px; overflow: hidden;
     background-size: cover; background-position: center; border: 1px solid var(--border);
     display: flex; flex-direction: column; justify-content: flex-end;
   }
   .stage.nobg { background: linear-gradient(160deg, #2a2f3e, #14171f); }
-  .cast { position: absolute; inset: 0 0 28% 0; display: flex; align-items: flex-end; justify-content: center; gap: 4%; pointer-events: none; }
+  /* sprites stand full-height; the opaque text box overlays their lower body (VN style) */
+  .cast { position: absolute; inset: 2% 0 0 0; display: flex; align-items: flex-end; justify-content: center; gap: 5%; pointer-events: none; }
   .sprite { height: 96%; }   /* fallback; per-character height set inline from height_cm */
   .sprite img { height: 100%; width: auto; object-fit: contain; filter: drop-shadow(0 6px 18px rgba(0,0,0,.5)); }
 
+  /* OPAQUE text box at the foot — sized so a normal turn fits without scrolling */
   .dialogue {
-    position: relative; z-index: 2; margin: 0 0 0 0; padding: 14px 16px;
-    background: linear-gradient(180deg, rgba(10,12,18,0), rgba(10,12,18,.78) 22%, rgba(10,12,18,.92));
+    position: relative; z-index: 2; padding: 15px 18px;
+    background: rgba(11,13,19,.96); border-top: 1px solid var(--border);
     display: flex; flex-direction: column; gap: 10px;
   }
-  .narr { margin: 0; font-size: 14.5px; line-height: 1.55; color: #f0f3f9; white-space: pre-wrap; min-height: 1.5em;
-          max-height: 30vh; overflow: auto; text-shadow: 0 1px 3px rgba(0,0,0,.6); }
+  .narr { margin: 0; font-size: 14.5px; line-height: 1.55; color: #f0f3f9; white-space: pre-wrap; min-height: 1.4em;
+          max-height: 40vh; overflow: auto; }
+  .ptag { font-size: 10.5px; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); }
+  .loading { color: var(--muted); font-style: italic; }
+  .navrow { display: flex; align-items: center; gap: 12px; }
+  .nav { font-size: 12.5px; padding: 5px 12px; border-radius: 999px; background: rgba(255,255,255,.06);
+         border: 1px solid var(--border); color: #e6e8ec; }
+  .nav:hover:not(:disabled) { background: rgba(255,255,255,.12); }
+  .nav:disabled { opacity: .35; }
+  .pageno { font-size: 11.5px; color: var(--muted); min-width: 48px; text-align: center; }
+  .edge { font-size: 11px; color: var(--accent); letter-spacing: 1px; }
+  .readback { font-size: 12px; color: var(--accent); cursor: pointer; padding: 4px 0; opacity: .85; }
+  .readback:hover { opacity: 1; }
+  /* 🧠 Logic — the consequence reasoning, an overlay so it doesn't push the window taller */
+  .beatpanel { position: absolute; inset: 8px 8px auto 8px; z-index: 5; max-height: 60%; overflow: auto;
+    background: rgba(12,14,20,.95); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 11px; }
+  .beattext { font-size: 12px; line-height: 1.5; color: #cdd4e2; white-space: pre-wrap; }
   .err { font-size: 12.5px; }
   .choices { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .clab { font-size: 12px; color: var(--muted); }

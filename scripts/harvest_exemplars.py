@@ -174,6 +174,49 @@ def distill(limit: int, model: str) -> int:
     return n
 
 
+# ── Mirror: raw sources → retrievable excerpts (MECHANICAL cleaning only — no model, no
+# judgment to lose; schema-on-read: structure is created at the point of use, by the
+# character-birth step, with full context). ──
+
+def _clean_wikitext(raw: str) -> str:
+    t = raw
+    t = re.sub(r"\{\{[^{}]*\}\}", "", t)                    # templates/infoboxes (2 passes for nesting)
+    t = re.sub(r"\{\{[^{}]*\}\}", "", t, flags=re.S)
+    t = re.sub(r"<ref[^>]*/>|<ref[^>]*>.*?</ref>", "", t, flags=re.S)
+    t = re.sub(r"<[^>]+>", "", t)                           # html tags
+    t = re.sub(r"\[\[(?:[^|\]]*\|)?([^\]]+)\]\]", r"\1", t)  # [[link|text]] → text
+    t = re.sub(r"\[https?://\S+ ([^\]]+)\]", r"\1", t)       # [url text] → text
+    t = re.sub(r"'{2,}", "", t)                              # bold/italic quotes
+    t = re.sub(r"==+ *([^=]+?) *==+", r"\n\1:\n", t)         # == Section == → Section:
+    return re.sub(r"\n{3,}", "\n\n", t).strip()
+
+
+def mirror(limit: int = 500) -> int:
+    """Mirror cleaned source excerpts into the `_char_sources` book so raw substance is
+    similarity-retrievable. Idempotent (entry id = source id)."""
+    from contextlib import closing
+
+    from loom.config.schema import LoreEntry
+    from loom.server.services import lorebook_store as LS
+    LS.upsert_book(ROOT, "_char_sources", name="Character sources (raw)", category="craft",
+                   rating="sfw", description="Mechanically cleaned raw source excerpts "
+                   "(wikis/AniList) — structured at point of use, not at ingest.")
+    with closing(SRC._db(ROOT)) as con:
+        rows = con.execute("SELECT id, series, title, url, raw, meta FROM sources "
+                           "WHERE kind='character' LIMIT ?", (limit,)).fetchall()
+    n = 0
+    for sid, series, title, url, raw, meta in rows:
+        txt = _clean_wikitext(raw) if "fandom" in (meta or "") else raw.strip()
+        if len(txt) < 200:                                   # stubs aren't worth an embedding
+            continue
+        eid = "src-" + re.sub(r"[^\w\-]+", "-", sid.split(":", 1)[1])[:52]
+        LS.upsert_entry(ROOT, "_char_sources", LoreEntry(
+            id=eid, title=f"{title} ({series})", keywords=[series],
+            content=txt[:2400], priority=1, source="auto"))
+        n += 1
+    return n
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--fandom", help="fandom subdomain, e.g. thewanderinginn")
@@ -181,9 +224,13 @@ def main() -> None:
     ap.add_argument("--limit", type=int, default=15)
     ap.add_argument("--anilist", type=int, help="harvest top-N AniList characters")
     ap.add_argument("--distill", type=int, help="distill N undistilled character sources")
+    ap.add_argument("--mirror", action="store_true",
+                    help="mirror cleaned raw sources into the _char_sources book (schema-on-read)")
     ap.add_argument("--model", default="deepseek/deepseek-v4-pro")
     ap.add_argument("--stats", action="store_true")
     a = ap.parse_args()
+    if a.mirror:
+        print(f"mirrored {mirror()} cleaned sources into _char_sources")
     if a.fandom:
         print(f"harvested {harvest_fandom(a.fandom, a.limit, a.category)} from {a.fandom}")
     if a.anilist:

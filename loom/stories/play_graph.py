@@ -42,6 +42,7 @@ class PlayDeps:
     sess: dict                  # loaded session (persisted back with the new world state)
     provider: Any               # the WRITER
     scribe_provider: Any        # the cheap structured reporter (defaults to writer)
+    consequence_provider: Any = None   # the reasoning "what happens" step (defaults to writer)
     fallback: Any = None        # refusal-guard fallback model
     story_scope: str = ""
     thread_scope: str = ""
@@ -55,6 +56,7 @@ class PlayState:
     body: dict = field(default_factory=dict)
     world_state: dict = field(default_factory=dict)
     tc: dict = field(default_factory=dict)          # compiled context (compile)
+    beat: str = ""                                  # what-happens beat (consequence)
     narration: str = ""                             # prose pass output
     prose_guard: dict = field(default_factory=dict)
     report: dict = field(default_factory=dict)      # scribe pass output
@@ -79,13 +81,42 @@ async def step_compile(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     return s.tc
 
 
+async def step_consequence(ctx: StepContext[PlayState, PlayDeps, None]) -> str:
+    """The LOGIC step (reasoning model): work out what the player's action ACTUALLY causes —
+    cause→effect, how each present character reacts, what changes, the new cost/choice. The
+    prose pass renders this; without it the narrator produces atmosphere, not events."""
+    from .guards import generate_guarded
+    s, d = ctx.state, ctx.deps
+    if s.error or d.cancel() or not s.tc.get("consequence_system"):
+        return ""
+    hist = s.body.get("history") or []
+    last_user = next((m.get("text", "") for m in reversed(hist) if m.get("role") == "user"), "")
+    recent = "\n".join((("Player" if m.get("role") == "user" else "Narrator")
+                        + f": {m.get('text', '')}") for m in hist[-4:])
+    prompt = (f"RECENT:\n{recent}\n\nTHE PLAYER JUST DID / SAID:\n{last_user}\n\n"
+              f"Work out what actually happens next, step by step.")
+    prov = d.consequence_provider or d.provider
+    g = await _thread(generate_guarded, prov, system=s.tc["consequence_system"], prompt=prompt,
+                      root=d.ctx.root, emits=None, fallback=d.fallback)
+    s.beat = (g.get("text") or "").strip()
+    d.on_event({"type": "node", "node": "consequence", "chars": len(s.beat)})
+    return s.beat
+
+
 async def step_prose(ctx: StepContext[PlayState, PlayDeps, None]) -> str:
-    """The WRITER: free-text narration under the craft register (no schema)."""
+    """The WRITER: free-text narration under the minimal register (no schema). When a
+    consequence beat exists, it renders THAT — the beat is the scene's truth (scaffold),
+    not a script: flowing narration, change no facts, add no new events."""
     from .guards import generate_guarded
     s, d = ctx.state, ctx.deps
     if s.error or d.cancel():
         return ""
-    g = await _thread(generate_guarded, d.provider, system=s.tc["system"], prompt=s.tc["prompt"],
+    prompt = s.tc["prompt"]
+    if s.beat:
+        prompt = (s.tc["prompt"] + "\n\nWHAT HAPPENS THIS TURN (the truth of the scene — render it "
+                  "as flowing narration; change no facts and add no new events; compress, reorder, "
+                  f"or leave things implied for flow):\n{s.beat}")
+    g = await _thread(generate_guarded, d.provider, system=s.tc["system"], prompt=prompt,
                       root=d.ctx.root, emits=None, fallback=d.fallback)
     s.narration = (g.get("text") or "").strip()
     s.prose_guard = {"tripped": g.get("tripped"), "used_fallback": g.get("used_fallback")}
@@ -106,8 +137,17 @@ async def step_scribe(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     schema = _copy.deepcopy(PLAY_SCHEMA)
     del schema["properties"]["reply"]              # the scribe reads prose, never writes it
     schema["properties"]["state_deltas"] = {"type": "array", "items": _SE.STATE_DELTA_ITEM}
+    # Every NAMED person the narration touched — present or merely mentioned — with where they are
+    # and a one-line. The StoryMaster turns these into the character network (records by location).
+    schema["properties"]["people"] = {"type": "array", "items": {
+        "type": "object", "additionalProperties": False, "required": ["name", "at", "note"],
+        "properties": {"name": {"type": "string"},
+                       "at": {"type": "string", "description": "where they are right now — a "
+                              "location name, 'here' if in the scene, or '' if unknown/away"},
+                       "note": {"type": "string", "description": "one plain line: who they are / "
+                                "their tie to the viewpoint"}}}}
     schema["required"] = [r for r in schema["required"] if r != "reply"] \
-        + ["state_deltas", "player_status"]
+        + ["state_deltas", "player_status", "people"]
     hist = s.body.get("history") or []
     last_user = next((m.get("text", "") for m in reversed(hist) if m.get("role") == "user"), "")
     prompt = (f"PLAYER'S LATEST ACTION: {last_user}\n\n"
@@ -211,6 +251,17 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
                     if m.character in appctx.base_settings.characters else m.character).lower():
                    m.character for m in st.cast}
     present_keys = [name_to_key.get((n or "").lower()) for n in data.get("present", [])]
+    loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
+
+    # THE STORYMASTER owns the character network: it turns the scribe's `people` report into
+    # records pinned to locations (mention → thin record; still-static), and fleshes anyone who
+    # steps on stage (encounter → full card, one per turn, gradual). Slice 1 of the coordinator.
+    from .storymaster import StoryMaster
+    loc_name = next((l.name for l in st.locations if l.id == loc), loc)
+    _sm = StoryMaster(appctx, st, world_state, provider=d.provider, location=loc_name)
+    born_now = _sm.ingest(people=data.get("people") or [], present=data.get("present") or [],
+                          narration=s.narration)
+
     emotions = {}
     for e in data.get("emotions", []):
         ck = name_to_key.get((e.get("character") or "").lower())
@@ -218,7 +269,6 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
             continue
         ekey = (e.get("emotion") or "neutral").strip().lower()
         emotions[ck] = ekey if ekey in EMOTION_KEYS else "neutral"
-    loc = data.get("location") if any(l.id == data.get("location") for l in st.locations) else cur
 
     # Evolve + persist the world state. `fact` deltas write back into the thread's lorebook
     # scope; `move` deltas pass the geography gate (on-screen = canon, off-screen rate-limited).
@@ -253,6 +303,8 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
 
     return {
         "reply": data.get("reply", ""), "location": loc,
+        "beat": s.beat,                 # the consequence reasoning (what-happens), for the UI
+        "born": born_now,               # characters created on the fly this turn (gradual)
         "present": [k for k in present_keys if k],
         "pov": (world_state.get("scene") or {}).get("pov", ""),
         "step": world_state.get("step"),
@@ -272,10 +324,11 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
 
 def _build_play_graph():
     gb = GraphBuilder(state_type=PlayState, deps_type=PlayDeps, output_type=dict)
-    comp, prose = gb.step(step_compile), gb.step(step_prose)
-    scribe, apply_ = gb.step(step_scribe), gb.step(step_apply)
+    comp, conseq = gb.step(step_compile), gb.step(step_consequence)
+    prose, scribe, apply_ = gb.step(step_prose), gb.step(step_scribe), gb.step(step_apply)
     gb.add_edge(gb.start_node, comp)
-    gb.add_edge(comp, prose)
+    gb.add_edge(comp, conseq)         # LOGIC before prose: work out what happens, then write it
+    gb.add_edge(conseq, prose)
     gb.add_edge(prose, scribe)
     gb.add_edge(scribe, apply_)
     gb.add_edge(apply_, gb.end_node)

@@ -71,18 +71,20 @@ SCENARIOS = {
 VERDICT_SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["voice", "legibility", "plainness", "withholding", "pulse",
-                 "pov_discipline", "continuity", "weakest"],
+                 "pov_discipline", "continuity", "causality", "weakest"],
     "properties": {
         "voice": {"type": "integer"}, "legibility": {"type": "integer"},
         "plainness": {"type": "integer"}, "withholding": {"type": "integer"},
         "pulse": {"type": "integer"},
         "pov_discipline": {"type": "integer"},
         "continuity": {"type": "integer"},
+        "causality": {"type": "integer"},
         "weakest": {"type": "string"},
     },
 }
 
-AXES = ["voice", "legibility", "plainness", "withholding", "pulse", "pov_discipline", "continuity"]
+AXES = ["voice", "legibility", "plainness", "withholding", "pulse", "pov_discipline",
+        "continuity", "causality"]
 
 CRITIC_SYS = (
     "You are an exacting fiction editor scoring ONE turn of interactive novel narration, 1-5 each:\n"
@@ -96,6 +98,11 @@ CRITIC_SYS = (
     "continuity — honors concrete details/promises established earlier in the transcript; "
     "small things persist (5 = a real callback or faithful carry-through; 3 = nothing "
     "contradicted but nothing carried; 1 = amnesia/contradiction).\n"
+    "causality — events follow cause→effect; the turn reasons about consequences (the action "
+    "produces concrete results, characters react for real reasons, something changes or a new "
+    "cost appears); NOT atmosphere or suspense standing in for events (5 = a real consequential "
+    "beat a skeptic buys; 3 = plausible but little actually happens; 1 = mood/drift, nothing "
+    "follows from anything).\n"
     "`weakest` = the single weakest line, quoted, with a 1-clause reason. JSON only."
 )
 

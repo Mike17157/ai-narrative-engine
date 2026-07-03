@@ -22,7 +22,9 @@ PLAY_CRAFT = (
     "Plain, grounded prose. One viewpoint: render only what the viewpoint character can "
     "perceive — no other minds, no 'meanwhile' elsewhere; to learn what's elsewhere, the "
     "viewpoint must go and find out. Established details stay true — when the player refers to "
-    "something they carry or did, use the established particular, never invent a replacement."
+    "something they carry or did, use the established particular, never invent a replacement. "
+    "Introduce people GRADUALLY — at most ONE new person actually appears in a scene at a time; "
+    "people merely spoken of or remembered stay offstage (name them, don't bring them on)."
 )
 
 
@@ -219,6 +221,19 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         cast += ("\n(elsewhere — bring on only when the scene genuinely calls them in):\n"
                  + "\n".join(_ab[:30]) + (f"\n(+{_more} more, elsewhere)" if _more > 0 else ""))
 
+    # PEOPLE, organized by LOCATION (the StoryMaster's world model): who's at the current place is
+    # surfaced up front (can't be ignored), everyone else is indexed under their location (a growing
+    # cast stays bounded to the current scene + an index). Fleshed people get their card voiced when
+    # they're on stage. See loom/stories/storymaster.py.
+    from .storymaster import people_by_location
+    _people = world_state.get("people") if isinstance(world_state.get("people"), dict) else {}
+    _cur_locname = next((l.name for l in st.locations if l.id == cur), cur)
+    _people_block = people_by_location(world_state, _cur_locname)
+    _born_here = [n for n, r in _people.items() if r.get("born") and r.get("card")
+                  and any(w in _hay for w in n.lower().split() if len(w) > 2)]
+    _born_block = ("PEOPLE MET IN PLAY (voice them from this — they ARE these people):\n"
+                   + "\n".join(f"- {_people[n]['card']}" for n in _born_here)) if _born_here else ""
+
     system = (
         f"You are the narrator of an interactive novel titled \"{st.name}\".\n"
         f"PREMISE: {st.premise}\nTONE: {st.tone}\n"
@@ -229,7 +244,8 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
            f"character at home is in their spot unless the scene says otherwise):\n{places}\n" if places else "")
         + "\n" + PLAY_CRAFT + "\n\n"
         "Narrate the next moment in-world, responding to the player: second person to the player, "
-        "plus the characters' action and dialogue. 2-5 short paragraphs. Respond with the NARRATION "
+        "plus the characters' action and dialogue. Keep it brief — 2-3 short paragraphs, a "
+        "screenful at most; advance ONE beat, don't run ahead. Respond with the NARRATION "
         "ONLY — no headers, no lists, no JSON, no out-of-story commentary."
     )
 
@@ -284,6 +300,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     if embodiment:
         system += ("\n\nEMBODY THE CAST — voice each character from THEIR OWN remembered moments "
                    "below; stay true to these, they ARE the person:\n" + embodiment)
+    if _people_block:
+        system += "\n\n" + _people_block
+    if _born_block:
+        system += "\n\n" + _born_block
 
     # Embodied player: fold the puppet's full backstory into the brief so the director treats the
     # player as a real person in this world while still letting the human steer every choice.
@@ -434,6 +454,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         f"player's name, {player_name}, for their own view).\n"
         "- movement: true ONLY when the moment invites the player to move elsewhere.\n"
         "- player_status: 'sleeping' if the player sleeps/rests, 'dead' if they die, else 'active'.\n"
+        "- people: EVERY named person the narration touched this turn — whether they were physically "
+        "present OR only mentioned/remembered. For each: their name, `at` (where they are now: a "
+        "location name, 'here' if in the scene, '' if away/unknown), and a one-line `note` (who they "
+        "are / their tie to the viewpoint). This is how the story remembers who exists and where.\n"
         "\nAlso report `state_deltas` — what changed THIS turn. Each delta is one op; fill only "
         "the fields that op needs (leave the rest empty). `name` is always a character's exact "
         "cast name. The ops:\n"
@@ -461,11 +485,42 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # Lane log — per-turn context sizes (chars). This is the harness's own gauge: with a bigger
     # world/cast, these must stay ~flat (stores grow; the window doesn't). Surfaced in the /play
     # response for the UI/bench to watch.
+    # CONSEQUENCE pass context — the story's LOGIC, not its prose. A reasoning model works out
+    # what the player's action ACTUALLY causes (cause→effect, how each present character reacts,
+    # what changes, the new cost/choice) before the prose pass renders it. Gets the FACTS (cast,
+    # scene, state, established, relationships, premise) — not the craft register or voice
+    # exemplars (those are for VOICING, not logic). This is what the narrator was missing.
+    if _member_names:
+        _pres_line = f"ON STAGE NOW: {_member_names}."
+    else:
+        _pres_line = ("SCENE OPENING — no one is established on stage yet. If the player's action "
+                      "finds, meets, enters on, or addresses a cast member, that character IS here "
+                      "— bring them in. Do NOT narrate an empty scene when the action seeks someone.")
+    consequence_system = (
+        "You are the LOGIC of this story world — not a writer. Given the situation and what the "
+        "player does, work out what ACTUALLY happens: concrete physical and social consequences "
+        "in causal order. What does the action directly cause? How does each character present "
+        "react — in character, for real reasons? What changes, and what new problem, cost, or "
+        "opening does it create? Reason it through; be concrete and causal, never atmospheric. "
+        "Keep every established fact true. Bring people on GRADUALLY — at most ONE new person "
+        "steps into the scene at a time; people merely mentioned or remembered stay offstage. "
+        "End on the real choice or problem the player now faces. "
+        "Output a short numbered list of what happens, in order — not prose.\n\n"
+        f"WHERE: {loc_now}. {_pres_line}\n"
+        f"CAST (who exists in this story; anyone on stage or brought in by the action is present):\n{cast}\n"
+        + (f"\n{_state_block}\n" if _state_block else "")
+        + (f"\n{_cont_block}\n" if _cont_block else "")
+        + (f"\n{_rel_block}\n" if _rel_block else "")
+        + (f"\nWORLD: {st.premise}\n" if st.premise else "")
+    )
+
     lanes = {"craft": len(PLAY_CRAFT), "cast": len(cast), "places": len(places),
              "embodiment": len(embodiment), "player_back": len(player_back),
              "lore": len(_lore_block), "state": len(_state_block), "relationships": len(_rel_block),
              "continuity": len(_cont_block), "history": len(transcript),
+             "consequence": len(consequence_system),
              "system": len(system), "scribe": len(scribe_system)}
 
     return {"system": system, "prompt": prompt, "scribe_system": scribe_system,
+            "consequence_system": consequence_system,
             "cur": cur, "prior_pov": prior_pov, "lanes": lanes}
