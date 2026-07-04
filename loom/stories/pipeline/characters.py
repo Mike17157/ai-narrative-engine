@@ -279,11 +279,16 @@ def compose_expressions(provider, persona: str) -> dict:
 
 
 def compose_affect_range(provider, persona: str, nsfw: bool = False,
-                         systems: dict | None = None) -> dict:
+                         systems: dict | None = None, attire: str = "") -> dict:
     """Curate which emotions this character displays — SFW only or SFW+NSFW.
 
     One structured call. Returns {range: [key1, key2, ...]} sorted by circumplex angle
     so the carousel X-axis has stable left-to-right order. Falls back to NORMAL_KEYS.
+
+    ``attire`` makes the range OUTFIT-SPECIFIC: the emotions someone shows shift with the
+    social register of what they're wearing — reserved/composed in formal or work attire,
+    candid and warm in casual wear, playful/flushed/inviting in swimwear or lingerie, and the
+    most intimate ones in bedroom wear. Same taxonomy, a register-appropriate SUBSET.
     """
     from loom.server.services.emotions import (
         EMOTIONS, EMOTION_KEYS, NORMAL_KEYS, EMOTION_COORDS,
@@ -303,7 +308,16 @@ def compose_affect_range(provider, persona: str, nsfw: bool = False,
     }
     pool_emotions = [e for e in EMOTIONS if e["key"] in set(pool)]
     listing = "\n".join(f"- {e['key']}: {e['hint']}" for e in pool_emotions)
+    register = (
+        f"OUTFIT THEY ARE WEARING:\n{attire}\n\n"
+        "Curate the emotions this character would naturally SHOW while wearing THIS outfit, in "
+        "its social register. The set should visibly DIFFER by register: reserved and composed "
+        "for formal or work attire; relaxed, warm and candid for casual wear; playful, teasing, "
+        "flushed and inviting for swimwear or lingerie; the most intimate and vulnerable ones for "
+        "bedroom / intimate wear.\n\n"
+    ) if attire.strip() else ""
     prompt = (f"CHARACTER PERSONA:\n{persona}\n\n"
+              f"{register}"
               f"AVAILABLE EMOTION KEYS:\n{listing}\n\n"
               f"Return the emotion keys for this character's range.")
     try:

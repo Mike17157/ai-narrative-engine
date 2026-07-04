@@ -1,6 +1,6 @@
 {
   "base": "krea2_turbo_character",
-  "sprite": "krea2_turbo_sprite",
+  "sprite": "krea2_turbo_sprite_detail",
   "scene": "krea2_turbo_scene",
   "chat": "krea2_turbo"
 }

@@ -20,16 +20,28 @@ async def _render(provider, prompt: str, init_image: bytes | None = None,
     return result.images[0] if result.images else None
 
 
-def _randomize_seeds(graph: dict) -> None:
-    """Give every sampler a fresh seed so repeated renders of one prompt vary
-    (workflows ship with a fixed seed). Mutates in place."""
-    import random
+# THE fixed character-sprite seed. A constant seed across a character's whole emotion set (with
+# identity + outfit + style held constant in every prompt) keeps composition/palette/framing in
+# the same latent region — the standard sprite-sheet consistency trick. Variety between emotions
+# comes from the PROMPT (per-emotion pose + expression), not the seed.
+SPRITE_SEED = 44
+
+
+def _set_seeds(graph: dict, seed: int) -> None:
+    """Force every sampler seed to `seed`. Mutates in place."""
     for node in graph.values():
         ins = node.get("inputs") if isinstance(node, dict) else None
         if isinstance(ins, dict):
             for k in ("seed", "noise_seed"):
                 if isinstance(ins.get(k), (int, float)):
-                    ins[k] = random.randint(0, 2_147_483_646)
+                    ins[k] = seed
+
+
+def _randomize_seeds(graph: dict) -> None:
+    """Give every sampler a fresh seed so repeated renders of one prompt vary
+    (workflows ship with a fixed seed). Mutates in place."""
+    import random
+    _set_seeds(graph, random.randint(0, 2_147_483_646))
 
 
 # The base backdrop colour the prompt paints (magenta) — the colour filter keys it out so the

@@ -2,10 +2,10 @@
 
 Two pools, both stable-keyed so sprite filenames never orphan:
 
-  NORMAL_KEYS  — 29 everyday emotions suitable for any character rating.
+  NORMAL_KEYS  — 31 everyday emotions suitable for any character rating.
   NSFW_KEYS    — 15 intimacy/adult emotions added on top for mature characters.
 
-The full EMOTIONS list is the union (44 entries). Each entry carries:
+The full EMOTIONS list is the union (46 entries). Each entry carries:
   key   — stable slug used for filenames and runtime lookup
   label — display name
   hint  — concise face-cue tags that steer expression-prompt generation
@@ -86,6 +86,10 @@ EMOTIONS: list[dict] = [
      "va": (-0.68, 0.50)},
     {"key": "rage",         "label": "Rage",         "hint": "furious, bared teeth, blazing eyes, shouting, veins",
      "va": (-0.92, 0.92)},
+    {"key": "scared",       "label": "Scared",       "hint": "wide fearful eyes, raised inner brows, trembling parted lips, shrinking back in fright",
+     "va": (-0.70, 0.78)},
+    {"key": "aggrieved",    "label": "Aggrieved",    "hint": "wounded indignant frown, hurt reproachful eyes, tight downturned mouth, feeling wronged",
+     "va": (-0.58, 0.30)},
     # -- NSFW / intimacy emotions (15) -------------------------------------------
     # Added on top of the normal set for mature character ratings.
     {"key": "anticipation", "label": "Anticipation", "hint": "eager eyes, slight smile, leaning in, barely containing excitement",
@@ -132,6 +136,28 @@ NSFW_KEYS: list[str] = [e["key"] for e in EMOTIONS if e["key"] not in set(NORMAL
 EMOTION_KEYS: list[str] = [e["key"] for e in EMOTIONS]
 EMOTION_LABELS: dict[str, str] = {e["key"]: e["label"] for e in EMOTIONS}
 EMOTION_HINTS: dict[str, str] = {e["key"]: e["hint"] for e in EMOTIONS}
+
+# CORE set (24) — the DEFAULT render taxonomy: rendering all 44 is slow and redundant, so this
+# is a curated spread across the Russell circumplex (every quadrant, low→high arousal) for
+# MAXIMUM emotional variety in the fewest sprites. "Render all" uses this; the per-cell ↻ can
+# still render any of the full 44.
+# INTIMACY pool — hidden from a character's default emotion set (the affect generator sometimes
+# assigns these to SFW characters, e.g. a teen; they showed as "untracked" emotions). Rendered/
+# shown only when a caller explicitly opts in (mature characters).
+INTIMACY_KEYS: set[str] = set(NSFW_KEYS) | {"lustful", "pleasure", "begging"}
+
+
+def is_intimacy(key: str) -> bool:
+    return key in INTIMACY_KEYS
+
+
+CORE_KEYS: list[str] = [
+    "neutral", "happy", "excited", "amused", "proud", "hopeful", "teasing",   # positive spread
+    "curious", "shy", "blushed", "longing", "comfort",                        # social / warm
+    "confused", "shocked", "scared", "embarrassed", "guilty",                 # surprise / fear / self-conscious
+    "sad", "aggrieved", "tired", "annoyed", "disappointed", "frustrated", "disgusted",  # negative low→mid
+    "angry", "rage",                                                          # negative high
+]
 EMOTION_COORDS: dict[str, tuple[float, float]] = {e["key"]: e["va"] for e in EMOTIONS}
 
 # Calm, mildly pleasant — used for base/outfit images and as the no-emotion fallback.

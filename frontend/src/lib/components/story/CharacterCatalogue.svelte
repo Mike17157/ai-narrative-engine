@@ -7,7 +7,6 @@
   import { get, post } from '$lib/api.js';
   import { startJob, limitedPost } from '$lib/app.svelte.js';
   import GenStream from '$lib/components/shared/GenStream.svelte';
-  import BaseStudio from './BaseStudio.svelte';
   import EmblaCarousel from 'embla-carousel';
 
   let { storyKey, cast = [], locations = [], onChanged = () => {}, onCharacter = () => {} } = $props();
@@ -47,7 +46,6 @@
   const fetched = new Set();
   let outfitIdx = $state(0);
   let bust = $state(0);
-  let busy = $state(false);
   let err = $state('');
 
   async function loadAll(members) {
@@ -67,38 +65,26 @@
   let data = $derived(portraits[charKey] || null);
   let outfits = $derived(data?.outfits || []);
   let outfit = $derived(outfits[outfitIdx] || null);
-  // A side card's cutout = that character's everyday outfit base.
-  const spriteOf = (k) => portraits[k]?.outfits?.[everydayIdx(k)]?.base || null;
+  // The representative sprite for an outfit (base is gone — references never worked): the NEUTRAL
+  // emotion sprite, else the first rendered emotion.
+  const outfitSprite = (o) => {
+    const es = o?.expression_set || [];
+    return (es.find((e) => e.emotion === 'neutral' && e.url)?.url) || (es.find((e) => e.url)?.url) || null;
+  };
+  const spriteOf = (k) => outfitSprite(portraits[k]?.outfits?.[everydayIdx(k)]);
 
   // ── Selected emotion — YOU pick it (click a card in the strip); no auto-rotation.
-  // '' = the outfit's base look. The centered carousel card shows exactly this selection.
+  // '' = the neutral look. The centered carousel card shows exactly this selection.
   let selEmo = $state('');
   $effect(() => { charKey; outfit; selEmo = ''; });              // reset on character/outfit switch
   let shownEmo = $derived((outfit?.expression_set || []).find((e) => e.emotion === selEmo && e.url) || null);
-  let shownImg = $derived((shownEmo?.url || outfit?.base) ? `${shownEmo?.url || outfit.base}?b=${bust}` : null);
+  let shownImg = $derived((() => { const u = shownEmo?.url || outfitSprite(outfit); return u ? `${u}?b=${bust}` : null; })());
   let shownLabel = $derived(shownEmo?.label || '');
 
-  // Card image: centered → the cycling sprite; others → their cutout sprite (fall back to the
+  // Card image: centered → the selected sprite; others → their neutral sprite (fall back to the
   // reference only if they have no rendered sprite yet).
   const cardImg = (c, i) =>
     (i === center ? (shownImg || spriteOf(charKey) || c.img) : (spriteOf(c.character) || c.img)) || null;
-
-  // ── Regenerate the centered outfit's base; add a standard outfit ──────────────
-  async function regen() {
-    if (!outfit || busy) return;
-    busy = true; err = '';
-    try {
-      const rc = await post(`/characters/${charKey}/portraits/outfit/${outfit.id}/recompose`, {});
-      if (!rc.ok) { err = rc.data?.error || 'recompose failed'; return; }
-      const job = startJob('Outfit image render', charName, 'catalogue', 1);
-      const r = await limitedPost(`/characters/${charKey}/portraits/outfit/${outfit.id}/candidate`, {}, {}, job);
-      if (r.ok && r.data?.image) {
-        const sv = await post(`/characters/${charKey}/portraits/outfit/${outfit.id}/base`, { data: r.data.image });
-        if (sv.data?.url) { outfit.base = sv.data.url; bust++; onChanged(); }
-        job.done = 1; job.status = 'done';
-      } else { err = r.data?.error || 'render failed'; job.status = 'error'; }
-    } finally { busy = false; }
-  }
   // ── DIRECT wardrobe generation — the clear trigger. One click: plan the character's outfits
   // (streamed LLM job, watched live on the stage), persist the plan into the portrait manifest,
   // then auto-render the FIRST outfit's base so a sprite becomes visible without another step.
@@ -116,15 +102,22 @@
     const sv = await post(`/characters/${k}/portraits/wardrobe`, plan);
     if (!sv.ok) { err = sv.data?.error || 'could not save the wardrobe'; return; }
     await refresh(); onChanged();
-    if (k === charKey && outfits.length && !outfits[0].base) { outfitIdx = 0; regen(); }
+    // Auto-render the NEUTRAL sprite so the card isn't empty right after planning.
+    if (k === charKey && outfit && !outfitSprite(outfit)) renderEmo('neutral');
   }
   function onWardrobeDone() { planning = false; wardrobeJob = null; }
 
   // ── The selected outfit's EMOTION SET — unique per outfit (its own expression_set), shown as
   // a strip of sprite cards with per-cell render/re-roll + a render-all job. This replaces the
   // old outfits×emotions table: one outfit at a time, its emotions in full.
+  // INTIMACY emotions are hidden by default (the affect generator sometimes leaks them onto SFW
+  // characters — the "untracked" emotions). They still exist in data; a mature-mode toggle can
+  // surface them later.
+  const INTIMACY = new Set(['anticipation','desire','teasing','comfort','relief','ecstasy','arousal',
+    'intensity','release','submission','arrogant','condescension','discomfort','humiliation','pain',
+    'lustful','pleasure','begging']);
   let shownEmos = $derived.by(() => {
-    const es = outfit?.expression_set || [];
+    const es = (outfit?.expression_set || []).filter((e) => !INTIMACY.has(e.emotion));
     const inRange = es.filter((e) => e.in_range);
     if (inRange.length) return inRange;
     // older manifests don't flag in_range — trim to the character's personality range instead
@@ -137,12 +130,13 @@
     try { const d = await get(`/characters/${k}/portraits`); portraits = { ...portraits, [k]: d }; bust++; }
     catch { /* keep the stale payload */ }
   }
-  async function renderEmo(emo) {
+  async function renderEmo(emo, reroll = false) {
     const k = charKey, oid = outfit?.id, ck = `${oid}:${emo}`;
     if (!oid || cellBusy[ck]) return;
     cellBusy = { ...cellBusy, [ck]: true }; err = '';
     const job = startJob('Sprite render', `${charName} — ${emo}`, 'catalogue', 1);
-    const r = await limitedPost(`/characters/${k}/sprite-candidate`, { outfit_id: oid, emotion: emo }, {}, job);
+    // First render uses the fixed sprite seed (matches the set); a re-roll randomizes so it differs.
+    const r = await limitedPost(`/characters/${k}/sprite-candidate`, { outfit_id: oid, emotion: emo, reroll }, {}, job);
     if (r.ok && r.data?.image) {
       await post(`/characters/${k}/sprite/select`, { outfit_id: oid, emotion: emo, data: r.data.image });
       job.done = 1; job.status = 'done';
@@ -168,7 +162,7 @@
   let styleBusy = $state(false);
   let styleSet = $state(false);
   async function broadcastStyle() {
-    const url = (shownEmo?.url || outfit?.base || '').split('?')[0];
+    const url = (shownEmo?.url || outfitSprite(outfit) || '').split('?')[0];
     if (!url || styleBusy) return;
     styleBusy = true; err = '';
     const r = await post('/style', { image: url,
@@ -177,10 +171,6 @@
     if (r.ok) { styleSet = true; setTimeout(() => (styleSet = false), 4000); }
     else err = r.data?.error || 'style broadcast failed';
   }
-
-  // The BASE STUDIO modal — deliberate base regeneration: styles + prompt mutation + candidates.
-  let showStudio = $state(false);
-  async function onStudioSaved() { await refreshChar(charKey); onChanged(); }
 
   let emoJob = $state(null);
   async function renderAllEmos() {
@@ -192,6 +182,29 @@
     else err = r.data?.error || 'could not start the render';
   }
   function onEmosDone() { emoJob = null; refreshChar(charKey); }
+
+  // ── EMOTION RANGE EDITING — the outfit's emotion SET is register-specific and editable. The
+  // POST returns the fresh portrait payload, so the strip cells (driven by in_range) update live.
+  let editRange = $state(false);
+  let rangeBusy = $state(false);
+  // Full pool for the editor: every non-intimacy emotion, with its in/out flag for THIS outfit.
+  let poolEmos = $derived((outfit?.expression_set || []).filter((e) => !INTIMACY.has(e.emotion)));
+  async function saveRange(body) {
+    if (!outfit || rangeBusy) return;
+    rangeBusy = true; err = '';
+    const r = await post(`/characters/${charKey}/portraits/affect`, { outfit_id: outfit.id, ...body });
+    rangeBusy = false;
+    if (r.ok && r.data) { portraits = { ...portraits, [charKey]: r.data }; }
+    else err = r.data?.error || 'emotion range update failed';
+  }
+  // Re-curate this outfit's register set from scratch (v4pro reads its attire + persona).
+  const recomposeRange = () => saveRange({ compose: true });
+  // Toggle one emotion in/out — cells follow immediately.
+  function toggleEmo(key) {
+    const cur = new Set(outfit?.range || []);
+    cur.has(key) ? cur.delete(key) : cur.add(key);
+    return saveRange({ range: [...cur] });
+  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -203,7 +216,7 @@
     <span class="blbl">Outfits</span>
     {#each outfits as o, i (o.id)}
       <button class="chip ochip" class:on={i === outfitIdx} onclick={() => (outfitIdx = i)} title={o.concept || o.name}>
-        {#if o.base}<img class="oimg" src={`${o.base}?b=${bust}`} alt="" />{/if}{o.name}
+        {#if outfitSprite(o)}<img class="oimg" src={`${outfitSprite(o)}?b=${bust}`} alt="" />{/if}{o.name}
       </button>
     {:else}
       <span class="hint">{charKey && portraits[charKey] ? 'No outfits yet — generate a wardrobe below.' : ' '}</span>
@@ -241,7 +254,6 @@
                  role="button" tabindex="0" aria-label={`Select ${c.name}`}>
               <div class="sprite">
                 {#if cardImg(c, i)}<img src={cardImg(c, i)} alt={c.name} draggable="false" />{:else}<div class="noimg">🎭</div>{/if}
-                {#if i === center && busy}<div class="cardspin"><span class="spin"></span></div>{/if}
               </div>
               <div class="namep">
                 <span class="nm">{c.primary ? '★ ' : ''}{c.name}</span>
@@ -283,26 +295,35 @@
       <b>🎭 {outfit.name}</b>
       <span class="hint">{shownEmos.filter((e) => e.url).length}/{shownEmos.length} rendered · click a card to put it on stage</span>
       <span class="sp"></span>
+      <button class="plan" onclick={recomposeRange} disabled={rangeBusy}
+              title="Re-curate this outfit's emotion set for its register (v4pro reads the attire + persona)">
+        {rangeBusy ? '🎭 Curating…' : '🎭 Recompose set'}</button>
+      <button class="plan" class:on={editRange} onclick={() => (editRange = !editRange)}
+              title="Add or remove individual emotions from this outfit's set">
+        {editRange ? '✓ Done editing' : '✎ Edit set'}</button>
       <button class="plan" onclick={fixIdentity} disabled={identBusy}
               title="Backfill a clean, clothing-free canonical appearance for this character so every render keeps a consistent identity (fixes hair drift)">
         {identBusy ? '🧬 Fixing…' : identDone ? '✓ Identity fixed' : '🧬 Fix identity'}</button>
-      <button class="plan" onclick={broadcastStyle} disabled={styleBusy || (!shownEmo && !outfit?.base)}
+      <button class="plan" onclick={broadcastStyle} disabled={styleBusy || (!shownEmo && !outfitSprite(outfit))}
               title="Distill THIS image's art style (vision model) and broadcast it as the anchor every character's future renders open with">
         {styleBusy ? '⭐ Distilling…' : styleSet ? '✓ Style set for everyone' : '⭐ Set as cast style'}</button>
       <button class="plan" onclick={renderAllEmos} disabled={!!emoJob}
               title="Render this outfit's whole emotion set (streamed job)">{emoJob ? '✨ Rendering…' : '✨ Render all'}</button>
     </div>
-    <div class="emostrip">
-      <div class="ecard base" class:missing={!outfit.base} class:on={selEmo === ''}
-           role="button" tabindex="0" onclick={() => (selEmo = '')}
-           onkeydown={(e) => e.key === 'Enter' && (selEmo = '')} title="Show the base look on stage">
-        {#if outfit.base}<img src={`${outfit.base}?b=${bust}`} alt="base" />{:else}<div class="eph">🎨</div>{/if}
-        <div class="efoot">
-          <span class="elabel">base</span>
-          <button class="ebtn" disabled={busy} onclick={(ev) => { ev.stopPropagation(); showStudio = true; }}
-                  title="Open the Base Studio — styles, prompt mutation, candidates">{busy ? '…' : '🎛'}</button>
+    {#if editRange}
+      <div class="rangeedit">
+        <span class="hint">This outfit's emotion set — click to add / remove. Cells update live.</span>
+        <div class="rchips">
+          {#each poolEmos as e (e.emotion)}
+            <button class="rchip" class:on={e.in_range} disabled={rangeBusy}
+                    onclick={() => toggleEmo(e.emotion)} title={e.in_range ? 'In this set — click to remove' : 'Add to this set'}>
+              {e.in_range ? '✓ ' : '＋ '}{e.label || e.emotion}
+            </button>
+          {/each}
         </div>
       </div>
+    {/if}
+    <div class="emostrip">
       {#each shownEmos as e (e.emotion)}
         {@const ck = `${outfit.id}:${e.emotion}`}
         <div class="ecard" class:missing={!e.url} class:on={selEmo === e.emotion}
@@ -312,17 +333,13 @@
           {#if e.url}<img src={`${e.url}?b=${bust}`} alt={e.label || e.emotion} />{:else}<div class="eph">·</div>{/if}
           <div class="efoot">
             <span class="elabel">{e.label || e.emotion}</span>
-            <button class="ebtn" disabled={!!cellBusy[ck]} onclick={(ev) => { ev.stopPropagation(); renderEmo(e.emotion); }}
-                    title={e.url ? 'Re-roll this sprite' : 'Render this sprite'}>{cellBusy[ck] ? '…' : (e.url ? '↻' : '🎨')}</button>
+            <button class="ebtn" disabled={!!cellBusy[ck]} onclick={(ev) => { ev.stopPropagation(); renderEmo(e.emotion, !!e.url); }}
+                    title={e.url ? 'Re-roll this sprite (new seed)' : 'Render this sprite'}>{cellBusy[ck] ? '…' : (e.url ? '↻' : '🎨')}</button>
           </div>
         </div>
       {/each}
     </div>
     </div>
-  {/if}
-
-  {#if showStudio && outfit}
-    <BaseStudio {charKey} {charName} {outfit} onSaved={onStudioSaved} onClose={() => (showStudio = false)} />
   {/if}
 </div>
 
@@ -400,13 +417,23 @@
   .emohead { display: flex; align-items: center; gap: 10px; padding: 7px 14px 0;
              font-size: 12.5px; color: var(--text); }
   .emohead .plan { padding: 5px 12px; font-size: 12px; }
+  .emohead .plan.on { background: color-mix(in srgb, var(--accent) 16%, transparent); border-style: solid; }
+
+  /* Emotion-range editor — a wrap of toggle chips; ✓ = in this outfit's set, ＋ = add. */
+  .rangeedit { padding: 4px 14px 8px; border-top: 1px dashed var(--border-soft); }
+  .rchips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+  .rchip { font-size: 11.5px; padding: 4px 10px; border-radius: 999px; cursor: pointer;
+           background: var(--elev); border: 1px solid var(--border-soft); color: var(--muted); }
+  .rchip:hover:not(:disabled) { color: var(--text); border-color: var(--border); }
+  .rchip.on { color: var(--text); border-color: var(--accent);
+              background: color-mix(in srgb, var(--accent) 14%, var(--elev)); }
+  .rchip:disabled { opacity: .55; cursor: default; }
   .emostrip { display: grid; grid-auto-flow: column; grid-template-rows: repeat(3, minmax(0, 1fr));
               gap: 8px; padding: 8px 14px 9px; height: 452px; box-sizing: border-box;
               overflow-x: auto; overflow-y: hidden; }
   .ecard { width: 108px; display: flex; flex-direction: column; border-radius: 10px; overflow: hidden;
            background: var(--elev); border: 1px solid var(--border-soft); cursor: pointer; outline: none; }
   .ecard.on { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-  .ecard.base { grid-row: span 3; width: 168px; }
   .ecard img { flex: 1; min-height: 0; width: 100%; object-fit: cover; object-position: top; }
   .eph { flex: 1; display: grid; place-items: center; font-size: 20px; color: var(--faint);
          background: var(--elev-2); }

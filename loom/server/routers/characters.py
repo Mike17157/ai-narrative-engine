@@ -627,12 +627,19 @@ def register(app, ctx):
           {compose: true}  → (re)compose from the character's persona (default).
           {range: [...]}   → set the range explicitly as a list of key strings (or legacy dicts),
                              bypassing the model — for manual art-direction.
+          {outfit_id: ...} → target ONE outfit: store the range on that outfit (register-specific,
+                             composed with its attire in view) instead of the character default.
         Returns the full portrait payload."""
         c = ctx.base_settings.characters.get(key)
         if c is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
         body = body or {}
         m = ctx.portrait_manifest(key)
+        outfit = None
+        if body.get("outfit_id"):
+            outfit = next((o for o in m.get("outfits", []) if o.get("id") == body["outfit_id"]), None)
+            if outfit is None:
+                return JSONResponse({"error": "no such outfit"}, status_code=404)
         explicit = body.get("range") if isinstance(body.get("range"), list) else None
         if explicit:
             from ..services.emotions import EMOTION_KEYS
@@ -659,13 +666,21 @@ def register(app, ctx):
             nsfw = bool(body.get("nsfw"))
             _emo_cfg = ctx.load_story_builder()
             _emo_prov = ctx.stage_provider("emotion", body.get("model"))
+            attire = (outfit.get("attire_prompt") or outfit.get("prompt") or "") if outfit else ""
+            # v4pro (non-thinking) is the pipeline's known-good structured-output model; the default
+            # emotion-stage model can't do enum `emits`, so it silently fell back to the full set.
+            _emo_prov = (ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+                         if not body.get("model") else _emo_prov)
             affect = _compose_affect_range(_emo_prov, _persona_text(c), nsfw=nsfw,
-                                           systems=(_emo_cfg.get("systems") or {}))
+                                           systems=(_emo_cfg.get("systems") or {}), attire=attire)
             if not (isinstance(affect, dict) and affect.get("range")):
                 return JSONResponse({"error": "could not compose affect range "
                                               "(emotion model may not support structured output)"},
                                     status_code=500)
-        m["affect"] = affect
+        if outfit is not None:
+            outfit["range"] = affect["range"]   # register-specific range lives on the outfit
+        else:
+            m["affect"] = affect                # character default range
         ctx.save_portrait_manifest(key, m)
         return ctx.portrait_payload(key)
 
@@ -767,20 +782,40 @@ def register(app, ctx):
         # Per-outfit expression prompt (legacy global as fallback for old data).
         expr = ((outfit.get("expression_prompts") or {}).get(emotion)
                 or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
-        # TXT2IMG (not img2img): each emotion gets its OWN full-body pose + facial expression.
-        # img2img from the neutral base locked every emotion to the same standing pose (measured:
-        # identical, inexpressive). Consistency instead rides the TEXT: the style anchor (broadcast)
-        # + the clean clothing-free `appearance` (identity) + the outfit `attire` (garments) — all
-        # constant every render — while the STRONG_FACE lead + pose_tags drive per-emotion variety.
-        from ..services.prompts import sprite_prompt, style_anchor
+        # TXT2IMG at the FIXED sprite seed (44) — identity + outfit + style held constant in the
+        # prompt keep the whole set in one latent region; only pose/face vary. The per-emotion
+        # prompt is authored by v4pro (appearance + clothing + pose + facial expression), with the
+        # deterministic `sprite_prompt` as fallback. A re-roll (body.reroll) uses a random seed so
+        # it actually differs.
+        from ..services.prompts import (sprite_prompt, style_anchor, compose_sprite_prompt,
+                                         face_wildcard)
+        from ..services.images import _set_seeds, SPRITE_SEED
+        from ..services.emotions import EMOTION_LABELS, EMOTION_HINTS
         _style = style_anchor(ctx.root)
         provider, model_id = ctx.role_image_provider("sprite", body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
-        prompt = sprite_prompt(appearance, attire, expr,
-                               ctx.pose_tags(key, emotion), ctx.pose_framing(emotion), emotion=emotion,
-                               style=_style)
-        _randomize_seeds(provider.workflow)
+        # Face-focused prompt for the FaceDetailer pass (only used by detailer workflows).
+        _wc = face_wildcard(appearance, EMOTION_LABELS.get(emotion, emotion), emotion, expr)
+        for _n in provider.workflow.values():
+            if isinstance(_n, dict) and _n.get("class_type") == "FaceDetailer":
+                _n.setdefault("inputs", {})["wildcard"] = _wc
+        prompt = ""
+        _v4 = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+        if _v4 is not None and hasattr(_v4, "generate_text"):
+            try:
+                prompt = compose_sprite_prompt(_v4, style=_style, appearance=appearance, attire=attire,
+                                               emotion_label=EMOTION_LABELS.get(emotion, emotion),
+                                               hint=(EMOTION_HINTS.get(emotion) or expr or emotion))
+            except Exception:  # noqa: BLE001 — fall back to deterministic assembly
+                prompt = ""
+        if not prompt:
+            prompt = sprite_prompt(appearance, attire, expr, ctx.pose_tags(key, emotion),
+                                   ctx.pose_framing(emotion), emotion=emotion, style=_style)
+        if body.get("reroll"):
+            _randomize_seeds(provider.workflow)
+        else:
+            _set_seeds(provider.workflow, SPRITE_SEED)
         try:
             png = await _render(provider, prompt,
                                 out_prefix=ctx.output_prefix_for(model_id, "sprite", key),
@@ -845,11 +880,41 @@ def register(app, ctx):
                 pass
             done = 0
 
-            from ..services.prompts import sprite_prompt, style_anchor
+            from ..services.prompts import (sprite_prompt, style_anchor, compose_sprite_prompt,
+                                             face_wildcard, _persona_text)
+            from ..services.emotions import CORE_KEYS, EMOTION_LABELS, EMOTION_HINTS, INTIMACY_KEYS
+            from ..services.images import SPRITE_SEED
+            from loom.stories.pipeline import compose_affect_range as _compose_affect_range
             _style = style_anchor(ctx.root)
+            _mature = bool(body.get("mature"))
+            _emo_pool = set(EMOTION_KEYS)
+            # Character-default range (fallback when an outfit has no register-specific range yet).
+            _char_range = [(r.get("emotion") if isinstance(r, dict) else r)
+                           for r in ((m.get("affect") or {}).get("range") or [])]
+            _char_range = [e for e in _char_range if e]
+            _persona = _persona_text(ch)
+            _emo_systems = (ctx.load_story_builder().get("systems") or {})
+            # v4pro (non-thinking) — the known-good structured model; the default emotion-stage
+            # model can't do enum `emits` and silently falls back to the full set.
+            _v4 = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+            _dirty = False   # did we auto-compose any outfit range → persist it
 
-            # TXT2IMG (see sprite-candidate): each emotion its OWN full-body pose + expression.
-            # Consistency rides the TEXT — style anchor + clean appearance + outfit attire.
+            def _emos_for(o):
+                # Per-OUTFIT emotion set — the register-specific range someone shows in THIS outfit.
+                # body.emotions override > stored outfit range > auto-composed from attire > char
+                # default > CORE. INTIMACY keys dropped unless the caller opts in (mature).
+                nonlocal _dirty
+                rng = body.get("emotions") or o.get("range")
+                if not rng:
+                    attire = o.get("attire_prompt") or o.get("prompt") or ""
+                    rng = (_compose_affect_range(_v4, _persona, nsfw=_mature,
+                                                 systems=_emo_systems, attire=attire).get("range")
+                           if attire else None) or _char_range or CORE_KEYS
+                    o["range"] = rng          # store so the pane + next render match this outfit
+                    _dirty = True
+                return [e for e in rng if e in _emo_pool and (_mature or e not in INTIMACY_KEYS)]
+
+            # Build the (outfit × emotion) job list first (prompts filled in the parallel pass).
             all_jobs = []
             for o in outfits:
                 if cancelled():
@@ -859,24 +924,52 @@ def register(app, ctx):
                 is_unified = o.get("unified", False)
                 odir = ctx.portrait_dir(key, create=True) / oid
                 odir.mkdir(parents=True, exist_ok=True)
+                for emo in _emos_for(o):
+                    all_jobs.append({"outfit": o, "emotion": emo, "attire": attire,
+                                     "is_unified": is_unified, "out_dir": odir,
+                                     "latent": ctx.pose_latent(emo)})
+            if _dirty:
+                ctx.save_portrait_manifest(key, m)
 
-                for emo in EMOTION_KEYS:
-                    expr = canon.get(emo) or (o.get("expression_prompts") or {}).get(emo) or emo
-                    prompt = sprite_prompt("" if is_unified else appearance, attire, expr,
-                                           ctx.pose_tags(key, emo, outfit_id=oid), ctx.pose_framing(emo),
-                                           emotion=emo, style=_style)
-                    all_jobs.append({"outfit": o, "emotion": emo, "prompt": prompt,
-                                     "out_dir": odir, "latent": ctx.pose_latent(emo)})
+            if cancelled():
+                return {"ok": True, "rendered": 0, "outfits": 0}
+
+            # PROMPT COMPOSITION — v4pro writes each emotion's full prompt (appearance + clothing +
+            # pose + facial expression) IN PARALLEL; deterministic sprite_prompt is the fallback.
+            emit({"type": "phase", "label": f"Composing {len(all_jobs)} emotion prompts (v4pro)…"})
+            def _compose(j):
+                o, emo = j["outfit"], j["emotion"]
+                app_ = "" if j["is_unified"] else appearance
+                if _v4 is not None and hasattr(_v4, "generate_text"):
+                    try:
+                        return compose_sprite_prompt(_v4, style=_style, appearance=app_,
+                                                     attire=j["attire"],
+                                                     emotion_label=EMOTION_LABELS.get(emo, emo),
+                                                     hint=(EMOTION_HINTS.get(emo)
+                                                           or canon.get(emo) or emo))
+                    except Exception:  # noqa: BLE001
+                        pass
+                return sprite_prompt(app_, j["attire"],
+                                     canon.get(emo) or (o.get("expression_prompts") or {}).get(emo) or emo,
+                                     ctx.pose_tags(key, emo, outfit_id=o.get("id")),
+                                     ctx.pose_framing(emo), emotion=emo, style=_style)
+            with ThreadPoolExecutor(max_workers=8) as ex:
+                for j, p in zip(all_jobs, ex.map(_compose, all_jobs)):
+                    j["prompt"] = p
 
             if cancelled():
                 return {"ok": True, "rendered": 0, "outfits": 0}
 
             emit({"type": "phase", "label": f"Rendering {len(all_jobs)} sprites across {len(outfits)} outfits"})
 
-            batch_prompts = [{"prompt": j["prompt"], "latent": j["latent"]} for j in all_jobs]
+            batch_prompts = [{"prompt": j["prompt"], "latent": j["latent"],
+                              "wildcard": face_wildcard("" if j["is_unified"] else appearance,
+                                                        EMOTION_LABELS.get(j["emotion"], j["emotion"]),
+                                                        j["emotion"], canon.get(j["emotion"], ""))}
+                             for j in all_jobs]
             results = render_batch(
                 provider, batch_prompts, ctx=ctx, out_prefix_template=oprefix,
-                cancel=cancelled,
+                cancel=cancelled, seed=SPRITE_SEED,   # fixed seed → consistent set
                 on_progress=lambda d, t: emit({"type": "progress", "done": d, "total": t}),
             )
 

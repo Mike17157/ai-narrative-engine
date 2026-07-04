@@ -388,3 +388,16 @@ models:
         positive: { node: "4", field: "text" }
       output_node: "22"
       timeout_s: 600
+
+  # krea2_turbo_sprite_detail — sprite render + a FaceDetailer (ImpactPack) pass that re-renders
+  # the detected face at higher res for sharper, more expressive faces on small full-body sprites.
+  krea2_turbo_sprite_detail:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_cutout_detail_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "22"
+      timeout_s: 700

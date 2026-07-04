@@ -737,13 +737,19 @@ class AppContext:
             files = o.get("expressions") or {}
             exprs = {emo: f"{base}/{oid}/{fn}" for emo, fn in files.items()}
             out_prompts = o.get("expression_prompts") or {}
+            # Per-OUTFIT emotion range (register-specific). Falls back to the character range for
+            # outfits authored before per-outfit ranges existed. `in_range` drives the pane's cells.
+            o_raw = o.get("range")
+            o_keys = ([k for k in o_raw if k in EMOTION_KEYS]
+                      if isinstance(o_raw, list) and o_raw else affect_key_list)
+            o_keyset = set(o_keys)
             expression_set = [{
                 "emotion": k, "label": EMOTION_LABELS.get(k, k),
                 "prompt": out_prompts.get(k) or canon.get(k, ""),
                 "url": f"{base}/{oid}/{files[k]}" if files.get(k) else None,
                 "valence": EMOTION_COORDS[k][0],
                 "arousal": EMOTION_COORDS[k][1],
-                "in_range": k in affect_keys,
+                "in_range": k in o_keyset,
             } for k in EMOTION_KEYS]
             outfits.append({
                 "id": oid, "name": o.get("name") or oid,
@@ -752,6 +758,7 @@ class AppContext:
                 "base": f"{base}/{oid}/base.png" if (o.get("base")) else None,
                 "expressions": exprs,
                 "expression_set": expression_set,
+                "range": o_keys,   # this outfit's register-specific emotion set (keys)
             })
         return {"appearance": m.get("appearance", ""),
                 "emotions": EMOTION_KEYS,

@@ -36,6 +36,7 @@ def render_batch(
     latent: tuple[int, int] | None = None,
     on_progress: ProgressCb | None = None,
     cancel: CancelCb | None = None,
+    seed: int | None = None,
 ) -> list[bytes | None]:
     """Render ``prompts`` concurrently; return one PNG (bytes) per prompt, in order
     (``None`` for a failed or cancelled render).
@@ -55,10 +56,10 @@ def render_batch(
 
     if serverless:
         cap = max(1, int(cfg.get("max_instances", 10)))
-        make = _serverless_factory(provider, cfg)
+        make = _serverless_factory(provider, cfg, seed)
     else:
         cap = 2   # one local GPU; deepcopy-per-task just avoids shared-workflow races
-        make = _local_factory(provider)
+        make = _local_factory(provider, seed)
 
     return _fan_out(prompts, make, cap, out_prefix_template, latent, on_progress, cancel)
 
@@ -66,13 +67,18 @@ def render_batch(
 # --------------------------------------------------------------------------- #
 # Per-task provider factories — each returns a provider with a FRESH-seeded workflow.
 # --------------------------------------------------------------------------- #
-def _serverless_factory(provider, cfg) -> Callable[[], Any]:
+def _seed_fn(seed):
+    from .images import _randomize_seeds, _set_seeds
+    return (lambda wf: _set_seeds(wf, seed)) if seed is not None else _randomize_seeds
+
+
+def _serverless_factory(provider, cfg, seed=None) -> Callable[[], Any]:
     from ...providers.runpod_serverless_provider import RunPodServerlessProvider
-    from .images import _randomize_seeds
+    seed_wf = _seed_fn(seed)
 
     def make() -> Any:
         wf = copy.deepcopy(provider.workflow)
-        _randomize_seeds(wf)
+        seed_wf(wf)
         return RunPodServerlessProvider({
             "endpoint_id": cfg["serverless_endpoint_id"],
             "api_key": cfg["api_key"],
@@ -86,13 +92,13 @@ def _serverless_factory(provider, cfg) -> Callable[[], Any]:
     return make
 
 
-def _local_factory(provider) -> Callable[[], Any]:
-    from .images import _randomize_seeds
+def _local_factory(provider, seed=None) -> Callable[[], Any]:
+    seed_wf = _seed_fn(seed)
 
     def make() -> Any:
         # deepcopy so parallel tasks each own their workflow (the provider mutates it per render)
         clone = copy.deepcopy(provider)
-        _randomize_seeds(clone.workflow)
+        seed_wf(clone.workflow)
         return clone
 
     return make
@@ -114,6 +120,11 @@ def _fan_out(
         if cancel and cancel():
             return idx, None
         prov = make_provider()
+        wc = p.get("wildcard")            # per-item FaceDetailer face-prompt (detailer workflows only)
+        if wc and hasattr(prov, "workflow"):
+            for n in prov.workflow.values():
+                if isinstance(n, dict) and n.get("class_type") == "FaceDetailer":
+                    n.setdefault("inputs", {})["wildcard"] = wc
         res = prov.generate_image(
             prompt=p.get("prompt", ""),
             negative_prompt=p.get("negative_prompt"),

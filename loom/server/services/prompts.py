@@ -381,6 +381,8 @@ STRONG_FACE: dict[str, str] = {
     "scorn": "cold sneer, one lip corner raised, half-lidded contemptuous stare down the nose",
     "angry": "deep scowl, eyebrows slammed down, glaring wide eyes, bared gritted teeth, clenched fists",
     "rage": "screaming open mouth, teeth bared, veins at temple, wild furious eyes, fists shaking",
+    "scared": "eyes blown wide with fear, inner brows raised high, mouth open trembling, flinching back, hands up",
+    "aggrieved": "wounded reproachful glare, brows knit hurt, mouth tight and downturned, chin trembling with indignation",
     "anticipation": "eager grin, eyebrows high, hands rubbing together, bouncing on toes",
     "desire": "intense locked-on gaze, parted lips, flushed face, leaning closer",
     "teasing": "sly sideways smirk, one eye winking, tongue at lip corner, playful tilt of head",
@@ -419,6 +421,58 @@ def identity_core(attire: str) -> str:
     ~0.7 freely repaints hair colour (measured: a dark-haired base produced blond sprites)."""
     first = re.split(r"(?<=[.!?])\s+", (attire or "").strip())[:1]
     return (first[0] if first else "")[:200]
+
+
+# v4pro composes each emotion's FULL image prompt (appearance + clothing + pose + facial
+# expression) — richer & more varied than the mechanical STRONG_FACE assembly, per user request.
+# Identity + outfit + style are held constant (only pose/face change) so a fixed seed stays coherent.
+_SPRITE_COMPOSE_SYSTEM = (
+    "You write ONE image-generation prompt for a FULL-BODY anime visual-novel character sprite "
+    "showing a specific EMOTION. You are given the ART STYLE, the character's fixed APPEARANCE, "
+    "their OUTFIT, and the target EMOTION with physical hints. Write a single flowing prompt of "
+    "60-100 words containing, IN THIS ORDER:\n"
+    "1. the ART STYLE, exactly as given;\n"
+    "2. full-body framing: solo, full body, head to feet, feet visible, facing viewer, plain "
+    "light-grey studio background;\n"
+    "3. the APPEARANCE (hair, eyes, skin, build) exactly as given — NEVER alter it;\n"
+    "4. the complete OUTFIT exactly as given — NEVER change garments or colours;\n"
+    "5. a DISTINCTIVE full-body POSE that physically embodies the emotion (stance, weight, "
+    "shoulders, arms, hands, head tilt);\n"
+    "6. a HIGHLY EXPRESSIVE ANIME FACIAL EXPRESSION — push it to the maximum, the way a polished "
+    "anime would: large emotive eyes that visibly change shape with the feeling, bold expressive "
+    "eyebrows, an open mouth that clearly shows the emotion, and the genre's expression cues where "
+    "they fit — sparkling/starry eyes for joy, big glistening or streaming tear-filled eyes for "
+    "sadness, a throbbing anger vein and gritted teeth for rage, heavy blush and a sweat-drop for "
+    "embarrassment, tiny pupils and a dropped jaw for shock. Make the FACE read from across a room. "
+    "The face is the focal point.\n"
+    "Always render the PEAK, most intense version of the emotion, never a mild one — happy is "
+    "beaming open-mouthed joy (not mild contentment), sad is welling-up on the verge of tears or "
+    "openly crying, annoyed is a sharp glare, shy is a deep full-face blush. Ignore any 'calm' or "
+    "'at ease' notes in the hints; dial every feeling to its most readable extreme.\n"
+    "Identity and outfit stay identical across every emotion; only the pose and face change. "
+    "Output ONLY the prompt — no preamble, no quotes, no labels.")
+
+
+def face_wildcard(appearance: str, emotion_label: str, emotion_key: str, expr: str = "") -> str:
+    """The FaceDetailer's face-only prompt: an EXTREME anime facial expression rendered on the
+    enlarged face crop (the body render's small face can't carry expression; this re-renders it
+    face-focused).
+
+    ponytail: deliberately lean — the turbo detailer (8 steps, cfg 1.0) can't follow a long
+    prompt, and identity/boilerplate words just steal signal from the expression. The crop
+    already carries hair/eye colour from the base render, so the face descriptor is all we spend
+    on. `appearance` kept in the signature for callers but intentionally unused."""
+    face = STRONG_FACE.get(emotion_key, "") or expr or emotion_label
+    return f"anime face, extreme {emotion_label} expression, {face}"
+
+
+def compose_sprite_prompt(provider, *, style: str, appearance: str, attire: str,
+                          emotion_label: str, hint: str) -> str:
+    """One v4pro-authored full sprite prompt for a (character, outfit, emotion). Raises on
+    provider failure so callers can fall back to the deterministic `sprite_prompt`."""
+    user = (f"ART STYLE: {style}\nAPPEARANCE: {appearance or '(unspecified)'}\nOUTFIT: {attire}\n"
+            f"EMOTION: {emotion_label}\nPHYSICAL HINTS to exaggerate: {hint}\n\nWrite the sprite prompt.")
+    return _gen_text(provider, _SPRITE_COMPOSE_SYSTEM, user)
 
 
 def sprite_prompt(appearance: str, attire: str, expr: str, pose: str, framing: str,
