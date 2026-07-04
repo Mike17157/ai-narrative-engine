@@ -113,6 +113,7 @@ class CastMember(BaseModel):
     character: str               # key into the characters registry
     primary: bool = False        # the focal character (persona/portraits anchor)
     outfit: str | None = None    # optional: which portrait outfit they wear here
+    home: str = ""               # location id this character belongs to (roster grouping); "" = unplaced
 
 
 # --------------------------------------------------------------------------- #

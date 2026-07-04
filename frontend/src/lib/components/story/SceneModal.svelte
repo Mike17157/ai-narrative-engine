@@ -61,7 +61,7 @@
     if (!locObj || !storyKey || bgBusy) return;
     bgBusy = true; bgErr = null; bgCands = [];
     for (let i = 0; i < N_BG; i++) {
-      const r = await post(`/stories/${storyKey}/locations/${locObj.id}/background/candidate`, { image_model: 'scene' });
+      const r = await post(`/stories/${storyKey}/locations/${locObj.id}/background/candidate`, {});
       if (r.data?.image) bgCands = [...bgCands, r.data.image];
       else { bgErr = r.data?.error || 'render failed'; break; }
     }

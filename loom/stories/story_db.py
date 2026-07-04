@@ -23,7 +23,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, json TEXT DEFAULT '{}', updated REAL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS characters (key TEXT PRIMARY KEY, json TEXT, ord INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS cast_members (character TEXT PRIMARY KEY, is_primary INTEGER DEFAULT 0,
-                                         outfit TEXT, ord INTEGER DEFAULT 0);
+                                         outfit TEXT, home TEXT DEFAULT '', ord INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS relationships (
   id TEXT PRIMARY KEY, source TEXT, target TEXT, nature TEXT DEFAULT '', dynamic TEXT DEFAULT '',
   stance TEXT DEFAULT 'neutral', note TEXT DEFAULT '', value INTEGER);
@@ -42,6 +42,10 @@ _NORMALIZED = ("cast", "relationships", "locations", "places", "scenes", "arcs",
 _JSON_LISTS = ("places", "scenes", "arcs")   # row-per-entity, opaque JSON payload
 _inited: set[str] = set()
 
+# Additive column migrations for DBs created before a column existed. Each is idempotent —
+# a duplicate-column error just means an up-to-date DB, so we swallow it.
+_MIGRATIONS = ("ALTER TABLE cast_members ADD COLUMN home TEXT DEFAULT ''",)
+
 
 def _conn(path):
     p = Path(path)
@@ -49,6 +53,11 @@ def _conn(path):
     con = libsql.connect(str(p))
     if str(p) not in _inited:
         con.executescript(SCHEMA)
+        for sql in _MIGRATIONS:
+            try:
+                con.execute(sql)
+            except Exception:  # noqa: BLE001 — column already present on an up-to-date DB
+                pass
         con.commit()
         _inited.add(str(p))
     return con
@@ -75,8 +84,8 @@ def save_story(path, story: dict, characters: dict | None = None) -> None:
         con.execute("INSERT INTO characters(key,json,ord) VALUES(?,?,?)",
                     (k, json.dumps(c, ensure_ascii=False), i))
     for i, m in enumerate(story.get("cast") or []):
-        con.execute("INSERT INTO cast_members(character,is_primary,outfit,ord) VALUES(?,?,?,?)",
-                    (m.get("character"), 1 if m.get("primary") else 0, m.get("outfit"), i))
+        con.execute("INSERT INTO cast_members(character,is_primary,outfit,home,ord) VALUES(?,?,?,?,?)",
+                    (m.get("character"), 1 if m.get("primary") else 0, m.get("outfit"), m.get("home", ""), i))
     for r in story.get("relationships") or []:
         con.execute("INSERT INTO relationships(id,source,target,nature,dynamic,stance,note,value) "
                     "VALUES(?,?,?,?,?,?,?,?)",
@@ -108,9 +117,10 @@ def load_story(path) -> tuple[dict, dict]:
     con = _conn(path)
     row = con.execute("SELECT json FROM meta WHERE k='story'").fetchone()
     story = json.loads(row[0]) if row and row[0] else {}
-    story["cast"] = [{"character": c, "primary": bool(p), **({"outfit": o} if o else {})}
-                     for (c, p, o) in con.execute(
-                         "SELECT character,is_primary,outfit FROM cast_members ORDER BY ord").fetchall()]
+    story["cast"] = [{"character": c, "primary": bool(p), **({"outfit": o} if o else {}),
+                      **({"home": h} if h else {})}
+                     for (c, p, o, h) in con.execute(
+                         "SELECT character,is_primary,outfit,home FROM cast_members ORDER BY ord").fetchall()]
     story["relationships"] = [_rel_row(r) for r in con.execute(
         "SELECT id,source,target,nature,dynamic,stance,note,value FROM relationships").fetchall()]
     story["locations"] = [json.loads(j) for (j,) in con.execute(
@@ -244,7 +254,8 @@ if __name__ == "__main__":   # round-trip self-check (ponytail: one runnable che
     story = {
         "name": "Test", "type": "novel", "premise": "a premise", "tone": "warm",
         "themes": ["a", "b"], "intended_ending": "they reconcile",
-        "cast": [{"character": "leo", "primary": True}, {"character": "mara", "primary": False, "outfit": "casual"}],
+        "cast": [{"character": "leo", "primary": True},
+                 {"character": "mara", "primary": False, "outfit": "casual", "home": "l1"}],
         "relationships": [{"id": "r1", "source": "leo", "target": "mara", "nature": "rival",
                            "dynamic": "old grudge", "stance": "strained", "note": "leo owes mara"}],
         "locations": [{"id": "l1", "name": "Library", "parent": ""}],
@@ -256,7 +267,7 @@ if __name__ == "__main__":   # round-trip self-check (ponytail: one runnable che
     s2, c2 = load_story(p)
     assert s2["name"] == "Test" and s2["themes"] == ["a", "b"], s2
     assert s2["cast"][0] == {"character": "leo", "primary": True}, s2["cast"]
-    assert s2["cast"][1]["outfit"] == "casual", s2["cast"]
+    assert s2["cast"][1]["outfit"] == "casual" and s2["cast"][1]["home"] == "l1", s2["cast"]
     assert s2["relationships"][0]["nature"] == "rival" and s2["relationships"][0]["stance"] == "strained"
     assert s2["scenes"][0]["name"] == "Opening" and s2["arcs"][0]["id"] == "a1"
     assert c2["leo"]["name"] == "Leo" and c2["mara"]["system"] == "sharp"

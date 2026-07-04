@@ -7,16 +7,16 @@
   import ChapterCard from '$lib/components/story/ChapterCard.svelte';
   import SceneModal  from '$lib/components/story/SceneModal.svelte';
   import ArcModal    from '$lib/components/story/ArcModal.svelte';
-  import StoryCanvas from '$lib/components/story/StoryCanvas.svelte';
   import CharacterModal from '$lib/components/story/CharacterModal.svelte';
   import PlacesEditor from '$lib/components/story/PlacesEditor.svelte';
-  import AgentChat from '$lib/components/story/AgentChat.svelte';
   import NovelChapters from '$lib/components/story/NovelChapters.svelte';
   import SceneRoutes from '$lib/components/story/SceneRoutes.svelte';
   import StoryTabs from '$lib/components/story/StoryTabs.svelte';
   import Section from '$lib/components/story/Section.svelte';
   import DefaultPersonas from '$lib/components/story/DefaultPersonas.svelte';
   import ArcPanel from '$lib/components/story/ArcPanel.svelte';
+  import LocationRoster from '$lib/components/story/LocationRoster.svelte';
+  import LocationsPanel from '$lib/components/story/LocationsPanel.svelte';
 
   let st = $derived(stories.current);
   loadChars();
@@ -27,10 +27,21 @@
     const ci = chars.list.find((c) => c.key === m.character);
     return {
       key: m.character, name: charName(m.character) || m.character, primary: m.primary,
-      role: ci?.fields?.role || '',
+      role: ci?.fields?.role || '', home: m.home || '',
       img: ci?.reference || ci?.avatar || (ci?.images || []).map((im) => im?.url).find(Boolean) || null,
     };
   }));
+
+  // ── Relationships roster: characters grouped by home location (replaces the ring). ──
+  function setCharHome(charKey, locId) {
+    stories.current.cast = (st.cast || []).map((m) => m.character === charKey ? { ...m, home: locId } : m);
+    saveSoon();
+  }
+  function addCharToLocation(locId, charKey) {
+    if ((st.cast || []).some((m) => m.character === charKey)) { setCharHome(charKey, locId); return; }
+    stories.current.cast = [...(st.cast || []), { character: charKey, primary: false, home: locId }];
+    saveSoon();
+  }
   let placesTimer = null;
   function savePlaces(next) {
     stories.current.places = next;
@@ -97,27 +108,21 @@
   }
   function removeCastMember(i) { stories.current.cast = (st.cast || []).filter((_, j) => j !== i); saveSoon(); }
 
-  // Locations: inline editor (name/description/background + area grouping + start marker).
+  // Locations: the Map tab is a hierarchical LocationsPanel (edit + scene images). These are the
+  // structural ops it calls back into; field edits mutate the loc objects + saveSoon directly.
   let locUid = 0;
-  function addLocation() {
+  function addLocation(parent = '') {
     const id = `loc_${Date.now().toString(36)}_${locUid++}`;
-    stories.current.locations = [...(st.locations || []), { id, name: 'New location', description: '', background_prompt: '', parent: '' }];
+    stories.current.locations = [...(st.locations || []), { id, name: 'New location', description: '', background_prompt: '', parent }];
     saveSoon();
   }
-  function removeLocation(i) {
-    const loc = st.locations?.[i];
-    stories.current.locations = (st.locations || []).filter((_, j) => j !== i);
-    if (loc && st.start === loc.id) stories.current.start = null;
+  function removeLocationById(id) {
+    stories.current.locations = (st.locations || []).filter((l) => l.id !== id)
+      .map((l) => l.parent === id ? { ...l, parent: '' } : l);   // orphaned children float to top level
+    if (st.start === id) stories.current.start = null;
     saveSoon();
   }
-  let tagging = $state({});
-  async function tagifyBg(loc) {
-    const text = (loc.background_prompt || '').trim(); if (!text || tagging[loc.id]) return;
-    tagging = { ...tagging, [loc.id]: true };
-    const r = await post('/tagify', { text, kind: 'scene' });
-    tagging = { ...tagging, [loc.id]: false };
-    if (r.ok && r.data?.tags) { loc.background_prompt = r.data.tags; saveSoon(); }
-  }
+  function setStart(id) { stories.current.start = id; saveSoon(); }
 
   // ── Memory window: how many recent turns stay verbatim before older ones compress ──
   let windowTimer = null;
@@ -148,9 +153,6 @@
     { id: 'map', label: 'Map' },
   ];
   let tab = $state('overview');
-  // The selected tab drives the chat agent's mode (see AgentChat.syncMode).
-  let chatMode = $derived({ overview: '_story_tools', plot: '_story_tools',
-                            relationships: '_smith_tools', map: '_location_fns' }[tab] ?? '');
 
   // Timeline generation state
   let generatingTimelineArc = $state(null);  // arc.id currently generating
@@ -195,45 +197,7 @@
       mini_ending: updated.mini_ending, rationale: updated.rationale,
     });
   }
-  // ── Voice agent (Phase 1): a spoken edit applies via graph-ops; highlight what changed ──────
-  let speaker = $state('');         // the agent's active behaviour → unified canvas zooms to its view
-  let relPulse = $state(null);     // {source,target} edge to pulse after a change
-  let agentMsg = $state('');       // one-line confirmation from the last command
-  let agentMsgTimer = null;
-  // Tools that mean "the agent worked on a character" → pop that character's modal.
-  const CHAR_FN = /character|persona|appearance|backstory|wardrobe|outfit|sprite|\bcast\b/i;
-  async function handleApplied(log, artifacts, warning, before) {
-    const after = stories.current?.relationships || [];
-    const ekey = (r) => `${r.source}→${r.target}`;
-    const sig = (r) => `${r.stance}|${r.dynamic}|${r.nature}`;
-    const prev = new Map((before || []).map((r) => [ekey(r), sig(r)]));
-    // First new-or-changed edge → pulse it.
-    const changed = after.find((r) => !prev.has(ekey(r)) || prev.get(ekey(r)) !== sig(r));
-    if (changed) {
-      relPulse = { source: changed.source, target: changed.target };
-      setTimeout(() => { relPulse = null; }, 1400);
-    }
-    const newChar = (artifacts || []).map((a) => a.name).find(Boolean);
-    agentMsg = warning
-      || (newChar ? `Added ${newChar}`
-        : changed ? `${charName(changed.source)} → ${charName(changed.target)}: ${changed.stance}`
-        : `${(log || []).filter((o) => o.ok).length} change(s) applied`);
-    clearTimeout(agentMsgTimer);
-    agentMsgTimer = setTimeout(() => { agentMsg = ''; }, 6000);
-
-    // The agent modified a character → bring up its modal. New character: reload the roster first
-    // so the card resolves, then open by name. Edit: open the character in focus.
-    if (newChar) {
-      await loadChars();
-      const c = (chars.list || []).find((x) => (x.name || '').toLowerCase() === newChar.toLowerCase());
-      if (c) openCharModal(c.key);
-    } else if ((log || []).some((o) => o.ok && CHAR_FN.test(o.fn || ''))) {
-      openCharModal(selectedCharKey || primaryCharKey);
-    }
-  }
-
-  // Character detail: clicking a relationship node (or the agent touching a character) opens the
-  // modal; selectedCharKey also anchors the relationship-ring focus.
+  // Character detail: clicking a character card opens the modal.
   let selectedCharKey = $state(null);
   let modalCharKey = $state(null);
   function openCharModal(k) { if (!k) return; selectedCharKey = k; modalCharKey = k; }
@@ -248,21 +212,6 @@
         nature: r.nature, stance: r.stance || 'neutral', dynamic: r.dynamic || '',
       }))
   );
-
-  // Click a card on the canvas → open the chapter modal. Flat-beat stories use a
-  // synthetic '_board' arc, so route those to the storyboard.beats list instead.
-  function selectGraphNode(data) {
-    if (data.arcId === '_board') {
-      const i = parseInt(String(data.nodeId).slice(1), 10);
-      const beat = stories.current?.storyboard?.beats?.[i];
-      if (beat) regenModal = { flat: true, beatIdx: i, chapter: beat, chapterIdx: i };
-      return;
-    }
-    const arc = stories.current?.arcs?.[data.arcIdx];
-    const node = arc?.nodes?.[data.nodeId];
-    // data.nodeId is the dict key (e.g. 'n1') — pass it explicitly so saves work
-    if (node) openRegenModal(arc, data.arcIdx, data.nodeId, node, -1);
-  }
 
   // Primary character key (always locked in every arc)
   let primaryCharKey = $derived(
@@ -348,7 +297,7 @@
   }
 </script>
 
-<div class="page withchat"><div class="col">
+<div class="page"><div class="col">
 
   <!-- Header row: title (edit in place) + format badge + actions, one line -->
   <div class="title-row">
@@ -588,54 +537,26 @@
   {/if}
 
   {:else if tab === 'relationships'}
-    <!-- How the cast relate — click a face to open the character card -->
-    <StoryCanvas layer="relationships" story={st} storyKey={st.key} cast={castOptions}
-                 focus={selectedCharKey || primaryCharKey} onSelectChar={openCharModal} />
+    <!-- Cast grouped by where they live (map locations). Bonds show as chips; click a face to
+         open the card. Replaces the old relationship ring. -->
+    <LocationRoster cast={castOptions} locations={st.locations || []}
+                    relationships={st.relationships || []} addItems={castAddItems}
+                    onSelect={openCharModal} onSetHome={setCharHome} onAddHere={addCharToLocation} />
 
   {:else if tab === 'map'}
-    <!-- How places connect — the canvas up top, its data (editors) below -->
-    <StoryCanvas layer="map" story={st} storyKey={st.key} cast={castOptions}
-                 onSelectNode={selectGraphNode} />
+    <!-- The world's locations, grouped by area — each edits in place + carries its scene image. -->
+    <LocationsPanel storyKey={st.key} locations={st.locations || []} start={st.start || ''}
+                    onChange={saveSoon} onAdd={addLocation} onRemove={removeLocationById} onSetStart={setStart} />
 
-      <Section icon="📍" title="Locations" count={(st.locations || []).length || ''}>
-        <p class="hint">The world’s bare places (no people/events). Pick an <b>area</b> to nest a location inside a larger region — a light map, no coordinates.</p>
-        {#each st.locations || [] as loc, i (loc.id)}
-          <div class="loc-box" class:start={st.start === loc.id} class:child={loc.parent}>
-            <div class="loc-top">
-              <input class="ip fld title" bind:value={loc.name} oninput={saveSoon} placeholder="location name" />
-              <select class="area" bind:value={loc.parent} onchange={saveSoon} title="Group under an area">
-                <option value="">— top level —</option>
-                {#each (st.locations || []).filter((o) => o.id !== loc.id) as o (o.id)}<option value={o.id}>in {o.name || o.id}</option>{/each}
-              </select>
-              <label class="startsel"><input type="radio" name="estart" checked={st.start === loc.id}
-                onchange={() => { stories.current.start = loc.id; saveSoon(); }} /> start</label>
-              <button class="cast-rm" onclick={() => removeLocation(i)} title="Delete">×</button>
-            </div>
-            <input class="ip fld" bind:value={loc.description} oninput={saveSoon} placeholder="description (objective, no people)" />
-            <div class="bgrow">
-              <input class="ip fld" bind:value={loc.background_prompt} oninput={saveSoon} placeholder="background prompt — pure environment, Danbooru tags" />
-              <button class="ghost xs" onclick={() => tagifyBg(loc)} disabled={tagging[loc.id]} title="convert prose → tags">{tagging[loc.id] ? '…' : '⇥ tagify'}</button>
-            </div>
-          </div>
-        {/each}
-        <button class="add-loc" onclick={addLocation}>+ Add a location</button>
-      </Section>
-
-      <Section icon="🗺" title="Places & scenes" count={(st.places || []).length || ''}>
-        <p class="hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
-        <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
-      </Section>
+    <Section icon="🗺" title="Places & scenes" count={(st.places || []).length || ''}>
+      <p class="hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
+      <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
+    </Section>
   {/if}
 
 </div></div>
 
-<!-- Voice story agent (Phase 1): speak an edit; it applies via graph-ops + highlights the change -->
-<AgentChat storyKey={st.key} primaryChar={primaryCharKey} syncMode={chatMode} onApplied={handleApplied} onSpeaker={(s) => speaker = s} />
-{#if agentMsg}
-  <div class="agent-toast">{agentMsg}</div>
-{/if}
-
-<!-- Character detail modal — opens on a node click or when the agent modifies a character -->
+<!-- Character detail modal — opens on a node click or when a character card is clicked -->
 {#if modalChar}
   <CharacterModal char={modalChar} bonds={modalBonds} storyKey={st.key} onClose={closeCharModal} />
 {/if}
@@ -671,8 +592,6 @@
 <style>
   /* ── Layout ───────────────────────────────────────────────────────────────── */
   .page { padding: 0; }
-  /* Make room for the docked AgentChat sidebar (340px + gutter). */
-  .page.withchat { padding-left: 356px; }
   .col  { display: flex; flex-direction: column; gap: 14px; }
 
   /* ── Actions ──────────────────────────────────────────────────────────────── */
@@ -737,23 +656,9 @@
   .ip-themes  { flex: 1; min-width: 200px; font-size: 12.5px; }
   textarea.ip { resize: vertical; min-height: 38px; line-height: 1.55; }
 
-  /* ── Cast roster + locations editors ──────────────────────────────────────── */
+  /* ── Cast roster ──────────────────────────────────────────────────────────── */
   .cast-roster { display: flex; flex-wrap: wrap; gap: 6px; }
   .addrow { display: flex; gap: 8px; align-items: center; margin-top: 8px; }
-  .loc-box { border: 1px solid var(--border-soft); border-radius: 10px; padding: 9px 10px;
-             background: var(--panel); display: flex; flex-direction: column; gap: 6px; }
-  .loc-box.start { border-color: var(--accent); }
-  .loc-box.child { margin-left: 18px; border-left: 2px solid var(--border); }
-  .loc-top { display: flex; align-items: center; gap: 7px; }
-  .loc-top .title { flex: 1; font-weight: 650; }
-  .area { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border-soft);
-          border-radius: 6px; padding: 4px 6px; max-width: 150px; }
-  .startsel { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
-  .bgrow { display: flex; align-items: center; gap: 7px; }
-  .add-loc { align-self: flex-start; font-size: 12.5px; padding: 6px 12px; border-radius: 8px;
-             background: var(--elev); border: 1px dashed var(--border); color: var(--muted); }
-  .add-loc:hover { border-color: var(--accent); color: var(--accent); }
-  .xs { font-size: 11px; padding: 3px 8px; }
 
   /* ── Chips ────────────────────────────────────────────────────────────────── */
   .chip {
@@ -773,14 +678,6 @@
     font-weight: 600;
   }
   .cast-chip { font-size: 10.5px; }
-
-  /* ── Voice agent toast ────────────────────────────────────────────────────── */
-  .agent-toast {
-    position: fixed; left: 20px; bottom: 74px; z-index: 60; max-width: 320px;
-    background: var(--panel); border: 1px solid var(--accent); border-radius: 9px;
-    padding: 8px 12px; font-size: 12.5px; color: var(--text);
-    box-shadow: 0 6px 24px rgba(0,0,0,.3);
-  }
 
   /* ── Memory window slider ─────────────────────────────────────────────────── */
   .win-row { display: flex; align-items: center; gap: 12px; max-width: 460px; }
