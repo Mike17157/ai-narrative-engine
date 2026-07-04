@@ -19,6 +19,22 @@ from ...config.schema import LoreEntry
 
 FACET_TYPES = ("life", "saying", "reaction")
 
+# Depth tiers — how deeply an exemplar is held, which gates who ever sees it in play
+# (surface = anyone; known = people who know them; secret = self / plot-revealed only).
+# Stored as a `tier:<t>` keyword on the entry (no schema/DB change). See play_context gating.
+FACET_TIERS = ("surface", "known", "secret")
+
+
+def entry_tier(entry) -> str:
+    """Read an exemplar's depth tier from its keywords (default 'surface' — legacy/untagged
+    exemplars stay fully visible, so gating is opt-in via re-deepen)."""
+    for kw in (getattr(entry, "keywords", None) or []):
+        if isinstance(kw, str) and kw.startswith("tier:"):
+            t = kw[5:].strip().lower()
+            if t in FACET_TIERS:
+                return t
+    return "surface"
+
 # The interview agent. It co-develops ONE character with the writer, proposing plausible
 # backstory and reacting — then commits agreed beats as exemplars (the `facets` array).
 INTERVIEW_SYSTEM = (
@@ -88,9 +104,10 @@ def _slug(text: str) -> str:
     return s[:40] or "facet"
 
 
-def facet_to_entry(facet: dict) -> LoreEntry | None:
+def facet_to_entry(facet: dict, source: str = "interview") -> LoreEntry | None:
     """Map a generated facet dict → a LoreEntry in the character's lorebook. `facet` groups
-    by type so the cards UI can section them and retrieval can cap one-per-type per turn."""
+    by type so the cards UI can section them and retrieval can cap one-per-type per turn.
+    A `tier` (surface/known/secret) rides along as a `tier:<t>` keyword for play-time gating."""
     ftype = (facet.get("type") or "").strip().lower()
     if ftype not in FACET_TYPES:
         return None
@@ -99,13 +116,16 @@ def facet_to_entry(facet: dict) -> LoreEntry | None:
     if not content:
         return None
     kws = [str(k).strip() for k in (facet.get("keywords") or []) if str(k).strip()]
+    tier = (facet.get("tier") or "").strip().lower()
+    if tier in FACET_TIERS:
+        kws.append(f"tier:{tier}")
     return LoreEntry(
         id=f"{ftype}-{_slug(title or content)}",
         title=title or ftype.capitalize(),
         keywords=kws,
         content=content,
         facet=ftype,
-        source="interview",
+        source=source,
     )
 
 
@@ -177,6 +197,107 @@ def harvest_prompt(name: str, transcript: list[dict], existing: list[LoreEntry])
         f"CHARACTER: {name}\n\nALREADY ESTABLISHED (don't duplicate):\n{_facet_digest(existing)}\n\n"
         f"SCENE TRANSCRIPT:\n{log}\n\n"
         f"Distil NEW exemplars about {name} that this scene revealed. Output structured JSON only.")
+
+
+# ── Deepen: harness → portrait (REASONED) → exemplar bank ───────────────────────────
+# Two phases, because a fixed slot-contract produces slot-shaped content. Phase 1 is a
+# psychologist actually THINKING the person through (reasoning enabled, free prose — mechanism,
+# not labels). Phase 2 writes the exemplar bank FROM that portrait, and the model decides which
+# moments this particular person needs captured. See [[bond-depth-weave]].
+
+PORTRAIT_SYSTEM = (
+    "You are thinking one fictional person through as a real psychological case — a clinician's "
+    "working portrait, not a literary character sheet. Work from MECHANISM, not labels: given "
+    "what happened to them, how exactly did it produce who they are now? Trace the causal chain. "
+    "Attend to what theory-driven writing misses:\n"
+    "- Real people are INCONSISTENT: they violate their own patterns, and the violations have "
+    "their own logic. Find where this person contradicts themselves.\n"
+    "- The defense has a DAILY COST — what it makes them bad at, what it ruins slowly.\n"
+    "- The gap between how they feel from inside and how they read from outside.\n"
+    "- What they're like ALONE, with no one to perform for.\n"
+    "- What the person closest to them would say about them — and which part of it they'd deny.\n"
+    "- What they genuinely enjoy, unconnected to any of it — pleasure that isn't symptom.\n"
+    "- How they'd describe their own past, versus what actually happened.\n"
+    "THE SECRET must be genuinely BURIED and layered — reason through it in depth: what they let "
+    "the world see, what they admit only to themselves at 3am, and the thing underneath that they'd "
+    "die before saying aloud — and WHY it's that deep (what it would cost them if it surfaced, who "
+    "it would hurt). A shallow secret is the biggest failure here. "
+    "Write plainly and concretely, era-appropriate, no clinical jargon in the final portrait. "
+    "600-900 words of prose. This portrait is working material for a writer — make it the "
+    "truest version of this person you can reason your way to."
+)
+
+
+def portrait_prompt(name: str, persona: str, harness: dict, world: str = "",
+                    philosophy: str = "") -> str:
+    h = {k: (harness.get(k) or "").strip() for k in
+         ("role", "temperament", "want", "lie", "wound", "secret", "good_memory")}
+    hl = "\n".join(f"  {k}: {v}" for k, v in h.items() if v) or "(thin)"
+    return "\n\n".join(filter(None, [
+        f"CHARACTER: {name}",
+        f"PERSONA:\n{(persona or '')[:600]}",
+        f"KNOWN ANCHORS (the given facts — reason from these, don't contradict them):\n{hl}",
+        f"WORLD:\n{world}" if world else "",
+        f"THE STORY'S CENTRAL QUESTION (their false belief is a stance on it):\n{philosophy}"
+        if philosophy else "",
+        f"Think {name} through and write the portrait.",
+    ]))
+
+
+DEEPEN_SYSTEM = (
+    "You are given a psychological PORTRAIT of one person. Write the exemplar bank a roleplay "
+    "model will imitate to BE them, scene after scene, consistently. YOU decide which moments "
+    "matter — capture THIS person, not a checklist: the scenes that made them, the lines only "
+    "they would say, the reactions that give them away. Include their inconsistencies and what "
+    "they're like alone, not just their patterns. 12-20 exemplars, a mix of: life (a lived "
+    "2-4 sentence scene from their past, specific enough to have happened once), saying (a line "
+    "in their exact voice), reaction ('When <situation> → they <observable behavior>').\n"
+    "TIER each exemplar by how DEEPLY it's held. This is the ENGINE of the character, so get it "
+    "right:\n"
+    "  surface — their daylight face; anyone who meets them reads this.\n"
+    "  known   — what someone who actually KNOWS them has learned: softer habits, tells, history "
+    "they share with people they trust.\n"
+    "  secret  — the hidden truth itself, stated plainly (who they really are, what they did, what "
+    "they know). This is the ANSWER KEY, used only when the story reveals it — it is NEVER shown to "
+    "the narrator during ordinary play. A few of these.\n\n"
+    "THE CRITICAL CRAFT: the narrator only ever sees SURFACE and KNOWN. So those exemplars must "
+    "ALREADY be the OBSERVABLE SHADOW of the secret — the character must be fully playable and "
+    "behave consistently with their hidden life from surface+known ALONE. For each secret, write "
+    "the surface/known tells it would cast: the topics they steer around, the question that makes "
+    "them go still, the thing they do too carefully, the over-correction, the flat deflection they "
+    "give when pushed, the small lie they keep smooth. Someone reading only the surface should "
+    "sense something is off and could even guess — WITHOUT the secret ever being stated. Do NOT "
+    "rely on the narrator knowing the secret; it won't. Bake the consequence into the behavior.\n\n"
+    "Texture: ordinary and lived, never twee — real rooms, chores, weather; no invented signature "
+    "quirks. All sayings are ONE voice — same vocabulary, rhythm, education, era. 3-6 retrieval "
+    "keywords each. Output structured JSON only."
+)
+
+# Deepen emits tiered facets; the base _FACET_ITEM stays untiered for harvest/interview.
+_DEEPEN_FACET_ITEM = {
+    "type": "object", "additionalProperties": False,
+    "required": ["type", "tier", "title", "keywords", "content"],
+    "properties": {
+        "type": {"type": "string", "enum": list(FACET_TYPES)},
+        "tier": {"type": "string", "enum": list(FACET_TIERS)},
+        "title": {"type": "string"},
+        "keywords": {"type": "array", "items": {"type": "string"}},
+        "content": {"type": "string"},
+    },
+}
+DEEPEN_FACETS_SCHEMA = {
+    "type": "object", "additionalProperties": False, "required": ["facets"],
+    "properties": {"facets": {"type": "array", "items": _DEEPEN_FACET_ITEM}},
+}
+
+
+def deepen_prompt(name: str, portrait: str, existing: list[LoreEntry]) -> str:
+    return "\n\n".join([
+        f"CHARACTER: {name}",
+        f"PORTRAIT (the person to capture):\n{portrait}",
+        f"ALREADY ESTABLISHED (don't duplicate):\n{_facet_digest(existing)}",
+        f"Write the exemplar bank for {name}.",
+    ])
 
 
 # ── Contrast: sharpen what makes ONE character distinct from the rest of the cast ──

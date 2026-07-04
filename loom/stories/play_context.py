@@ -301,14 +301,49 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # their per-character lorebook. This is the HEAVIEST per-character block, so it's BUDGETED by
     # scene role: POV gets the most, characters active in the current beat get some, present-but-
     # passive get one — and at most a few characters carry voice at all. Off-screen/absent get none.
+    # FAMILIARITY GATE — the narration only reveals what THE OBSERVER (the player's own character,
+    # else the POV) could know about each character. surface = anyone; known = people they're
+    # bonded to; secret = self only (a character's buried layer never leaks through mere presence —
+    # it surfaces through the plot). Keeps deep secrets deep. See [[bond-depth-weave]].
+    from .pipeline.character_scaffold import entry_tier as _entry_tier
+    _observer = player_char or pov_key
+    _bonded = set()
+    for _r in (st.relationships or []):
+        if _r.source == _observer:
+            _bonded.add(_r.target)
+        elif _r.target == _observer:
+            _bonded.add(_r.source)
+
+    def _allowed_tiers(k):
+        # SECRET tier is NEVER handed to the narrator (AI can't hold a secret it can see — it leaks
+        # or confabulates). Consistency comes from surface/known being authored as the behavioral
+        # SHADOW of the secret. Secret content is director/reveal-only. See [[bond-depth-weave]].
+        if k == _observer or k in _bonded:
+            return {"surface", "known"}              # your own / an intimate's known layer
+        return {"surface"}                           # a stranger reads only the daylight face
+
     def _embody(k, n):
         c = ctx.base_settings.characters.get(k)
         if c is None or n <= 0:
             return ""
         scope = re.sub(r"[^\w\-]+", "_", str(k))
-        ex = _LS0.top_by_priority(ctx.root, scope, n)
+        allowed = _allowed_tiers(k)
+        # Pull a generous pool, then gate by tier, then apply the per-role budget — so a hidden
+        # secret exemplar doesn't just eat a slot and leave the character underspecified.
+        pool = _LS0.top_by_priority(ctx.root, scope, max(n * 4, 24))
+        ex = [e for e in pool if _entry_tier(e) in allowed][:n]
         lines = "\n".join(f"    · [{e.facet or 'life'}] {e.content}" for e in ex if e.content)
-        return f"- {c.name}:\n{lines}" if lines else ""
+        block = f"- {c.name}:\n{lines}" if lines else ""
+        # Behavioral backstop (NOT the secret — the model never sees that): if this character holds
+        # closed-off ground, tell the narrator they DEFLECT there rather than produce an answer, so
+        # a pointed question doesn't get a confabulated revelation. This is who they are, per their
+        # own tells above — not a rule about a secret the model isn't allowed to know.
+        if any(_entry_tier(e) == "secret" for e in pool):
+            guard = (f"    · [closed] {c.name} has ground they keep closed off. Pushed onto it, they "
+                     f"deflect, deny, go quiet, or change the subject — they do NOT have a "
+                     f"revelation to give in this scene, and never invent one. Play the deflection.")
+            block = (block + "\n" + guard) if block else f"- {c.name}:\n{guard}"
+        return block
     # priority order: POV, then active speakers, then present-passive — capped to a few.
     _voice_order = ([pov_key] if pov_key in on_screen else []) \
         + [k for k in _cast_keys if k in active and k != pov_key] \
@@ -436,6 +471,23 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
             _rel_block = ("RELATIONSHIPS (only those on stage or just mentioned — honor these "
                           "dynamics in how they speak and act toward each other):\n" + "\n".join(_plines))
             system += "\n\n" + _rel_block
+
+    # RELATIONSHIP LEVELS: the daylight read above is what anyone watching the pair would see.
+    # The UNDERCURRENT (a bond's potential/trajectory — the buried weave) is gated like a secret:
+    # the observer FEELS the unspoken layer of THEIR OWN bonds (play its weight) but never gets the
+    # payload, and never sees other people's undercurrents at all. Reveals are the story's to time.
+    _uc = []
+    for _r in _relset:
+        _s, _t = _r.get("source"), _r.get("target")
+        if _observer and _observer in (_s, _t) and ((_r.get("potential") or _r.get("trajectory"))):
+            _other = _t if _s == _observer else _s
+            if _other in _focus:
+                _uc.append(_cname(_other))
+    if _uc:
+        system += ("\n\n[SEALED] Something unspoken runs beneath " + _cname(_observer) + "'s bond with "
+                   + ", ".join(sorted(set(_uc))) + " — let it weight the scene (the pauses, what goes "
+                   "unsaid), but do NOT name or reveal what it is. That surfaces only when the story "
+                   "decides, not under pressure in this moment.")
 
     # POINT-OF-REFERENCE facts: when the player's CURRENT message overlaps an established
     # particular, restate it right next to the action — a fact in the system lane can be drifted

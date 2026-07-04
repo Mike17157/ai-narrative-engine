@@ -944,6 +944,18 @@ class AppContext:
                 return skey
         return None
 
+    def art_style(self, story_key: str | None = None, char_key: str | None = None) -> str:
+        """Layer 0 of the image card: the art style every render in a story opens with.
+        Resolution: the story's authored art_style (Overview tab) → the global broadcast
+        anchor → the built-in default. A char_key resolves its owning story first."""
+        from .services.prompts import style_anchor
+        skey = story_key or (self._char_owner(char_key) if char_key else None)
+        st = self.base_settings.stories.get(skey) if skey else None
+        s = (getattr(st, "art_style", "") or "").strip()
+        if s:
+            return s if s.endswith(".") else s + "."
+        return style_anchor(self.root)
+
     def _read_character_data(self, key: str) -> dict | None:
         from ..stories import story_db as SDB
         owner = self._char_owner(key)

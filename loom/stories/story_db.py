@@ -26,7 +26,9 @@ CREATE TABLE IF NOT EXISTS cast_members (character TEXT PRIMARY KEY, is_primary 
                                          outfit TEXT, home TEXT DEFAULT '', ord INTEGER DEFAULT 0);
 CREATE TABLE IF NOT EXISTS relationships (
   id TEXT PRIMARY KEY, source TEXT, target TEXT, nature TEXT DEFAULT '', dynamic TEXT DEFAULT '',
-  stance TEXT DEFAULT 'neutral', note TEXT DEFAULT '', value INTEGER);
+  stance TEXT DEFAULT 'neutral', note TEXT DEFAULT '', value INTEGER,
+  target_stance TEXT DEFAULT '', target_dynamic TEXT DEFAULT '',
+  potential TEXT DEFAULT '', trajectory TEXT DEFAULT '');
 CREATE INDEX IF NOT EXISTS rel_src ON relationships(source);
 CREATE INDEX IF NOT EXISTS rel_tgt ON relationships(target);
 CREATE TABLE IF NOT EXISTS locations (id TEXT PRIMARY KEY, parent TEXT DEFAULT '', json TEXT, ord INTEGER DEFAULT 0);
@@ -44,7 +46,15 @@ _inited: set[str] = set()
 
 # Additive column migrations for DBs created before a column existed. Each is idempotent —
 # a duplicate-column error just means an up-to-date DB, so we swallow it.
-_MIGRATIONS = ("ALTER TABLE cast_members ADD COLUMN home TEXT DEFAULT ''",)
+_MIGRATIONS = (
+    "ALTER TABLE cast_members ADD COLUMN home TEXT DEFAULT ''",
+    # Relationship DEPTH fields (schema.py had them; the DB silently dropped them):
+    # per-side reads + the hidden undercurrent + where the bond goes when it surfaces.
+    "ALTER TABLE relationships ADD COLUMN target_stance TEXT DEFAULT ''",
+    "ALTER TABLE relationships ADD COLUMN target_dynamic TEXT DEFAULT ''",
+    "ALTER TABLE relationships ADD COLUMN potential TEXT DEFAULT ''",
+    "ALTER TABLE relationships ADD COLUMN trajectory TEXT DEFAULT ''",
+)
 
 
 def _conn(path):
@@ -87,10 +97,12 @@ def save_story(path, story: dict, characters: dict | None = None) -> None:
         con.execute("INSERT INTO cast_members(character,is_primary,outfit,home,ord) VALUES(?,?,?,?,?)",
                     (m.get("character"), 1 if m.get("primary") else 0, m.get("outfit"), m.get("home", ""), i))
     for r in story.get("relationships") or []:
-        con.execute("INSERT INTO relationships(id,source,target,nature,dynamic,stance,note,value) "
-                    "VALUES(?,?,?,?,?,?,?,?)",
+        con.execute("INSERT INTO relationships(id,source,target,nature,dynamic,stance,note,value,"
+                    "target_stance,target_dynamic,potential,trajectory) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                     (r.get("id"), r.get("source"), r.get("target"), r.get("nature", ""),
-                     r.get("dynamic", ""), r.get("stance", "neutral"), r.get("note", ""), r.get("value")))
+                     r.get("dynamic", ""), r.get("stance", "neutral"), r.get("note", ""), r.get("value"),
+                     r.get("target_stance", ""), r.get("target_dynamic", ""),
+                     r.get("potential", ""), r.get("trajectory", "")))
     for i, l in enumerate(story.get("locations") or []):
         con.execute("INSERT INTO locations(id,parent,json,ord) VALUES(?,?,?,?)",
                     (l.get("id"), l.get("parent", ""), json.dumps(l, ensure_ascii=False), i))
@@ -104,9 +116,15 @@ def save_story(path, story: dict, characters: dict | None = None) -> None:
     con.commit()
 
 
+_REL_COLS = ("id,source,target,nature,dynamic,stance,note,value,"
+             "target_stance,target_dynamic,potential,trajectory")
+
+
 def _rel_row(row) -> dict:
-    i, s, t, n, d, st, nt, v = row
-    out = {"id": i, "source": s, "target": t, "nature": n, "dynamic": d, "stance": st, "note": nt}
+    i, s, t, n, d, st, nt, v, ts, td, po, tr = row
+    out = {"id": i, "source": s, "target": t, "nature": n, "dynamic": d, "stance": st, "note": nt,
+           "target_stance": ts or "", "target_dynamic": td or "",
+           "potential": po or "", "trajectory": tr or ""}
     if v is not None:
         out["value"] = v
     return out
@@ -122,7 +140,7 @@ def load_story(path) -> tuple[dict, dict]:
                      for (c, p, o, h) in con.execute(
                          "SELECT character,is_primary,outfit,home FROM cast_members ORDER BY ord").fetchall()]
     story["relationships"] = [_rel_row(r) for r in con.execute(
-        "SELECT id,source,target,nature,dynamic,stance,note,value FROM relationships").fetchall()]
+        f"SELECT {_REL_COLS} FROM relationships").fetchall()]
     story["locations"] = [json.loads(j) for (j,) in con.execute(
         "SELECT json FROM locations ORDER BY ord").fetchall()]
     for grp in _JSON_LISTS:
@@ -143,7 +161,7 @@ def relationships_for(path, keys) -> list[dict]:
         return []
     qs = ",".join("?" * len(keys))
     rows = _conn(path).execute(
-        f"SELECT id,source,target,nature,dynamic,stance,note,value FROM relationships "
+        f"SELECT {_REL_COLS} FROM relationships "
         f"WHERE source IN ({qs}) OR target IN ({qs})", keys + keys).fetchall()
     return [_rel_row(r) for r in rows]
 
@@ -257,7 +275,10 @@ if __name__ == "__main__":   # round-trip self-check (ponytail: one runnable che
         "cast": [{"character": "leo", "primary": True},
                  {"character": "mara", "primary": False, "outfit": "casual", "home": "l1"}],
         "relationships": [{"id": "r1", "source": "leo", "target": "mara", "nature": "rival",
-                           "dynamic": "old grudge", "stance": "strained", "note": "leo owes mara"}],
+                           "dynamic": "old grudge", "stance": "strained", "note": "leo owes mara",
+                           "target_stance": "warm", "target_dynamic": "teases him about it",
+                           "potential": "mara forgave the debt years ago and never said",
+                           "trajectory": "from grudge to shame to repair"}],
         "locations": [{"id": "l1", "name": "Library", "parent": ""}],
         "scenes": [{"id": "s1", "name": "Opening"}], "places": [], "arcs": [{"id": "a1", "name": "Arc 1"}],
         "connections": [{"id": "c1", "source": "l1", "target": "l1", "label": "loop"}],
@@ -269,6 +290,9 @@ if __name__ == "__main__":   # round-trip self-check (ponytail: one runnable che
     assert s2["cast"][0] == {"character": "leo", "primary": True}, s2["cast"]
     assert s2["cast"][1]["outfit"] == "casual" and s2["cast"][1]["home"] == "l1", s2["cast"]
     assert s2["relationships"][0]["nature"] == "rival" and s2["relationships"][0]["stance"] == "strained"
+    r0 = s2["relationships"][0]   # DEPTH fields must survive the round-trip
+    assert r0["target_stance"] == "warm" and r0["potential"].startswith("mara forgave"), r0
+    assert r0["trajectory"] == "from grudge to shame to repair", r0
     assert s2["scenes"][0]["name"] == "Opening" and s2["arcs"][0]["id"] == "a1"
     assert c2["leo"]["name"] == "Leo" and c2["mara"]["system"] == "sharp"
     # the indexed pull

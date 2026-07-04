@@ -26,7 +26,7 @@
 
 <div class="page castpage"><div class="col full fillh">
   <div class="stage-wrap">
-    <CharacterCatalogue storyKey={st.key} {cast} locations={st.locations || []}
+    <CharacterCatalogue storyKey={st.key} {cast}
                         onChanged={reload} onCharacter={(k) => onStage = k} />
   </div>
 </div></div>

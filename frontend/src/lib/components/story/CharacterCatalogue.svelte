@@ -1,15 +1,14 @@
 <script>
   // Character catalogue: a circular character-select carousel. Rotate through the whole cast; the
-  // centered character stands against the chosen location backdrop and AUTO-CYCLES through their
-  // rendered emotion sprites (personality-tinged — see the expression generator). An outfit rail
-  // swaps which outfit's sprites show, with quick-add for a standard set (Casual/Swimsuit/Nude…).
+  // centered character stands on a studio backdrop and shows the selected emotion sprite. An outfit
+  // rail swaps which outfit's sprites show, with quick-add for a standard set (Casual/Swimsuit/Nude…).
   // 3D coverflow is pure CSS so the cards stay live/interactive. See [[character-catalogue]].
   import { get, post } from '$lib/api.js';
   import { startJob, limitedPost } from '$lib/app.svelte.js';
   import GenStream from '$lib/components/shared/GenStream.svelte';
   import EmblaCarousel from 'embla-carousel';
 
-  let { storyKey, cast = [], locations = [], onChanged = () => {}, onCharacter = () => {} } = $props();
+  let { storyKey, cast = [], onChanged = () => {}, onCharacter = () => {} } = $props();
 
   // ── Character rotation ───────────────────────────────────────────────────────
   let center = $state(0);
@@ -30,9 +29,6 @@
   function go(d) { if (cast.length) select((center + d + cast.length) % cast.length); }
   function onKey(e) { if (e.key === 'ArrowLeft') go(-1); else if (e.key === 'ArrowRight') go(1); }
 
-  // Backdrop picker — purely visual (outfits are selected outfit-by-outfit at the top bar).
-  let locId = $state('');
-  let bgUrl = $derived(locations.find((l) => l.id === locId)?.background || '');
   // A character's default look = their EVERYDAY outfit (first non-base/swim), never the swim base.
   function everydayIdx(k) {
     const outs = portraits[k]?.outfits || [];
@@ -211,6 +207,18 @@
   }
   // Re-curate this outfit's register set from scratch (v4pro reads its attire + persona).
   const recomposeRange = () => saveRange({ compose: true });
+
+  // ── ≣ LAYERS — the image card, inspectable: every layer that stacks into the selected sprite's
+  // prompt (style ← Overview, identity/outfit/emotion/pose/face ← Cast, final ← composer), like a
+  // workflow you can read. Dry-run endpoint; nothing renders.
+  let stack = $state(null);          // { loading, emotion, layers: [{id,label,source,text}] } | null
+  async function showLayers() {
+    const emo = selEmo || 'neutral';
+    stack = { loading: true, emotion: emo, layers: [] };
+    const r = await post(`/characters/${charKey}/sprite-stack`, { outfit_id: outfit?.id, emotion: emo });
+    if (r.ok && r.data?.layers) stack = { loading: false, emotion: emo, layers: r.data.layers };
+    else { stack = null; err = r.data?.error || 'could not build the layer stack'; }
+  }
   // Toggle one emotion in/out — cells follow immediately.
   function toggleEmo(key) {
     const cur = new Set(outfit?.range || []);
@@ -242,19 +250,8 @@
     {/if}
   </div>
 
-  <!-- Backdrop — visual only -->
-  <div class="bar sub">
-    <span class="blbl">Backdrop</span>
-    <button class="chip" class:on={locId === ''} onclick={() => locId = ''}>⬚ Studio</button>
-    {#each locations as l (l.id)}
-      <button class="chip" class:on={locId === l.id} onclick={() => locId = l.id} title={l.description || l.name}>
-        {#if l.background}<img src={l.background} alt={l.name} />{/if}{l.name}
-      </button>
-    {/each}
-  </div>
-
-  <!-- Stage: backdrop + 3D character coverflow -->
-  <div class="stage" class:studio={!bgUrl} style={bgUrl ? `background-image:url(${bgUrl})` : ''}>
+  <!-- Stage: 3D character coverflow on a studio backdrop -->
+  <div class="stage studio">
     {#if !cast.length}
       <div class="empty">No cast yet.</div>
     {:else}
@@ -313,6 +310,9 @@
       <b>🎭 {outfit.name}</b>
       <span class="hint">{shownEmos.filter((e) => e.url).length}/{shownEmos.length} rendered · click a card to put it on stage</span>
       <span class="sp"></span>
+      <button class="plan" onclick={showLayers}
+              title="Inspect the image card: every prompt layer that stacks into the selected sprite (style ← Overview, identity/outfit/emotion ← Cast) plus the final composed prompt">
+        ≣ Layers</button>
       <button class="plan" onclick={recomposeRange} disabled={rangeBusy}
               title="Re-curate this outfit's emotion set for its register (v4pro reads the attire + persona)">
         {rangeBusy ? '🎭 Curating…' : '🎭 Recompose set'}</button>
@@ -361,6 +361,36 @@
   {/if}
 </div>
 
+<!-- ≣ LAYERS — the image card as a readable stack: each layer tagged with the tab that owns it,
+     flowing down into the final composed prompt + the face-detailer pass. -->
+{#if stack}
+  <div class="lay-back" role="button" tabindex="-1" onclick={() => (stack = null)} onkeydown={(e) => e.key === 'Escape' && (stack = null)}>
+    <div class="lay-modal" role="dialog" onclick={(e) => e.stopPropagation()}>
+      <div class="lay-head">
+        <b>≣ Image card — {charName} · {outfit?.name} · {stack.emotion}</b>
+        <span class="sp"></span>
+        <button class="lay-x" onclick={() => (stack = null)}>×</button>
+      </div>
+      {#if stack.loading}
+        <div class="lay-loading"><span class="spin"></span> composing the final prompt…</div>
+      {:else}
+        <div class="lay-stack">
+          {#each stack.layers as l, i (l.id)}
+            {#if i > 0}<div class="lay-arrow">↓</div>{/if}
+            <div class="lay-card" class:final={l.id === 'final'} class:face={l.id === 'face'}>
+              <div class="lay-meta">
+                <span class="lay-label">{l.label}</span>
+                <span class="lay-src src-{l.source}">{l.source}</span>
+              </div>
+              <div class="lay-text">{l.text || '—'}</div>
+            </div>
+          {/each}
+        </div>
+      {/if}
+    </div>
+  </div>
+{/if}
+
 <style>
   .cat { display: flex; flex-direction: column; height: 100%; min-height: 0; }
 
@@ -372,7 +402,6 @@
           cursor: pointer; white-space: nowrap; }
   .chip:hover { color: var(--text); border-color: var(--border); }
   .chip.on { color: var(--text); border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, var(--elev)); }
-  .chip img { width: 30px; height: 20px; border-radius: 5px; object-fit: cover; flex: none; }
 
   .stage { position: relative; flex: 1; min-height: 0; overflow: hidden;
            background-size: cover; background-position: center;
@@ -419,8 +448,7 @@
   .err { position: absolute; bottom: 12px; left: 50%; transform: translateX(-50%); z-index: 10;
          background: var(--bad, #b54); color: #fff; font-size: 12px; padding: 5px 12px; border-radius: 8px; }
 
-  /* Bars: outfits on top (with base thumbs), backdrop beneath (visual only). */
-  .bar.sub { padding-top: 5px; }
+  /* Outfit rail (with sprite thumbs). */
   .ochip .oimg { width: 26px; height: 34px; border-radius: 5px; object-fit: cover; object-position: top; flex: none; }
   .hint { font-size: 12px; color: var(--faint); font-style: italic; }
   .plan { font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 9px; background: none;
@@ -475,6 +503,36 @@
   .spin { width: 22px; height: 22px; border-radius: 50%; border: 3px solid rgba(255,255,255,.3);
           border-top-color: #fff; animation: spin .7s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ≣ Layers modal — the prompt stack, read top-to-bottom like a workflow. */
+  .lay-back { position: fixed; inset: 0; z-index: 90; background: rgba(0,0,0,.55);
+              display: grid; place-items: center; }
+  .lay-modal { width: min(680px, 94vw); max-height: 86vh; display: flex; flex-direction: column;
+               background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+               box-shadow: 0 18px 60px rgba(0,0,0,.5); overflow: hidden; }
+  .lay-head { display: flex; align-items: center; gap: 10px; padding: 11px 16px; font-size: 13px;
+              color: var(--text); border-bottom: 1px solid var(--border-soft);
+              background: color-mix(in srgb, var(--accent) 8%, var(--panel)); }
+  .lay-x { width: 24px; height: 24px; padding: 0; border-radius: 7px; background: none; border: none;
+           color: var(--muted); font-size: 16px; cursor: pointer; }
+  .lay-x:hover { color: var(--text); }
+  .lay-loading { display: flex; align-items: center; gap: 10px; padding: 28px 18px;
+                 font-size: 12.5px; color: var(--muted); }
+  .lay-loading .spin { border-color: rgba(109,140,255,.3); border-top-color: var(--accent); }
+  .lay-stack { overflow: auto; padding: 14px 18px 18px; display: flex; flex-direction: column; }
+  .lay-arrow { text-align: center; color: var(--faint); font-size: 12px; line-height: 1.6; }
+  .lay-card { border: 1px solid var(--border-soft); border-radius: 10px; background: var(--elev);
+              padding: 8px 11px; }
+  .lay-card.final { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--elev)); }
+  .lay-card.face { border-style: dashed; }
+  .lay-meta { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+  .lay-label { font-size: 11.5px; font-weight: 700; color: var(--text); }
+  .lay-src { font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+             padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border-soft); color: var(--faint); }
+  .lay-src.src-overview { color: var(--accent); border-color: var(--accent); }
+  .lay-src.src-compose { color: #d68f5c; border-color: #d68f5c; }
+  .lay-text { font-size: 11.5px; color: var(--muted); line-height: 1.55; white-space: pre-wrap;
+              word-break: break-word; }
 
   /* The wardrobe trigger + its live job stream, floated on the stage */
   .bigcta { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%); z-index: 10;

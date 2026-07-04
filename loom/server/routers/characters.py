@@ -787,11 +787,11 @@ def register(app, ctx):
         # prompt is authored by v4pro (appearance + clothing + pose + facial expression), with the
         # deterministic `sprite_prompt` as fallback. A re-roll (body.reroll) uses a random seed so
         # it actually differs.
-        from ..services.prompts import (sprite_prompt, style_anchor, compose_sprite_prompt,
+        from ..services.prompts import (sprite_prompt, compose_sprite_prompt,
                                          face_wildcard)
         from ..services.images import _set_seeds, SPRITE_SEED
         from ..services.emotions import EMOTION_LABELS, EMOTION_HINTS
-        _style = style_anchor(ctx.root)
+        _style = ctx.art_style(char_key=key)   # L0: story art style → global anchor
         provider, model_id = ctx.role_image_provider("sprite", body.get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
@@ -825,6 +825,63 @@ def register(app, ctx):
         if png is None:
             return JSONResponse({"error": "image model returned no image"}, status_code=500)
         return {"image": "data:image/png;base64," + base64.b64encode(png).decode()}
+
+    @app.post("/api/characters/{key}/sprite-stack")
+    async def sprite_stack(key: str, body: dict):
+        """The IMAGE CARD, inspectable: every layer that stacks into one sprite's prompt, tagged
+        with the tab that authored it (overview → cast), plus the final composed prompt and the
+        face-detailer pass. Dry-run — nothing renders. Same inputs as sprite-candidate.
+        Body: {outfit_id, emotion, compose?: false} — compose:false skips the LLM final."""
+        ch = ctx.base_settings.characters.get(key)
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        body = body or {}
+        oid, emotion = body.get("outfit_id"), body.get("emotion") or "neutral"
+        m = ctx.portrait_manifest(key)
+        outfit = next((o for o in m.get("outfits", []) if o.get("id") == oid), None)
+        if outfit is None:
+            return JSONResponse({"error": "no such outfit"}, status_code=404)
+        from ..services.prompts import sprite_prompt, compose_sprite_prompt, face_wildcard
+        from ..services.emotions import EMOTION_LABELS, EMOTION_HINTS
+        appearance = (ch.fields or {}).get("appearance") or ""
+        attire = outfit.get("attire_prompt") or outfit.get("prompt") or ""
+        expr = ((outfit.get("expression_prompts") or {}).get(emotion)
+                or (m.get("expression_prompts") or {}).get(emotion) or emotion or "")
+        owner = ctx._char_owner(key)
+        st = ctx.base_settings.stories.get(owner) if owner else None
+        story_styled = bool(st and (st.art_style or "").strip())
+        style = ctx.art_style(char_key=key)
+        pose, framing = ctx.pose_tags(key, emotion, outfit_id=oid), ctx.pose_framing(emotion)
+        label = EMOTION_LABELS.get(emotion, emotion)
+        layers = [
+            {"id": "style",    "label": "Art style",   "source": "overview" if story_styled else "global",
+             "text": style},
+            {"id": "identity", "label": "Identity",    "source": "cast", "text": appearance},
+            {"id": "outfit",   "label": "Outfit",      "source": "cast", "text": attire},
+            {"id": "emotion",  "label": f"Emotion — {label}", "source": "cast",
+             "text": EMOTION_HINTS.get(emotion) or expr},
+            {"id": "pose",     "label": "Pose & framing", "source": "cast",
+             "text": f"{pose} · {framing}".strip(" ·")},
+        ]
+        final, composed_by = "", "deterministic"
+        if body.get("compose", True):
+            _v4 = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+            if _v4 is not None and hasattr(_v4, "generate_text"):
+                try:
+                    final = compose_sprite_prompt(_v4, style=style, appearance=appearance, attire=attire,
+                                                  emotion_label=label,
+                                                  hint=(EMOTION_HINTS.get(emotion) or expr or emotion))
+                    composed_by = "deepseek-v4-pro"
+                except Exception:  # noqa: BLE001
+                    final = ""
+        if not final:
+            final = sprite_prompt(appearance, attire, expr, pose, framing, emotion=emotion, style=style)
+            composed_by = "deterministic"
+        layers.append({"id": "final", "label": f"Final prompt ({composed_by})", "source": "compose",
+                       "text": final})
+        layers.append({"id": "face", "label": "Face pass (detailer)", "source": "cast",
+                       "text": face_wildcard(appearance, label, emotion, expr)})
+        return {"layers": layers, "story": owner, "outfit": oid, "emotion": emotion}
 
     @app.post("/api/characters/{key}/sprite/select")
     def sprite_select(key: str, body: dict):
@@ -880,12 +937,12 @@ def register(app, ctx):
                 pass
             done = 0
 
-            from ..services.prompts import (sprite_prompt, style_anchor, compose_sprite_prompt,
+            from ..services.prompts import (sprite_prompt, compose_sprite_prompt,
                                              face_wildcard, _persona_text)
             from ..services.emotions import CORE_KEYS, EMOTION_LABELS, EMOTION_HINTS, INTIMACY_KEYS
             from ..services.images import SPRITE_SEED
             from loom.stories.pipeline import compose_affect_range as _compose_affect_range
-            _style = style_anchor(ctx.root)
+            _style = ctx.art_style(char_key=key)   # L0: story art style → global anchor
             _mature = bool(body.get("mature"))
             _emo_pool = set(EMOTION_KEYS)
             # Character-default range (fallback when an outfit has no register-specific range yet).
@@ -1056,8 +1113,8 @@ def register(app, ctx):
         # The base is just the NEUTRAL sprite — render it through the SAME `sprite_prompt` builder
         # as the emotions (identical scaffold: style anchor + appearance + attire + neutral pose),
         # or the base and its emotion sprites come out in different art styles (measured mismatch).
-        from ..services.prompts import sprite_prompt, style_anchor
-        _style = ((body or {}).get("style") or "").strip() or style_anchor(ctx.root)
+        from ..services.prompts import sprite_prompt
+        _style = ((body or {}).get("style") or "").strip() or ctx.art_style(char_key=key)
         appearance = "" if is_unified else ((ch.fields or {}).get("appearance") or "")
         prompt = sprite_prompt(appearance, attire, "",
                                ctx.pose_tags(key, "neutral"), ctx.pose_framing("neutral"),

@@ -398,6 +398,13 @@ class Story(BaseModel):
     premise: str = ""                        # one-paragraph synopsis
     tone: str = ""
     themes: list[str] = Field(default_factory=list)
+    # Layer 0 of every image this story renders (sprites AND location scenes): the art style,
+    # decided on the Overview tab. Empty → the global broadcast anchor (configs/image_style.json).
+    art_style: str = ""
+    # The premise's core components as REAL editable fields (protagonist / lie / inciting /
+    # opposition / stakes / texture) — structured overview-layer data narrative functions read
+    # and mutate. Replaces the read-only LLM coverage checker.
+    premise_parts: dict[str, str] = Field(default_factory=dict)
     # The bounded plot outline this experience was built from; scenes + cast are extracted from it.
     storyboard: Storyboard = Field(default_factory=Storyboard)
     cast: list[CastMember] = Field(default_factory=list)  # the roster (presence is dynamic)

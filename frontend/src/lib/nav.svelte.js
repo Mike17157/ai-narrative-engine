@@ -63,13 +63,17 @@ export function storiesTree(path = '') {
   const active = key && key !== 'new' ? list.find((s) => s.key === key) : null;
 
   if (active) {
+    // The editor's four surfaces are query-param tabs on the one /structure route (StoryWorkspace
+    // reads ?tab); they sit directly in the subnav alongside Cast · Play. No story-picker dropdown.
+    const t = (tab) => `/stories/${key}/structure?tab=${tab}`;
     return [
       { id: 'all', label: '← Stories', href: '/stories', match: 'exact' },
-      { id: 'story-picker', label: active.name || active.key, picker: true,
-        children: list.map((s) => ({ id: `sp-${s.key}`, label: s.name || s.key, href: `/stories/${s.key}/structure` })) },
-      { id: `${key}-structure`,   label: 'Structure',   href: `/stories/${key}/structure` },
-      { id: `${key}-cast`,        label: 'Cast',        href: `/stories/${key}/cast` },
-      { id: `${key}-play`,        label: '▶ Play',      href: `/stories/${key}/play` },
+      { id: `${key}-overview`,      label: 'Overview',      href: t('overview') },
+      { id: `${key}-plot`,          label: 'Plot',          href: t('plot') },
+      { id: `${key}-relationships`, label: 'Relationships', href: t('relationships') },
+      { id: `${key}-map`,           label: 'Map',           href: t('map') },
+      { id: `${key}-cast`,          label: 'Cast',          href: `/stories/${key}/cast` },
+      { id: `${key}-play`,          label: '▶ Play',        href: `/stories/${key}/play` },
     ];
   }
 

@@ -120,7 +120,8 @@ export function editStory() {
 let editSaveTimer = null, editSaving = false;
 function editPayload(e) {
   return { name: e.name, premise: e.premise, tone: e.tone, themes: e.themes,
-           storyboard: e.storyboard, cast: e.cast, locations: e.locations, start: e.start };
+           art_style: e.art_style, premise_parts: e.premise_parts, storyboard: e.storyboard,
+           cast: e.cast, locations: e.locations, start: e.start };
 }
 
 // Persist edits made directly to the loaded story (e.g. a flat-beat card edited

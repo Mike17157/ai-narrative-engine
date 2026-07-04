@@ -51,20 +51,61 @@ HARNESS_SCHEMA = {
         }}}},
 }
 
+# ── Stereotype catalog — the SHARED-CULTURE character types generation starts from. ──
+# A stereotype is legible because everyone already knows it; stating it plainly is the point.
+# Depth NEVER comes from decorating the label with invented quirks (whimsy) — it comes from the
+# psych interior underneath + the one hidden dimension. See [[restraint-over-whimsy]].
+STEREOTYPES = [
+    # school
+    "the class clown", "the student council president", "the delinquent who skips class",
+    "the transfer student", "the teacher's pet", "the quiet bookworm", "the ace of the team",
+    "the childhood friend next door", "the sickly kid who misses school", "the gossip queen",
+    "the scholarship kid working nights", "the art-room loner", "the class rep who takes it all too seriously",
+    "the popular girl everyone assumes is shallow",
+    # town / village
+    "the strict landlady", "the retired soldier turned shopkeeper", "the village gossip",
+    "the overworked single parent", "the priest everyone confides in", "the town drunk",
+    "the ambitious apprentice", "the spoiled rich kid", "the grizzled foreman",
+    "the outsider who just moved in", "the healer who has seen too much",
+    "the fallen noble keeping up appearances", "the innkeeper who hears everything",
+    "the golden child who never left", "the black sheep who came back",
+    # work / crew
+    "the by-the-book supervisor", "the veteran nobody questions", "the new hire trying too hard",
+    "the fixer who knows a guy", "the burnout coasting on old glory",
+]
+
+
+def _stereotype_menu(k: int = 14) -> str:
+    """A sampled menu of familiar types offered to the designer — start FROM one, adapt its
+    wording to the world. Sampling keeps repeated generations from converging on the same picks."""
+    import random
+    picks = random.sample(STEREOTYPES, min(k, len(STEREOTYPES)))
+    return "\n".join(f"- {s}" for s in picks)
+
+
 DESIGN_SYS = (
     "You design a CAST of psychologically REAL people, before anyone is named — grounded in actual "
     "personality science, not random quirks. Anchor each character in: a coherent Big Five profile "
     "(where they sit on openness, conscientiousness, extraversion, agreeableness, neuroticism), an "
     "attachment style (secure / anxious / avoidant), and the DEFENSE they reach for under stress "
     "(intellectualizing, withdrawing, deflecting with humor, controlling, idealizing, people-pleasing). "
-    "Most people are ORDINARY: depth comes from specific, internally-coherent, contradictory psychology "
-    "— NOT from being exceptional, gifted, or quirky. The protagonist can be the unremarkable one who "
-    "hides behind analysis. Make `want`, `lie`, `wound`, `secret` FLOW from the makeup: the wound shapes "
+    "Each character STARTS from a familiar stereotype — one of the offered types (or the nearest that "
+    "truly fits this world), stated PLAINLY. The stereotype is the whole daylight surface: do NOT "
+    "decorate it with an invented signature quirk, habit, or twee detail — that reads as artificial. "
+    "The surface stays MUNDANE; whatever distinguishes them comes from ordinary life (their work, "
+    "family, money troubles, obligations) — the way real people differ. Underneath, make them a REAL "
+    "HUMAN the stereotype merely simplifies: the psych interior does the work. Give each ONE hidden "
+    "dimension — an ability, a history, or a knowledge the stereotype hides — carried in the `secret`, "
+    "grounded in this world's central pressure (never a random gift), so that once known it RE-READS "
+    "the familiar type entirely. Make `want`, `lie`, `wound`, `secret` FLOW from the makeup: the wound shapes "
     "the defense, the defense hardens into the lie, the lie bends the want. For each: a `role` "
-    "(structural position, not a name); a `temperament` (ONE tight line — trait leanings + attachment + "
-    "main defense + how it SHOWS in everyday behavior); a `want` (concrete external goal); a `lie` (the "
-    "false self-belief the story will test); a `wound` (a CONCRETE past event that hurt them — the trauma "
-    "the defense guards, a real scene, not an abstraction); a `secret`; and a `good_memory` (a CONCRETE "
+    "(the plain stereotype, adapted to this world's words; not a name, no added quirks); a `temperament` (ONE plain line on how they "
+    "COME ACROSS in everyday life — manner, how they treat people, the way you'd describe a "
+    "neighbour. NO psychology terms: never 'Big Five', 'openness', 'high/low ___', 'attachment', "
+    "'defense' — show the person, never the profile); a `want` (concrete external goal); a `lie` (the "
+    "false self-belief the story will test — their personal DISTORTION of the story's central question); a `wound` (a CONCRETE past event that hurt them — the trauma "
+    "the defense guards, a real scene, not an abstraction; ordinary human material — a divorce, a debt, "
+    "a death, a failure — beats exotic trauma); a `secret` (the one hidden dimension); and a `good_memory` (a CONCRETE "
     "cherished moment from their past — the warmth they quietly hold onto). The wound and the good memory "
     "are the biographical anchors their VOICE will later be drawn from, so make them specific and real. "
     "Make them contrast as real people do, and keep every one human and grounded. No names, no appearances. "
@@ -87,6 +128,8 @@ def design_harnesses(provider, seed: str = "", n: int = 4, grounding: str = "", 
               + (f"SEED (the story / pairing / vibe to build from):\n{seed}\n\n" if seed else "")
               + (f"PSYCHOLOGY NOTES (real behavioural markers — ground the cast in these):\n{grounding}\n\n"
                  if grounding else "")
+              + f"FAMILIAR TYPES (start each character from one of these, or the nearest that fits this "
+                f"world — adapt the wording, keep it plain):\n{_stereotype_menu()}\n\n"
               + f"Design exactly {n} psychologically real, contrasting characters who genuinely inhabit this world.")
     res = provider.generate_text(system=DESIGN_SYS, prompt=prompt, emits=HARNESS_SCHEMA)
     out = []
@@ -166,19 +209,25 @@ DESIGN_ONE_SYS = (
     "for, a person they can't stand, what they do on a day off) and SEVERAL wants, most of them mundane "
     "and a couple that CONTRADICT each other — the way real people want incompatible things. They should "
     "feel like they existed before this story found them and would go on if it left. ONLY THEN wire in "
-    "their dramatic function underneath. Ground the interior in real psychology (a coherent Big Five lean, "
+    "their dramatic function underneath. In DAYLIGHT they read as a recognizable stereotype — the label "
+    "their world casually files them under, legible and even funny; underneath they carry ONE exceptional "
+    "dimension (an ability, a history, a way of seeing) hidden in the `secret`, grounded in this world's "
+    "central pressure — never a random gift — so that once known it RE-READS the familiar face entirely. "
+    "Ground the interior in real psychology (a coherent Big Five lean, "
     "an attachment style, the DEFENSE they hit under stress) but SHOW it as behavior, never diagnose it. "
     "Make `want`, `lie`, `wound`, `secret` FLOW from the makeup. The `lie` is their particular "
     "DISTORTION of the story's central value — but it is ONE thread of them, not the whole cloth; do NOT "
     "let two characters have the same shape (e.g. all 'someone who doesn't know if their debt is paid'). "
-    "Fields: a `role` (a SPECIFIC, distinguishing relational "
-    "tag naming their function + a defining detail — 'the popstar's ledger-keeping fixer', never a bare "
-    "'friend'; NOT a name); `temperament` (ONE plain line on how they COME ACROSS in everyday life — a "
-    "concrete manner, a habit, how they treat people — the way you'd describe a real neighbour. ABSOLUTELY "
+    "Fields: a `role` (the PLAIN familiar type, adapted to this world's words — 'the class clown', "
+    "'the strict landlady'; NOT a name, and NO invented quirk or twee detail bolted onto the label — "
+    "what distinguishes them lives in their ordinary life and interior, not the tag); "
+    "`temperament` (ONE plain line on how they COME ACROSS in everyday life — a "
+    "concrete manner, how they treat people — the way you'd describe a real neighbour. ABSOLUTELY "
     "NO psychology terms or trait names: never write 'adventurousness', 'dutifulness', 'intellect', "
     "'openness', 'high/low ___', 'attachment', 'defense'. Show the person, never the profile); "
     "`want` (concrete external goal); `lie`; `wound` (a CONCRETE past "
-    "event, a real scene); `secret`; `good_memory` (a CONCRETE cherished moment). Make them DISTINCT from "
+    "event, a real scene); `secret` (the ONE exceptional hidden dimension); `good_memory` (a CONCRETE "
+    "cherished moment). Make them DISTINCT from "
     "any characters already in the cast. Give this person their OWN independent standing and stakes in the "
     "world — do NOT default them to being another lead's manager, fixer, handler, assistant, agent, "
     "secretary, publicist, or bodyguard: that support-staff niche is a crutch and makes the whole cast "
@@ -209,6 +258,8 @@ def design_by_role(provider, seed: str = "", grounding: str = "", world="", role
                if grounding else "")
             + (f"THE PROTAGONIST this character is defined AGAINST — make them a distinct person and wire "
                f"their function to THIS specific protagonist's lie/wound:\n{proto_brief}\n\n" if proto_brief else "")
+            + f"FAMILIAR TYPES (start from one of these, or the nearest that fits this world — plain "
+              f"wording, no added quirks):\n{_stereotype_menu(10)}\n\n"
             + f"Design ONE character whose DRAMATIC FUNCTION is the {role['label'].upper()}: {role['brief']}"
             + (f"\n\nTHEIR PLACE IN THE WORLD (occupy this niche, distinct from the rest of the cast): "
                f"{role['steer']}" if role.get("steer") else "")

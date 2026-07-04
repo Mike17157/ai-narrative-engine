@@ -1,4 +1,6 @@
 <script>
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { charName, chars, loadChars } from '$lib/characters.svelte.js';
   import { stories, deleteStory, expandArc, generateTimelines, loadStory, setStoryMode, persistCurrent } from '$lib/stories.svelte.js';
   import { patch, put, post } from '$lib/api.js';
@@ -11,12 +13,12 @@
   import PlacesEditor from '$lib/components/story/PlacesEditor.svelte';
   import NovelChapters from '$lib/components/story/NovelChapters.svelte';
   import SceneRoutes from '$lib/components/story/SceneRoutes.svelte';
-  import StoryTabs from '$lib/components/story/StoryTabs.svelte';
   import Section from '$lib/components/story/Section.svelte';
   import DefaultPersonas from '$lib/components/story/DefaultPersonas.svelte';
   import ArcPanel from '$lib/components/story/ArcPanel.svelte';
   import LocationRoster from '$lib/components/story/LocationRoster.svelte';
   import LocationsPanel from '$lib/components/story/LocationsPanel.svelte';
+  import CardRail from '$lib/components/story/CardRail.svelte';
 
   let st = $derived(stories.current);
   loadChars();
@@ -42,6 +44,12 @@
     stories.current.cast = [...(st.cast || []), { character: charKey, primary: false, home: locId }];
     saveSoon();
   }
+  // Bonds save TARGETED (not through editPayload) so an unrelated overview save can never
+  // clobber relationship edits with stale client state.
+  function saveBonds(next) {
+    stories.current.relationships = next;
+    put(`/stories/${st.key}`, { relationships: next });
+  }
   let placesTimer = null;
   function savePlaces(next) {
     stories.current.places = next;
@@ -56,40 +64,37 @@
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persistCurrent, 600); }
 
-  // ── Premise components: the overview is STRUCTURED by the premise's parts (protagonist, lie,
-  //    inciting, opposition, stakes, texture). Coverage is checked AUTOMATICALLY — on open and after
-  //    premise/logline/tone edits (debounced). Gaps are filled in place via the Author or the fields.
-  //    Replaced the old scripted premise interview. ──
+  // ── Premise components — REAL editable fields (protagonist, lie, inciting, opposition,
+  //    stakes, texture) stored on story.premise_parts, each AI-draftable (✨ per field redrafts
+  //    that one; "Fill gaps" drafts every empty one). Replaced the read-only coverage checker. ──
   const PREMISE_COMPONENTS = [
-    { id: 'protagonist', label: 'Protagonist' },
-    { id: 'lie', label: 'The lie they live by' },
-    { id: 'inciting', label: 'Inciting incident' },
-    { id: 'opposition', label: 'Opposition' },
-    { id: 'stakes', label: 'Stakes' },
-    { id: 'texture', label: 'Tone & texture' },
+    { id: 'philosophy', label: 'Overarching philosophy', ph: 'the argument the story interrogates — two defensible sides, embodied by characters' },
+    { id: 'protagonist', label: 'Protagonist', ph: 'who the story is about — a specific person, not a type' },
+    { id: 'lie', label: 'The lie they live by', ph: 'the false belief the story will test' },
+    { id: 'inciting', label: 'Inciting incident', ph: 'what breaks the calm and sets the story in motion' },
+    { id: 'opposition', label: 'Opposition', ph: 'who or what pushes back' },
+    { id: 'stakes', label: 'Stakes', ph: 'what is lost if they fail' },
+    { id: 'texture', label: 'Tone & texture', ph: 'the mood, genre and sensory feel' },
   ];
-  let coverage = $state(null);    // [{id,label,covered,note}] | null
-  let covBusy = $state(false);
-  let covErr = $state(null);
-  let covById = $derived(Object.fromEntries((coverage || []).map((c) => [c.id, c])));
-  let covGaps = $derived((coverage || []).filter((c) => !c.covered).length);
-  async function checkCoverage() {
-    if (covBusy || !st) return;
-    covBusy = true; covErr = null;
-    const r = await post(`/stories/${st.key}/premise-coverage`, {});
-    covBusy = false;
-    if (r.ok && r.data?.components) coverage = r.data.components;
-    else covErr = r.data?.error || 'check failed';
+  let partBusy = $state({});      // component id (or '_all') → drafting
+  let partErr = $state(null);
+  function setPart(id, v) {
+    stories.current.premise_parts = { ...(st.premise_parts || {}), [id]: v };
+    saveSoon();
   }
-  // Auto-run: debounced on open + when the premise material changes. Resets on story switch.
-  let covTimer = null, covKey = null;
-  $effect(() => {
-    const key = st?.key; if (!key) return;
-    void (st.premise || ''); void (st.storyboard?.logline || ''); void (st.tone || '');   // track edits
-    if (covKey !== key) { covKey = key; coverage = null; covErr = null; }                   // new story
-    clearTimeout(covTimer);
-    covTimer = setTimeout(checkCoverage, 1200);
-  });
+  async function draftPart(id) {
+    // id → redraft that one component; null → fill every empty one
+    const k = id || '_all';
+    if (partBusy[k]) return;
+    partBusy = { ...partBusy, [k]: true }; partErr = null;
+    const r = await post(`/stories/${st.key}/premise-parts/draft`, id ? { component: id } : {});
+    partBusy = { ...partBusy, [k]: false };
+    if (r.ok && r.data?.parts) {
+      stories.current.premise_parts = { ...(st.premise_parts || {}), ...r.data.parts };
+      saveSoon();
+    } else partErr = r.data?.error || 'draft failed';
+  }
+  let partGaps = $derived(PREMISE_COMPONENTS.filter((c) => !(st?.premise_parts?.[c.id] || '').trim()).length);
 
   // Themes ↔ comma-string mirror (re-seed when the story changes; avoids array churn per keystroke).
   let themesStr = $state(''); let themesSeed = null;
@@ -143,16 +148,15 @@
   // Cast picker state
   let castPickerArcId = $state(null);  // arc id whose picker is open
 
-  // Header tabs — the shared story chrome; one focused surface at a time. Cast has its own major
-  // section (/stories/[key]/cast); the two graph lenses are first-class tabs (no Web umbrella),
-  // and the Map tab carries the world editors: Overview · Plot · Relationships · Map.
-  const STORY_TABS = [
-    { id: 'overview', label: 'Overview' },
-    { id: 'plot', label: 'Plot' },
-    { id: 'relationships', label: 'Relationships' },
-    { id: 'map', label: 'Map' },
-  ];
-  let tab = $state('overview');
+  // The four surfaces (Overview · Plot · Relationships · Map) are subnav tabs driven by the URL's
+  // ?tab= (the bar lives in the app subnav now — see storiesTree). Bare /structure canonicalises to
+  // overview so the subnav has something to highlight.
+  let tab = $derived($page.url.searchParams.get('tab') || 'overview');
+  $effect(() => {
+    if (st && !$page.url.searchParams.get('tab')) {
+      goto(`/stories/${st.key}/structure?tab=overview`, { replaceState: true, keepFocus: true, noScroll: true });
+    }
+  });
 
   // Timeline generation state
   let generatingTimelineArc = $state(null);  // arc.id currently generating
@@ -306,8 +310,8 @@
     <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
   </div>
 
-  <!-- Header tabs — shared story chrome; one focused surface at a time -->
-  <StoryTabs tabs={STORY_TABS} bind:active={tab} />
+  <!-- The context card's readout: per-layer todo badges, checkable at every step -->
+  <CardRail storyKey={st.key} active={tab} />
 
   {#if tab === 'overview'}
   <!-- Heart callout (read-only — the storyboard's emotional core) -->
@@ -325,25 +329,33 @@
   <textarea class="ip ip-prem" use:autosize={st.premise} bind:value={st.premise} oninput={saveSoon}
             placeholder="Premise — what is this story about?"></textarea>
 
-  <!-- Premise components — the structure of the premise, auto-checked against the story -->
+  <!-- Premise components — real editable fields (stored on the story), each AI-draftable -->
   <div class="cov">
     <div class="cov-head">
       <span class="cov-t">Premise components</span>
       <span class="cov-status">
-        {#if covBusy}checking…
-        {:else if covErr}<span class="cov-err">{covErr}</span>
-        {:else if coverage}{covGaps ? `${covGaps} to address` : 'all covered ✓'}{/if}
+        {#if partErr}<span class="cov-err">{partErr}</span>
+        {:else}{partGaps ? `${partGaps} to write` : 'all written ✓'}{/if}
       </span>
+      <span class="sp"></span>
+      {#if partGaps}
+        <button class="pfill" onclick={() => draftPart(null)} disabled={partBusy['_all']}
+                title="AI-draft every empty component from the premise, tone and cast">
+          {partBusy['_all'] ? '✨ Drafting…' : `✨ Fill ${partGaps} gap${partGaps > 1 ? 's' : ''}`}</button>
+      {/if}
     </div>
     <div class="cov-grid">
       {#each PREMISE_COMPONENTS as comp (comp.id)}
-        {@const c = covById[comp.id]}
-        <div class="cov-item" class:ok={c?.covered} class:gap={c && !c.covered} class:pend={!c}>
-          <span class="cov-mark">{c ? (c.covered ? '✓' : '○') : '·'}</span>
-          <div class="cov-body">
+        {@const val = st.premise_parts?.[comp.id] || ''}
+        <div class="cov-item" class:gap={!val.trim()}>
+          <div class="cov-top">
             <span class="cov-label">{comp.label}</span>
-            {#if c?.note}<span class="cov-note">{c.note}</span>{/if}
+            <button class="pbtn" onclick={() => draftPart(comp.id)} disabled={partBusy[comp.id]}
+                    title={val.trim() ? 'Redraft this component (AI)' : 'Draft this component (AI)'}>
+              {partBusy[comp.id] ? '…' : '✨'}</button>
           </div>
+          <textarea class="cov-input" use:autosize={val} value={val} placeholder={comp.ph}
+                    oninput={(e) => setPart(comp.id, e.currentTarget.value)}></textarea>
         </div>
       {/each}
     </div>
@@ -354,6 +366,16 @@
     <input class="ip ip-tone" bind:value={st.tone} oninput={saveSoon} placeholder="tone (e.g. melancholy, hopeful)" />
     <input class="ip ip-themes" bind:value={themesStr} oninput={commitThemes} placeholder="themes, comma separated" />
   </div>
+
+  <!-- Art style — LAYER 0 of the image card: every image this story renders (sprites AND
+       location scenes) opens with this line. Decided here; stacked visibly in Cast ≣ Layers. -->
+  <Section icon="🎨" title="Art style" count={st.art_style ? 'set' : 'global default'}>
+    <p class="hint">The first layer of <b>every image</b> in this story — character sprites and location
+      scenes lead with it, so the whole world renders in one style. Leave empty to use the global cast
+      style. See the full stack per sprite via <b>≣ Layers</b> in Cast.</p>
+    <textarea class="ip ip-style" use:autosize={st.art_style} bind:value={st.art_style} oninput={saveSoon}
+              placeholder="e.g. Polished 2D anime illustration, crisp lineart, rich cel shading…"></textarea>
+  </Section>
 
   <!-- Cast roster — membership lives here (the Cast section is the catalogue/outfit surface) -->
   <Section icon="👥" title="Cast" count={(st.cast || []).length || ''}>
@@ -390,6 +412,25 @@
   {:else if tab === 'plot'}
   <!-- The ARC — the planned progression play steers through (view + plan) -->
   <ArcPanel storyKey={st.key} />
+
+  <!-- Storyboard outline — the beat plan, whatever the story format (novels draft chapters
+       FROM these; the rail counts them, so they must be visible here). -->
+  {#if st.storyboard?.beats?.length}
+    <Section icon="🧭" title="Outline" count={`${st.storyboard.beats.length} beats`}>
+      <ol class="beats">
+        {#each st.storyboard.beats as b, i}
+          <li>
+            <div class="btitle">{b.title || `Chapter ${i + 1}`}</div>
+            <span class="bsum">{b.summary}</span>
+            <span class="bmeta">
+              {#if b.location}@ {b.location}{/if}
+              {#if b.characters?.length} · {b.characters.join(', ')}{/if}
+            </span>
+          </li>
+        {/each}
+      </ol>
+    </Section>
+  {/if}
 
   <!-- Plot — novels show the linear chapter manuscript; VNs the arc/timeline outline. -->
   {#if st.type === 'novel'}
@@ -517,31 +558,17 @@
         </div>
       {/each}
     </div>
-    {:else if st.storyboard?.beats?.length}
-    <!-- Flat-beat stories (no arcs): simple chapter list -->
-    <h4>Chapters <span class="lo">— {st.storyboard.beats.length} beats</span></h4>
-    <ol class="beats">
-      {#each st.storyboard.beats as b, i}
-        <li>
-          <div class="btitle">{b.title || `Chapter ${i + 1}`}</div>
-          <span class="bsum">{b.summary}</span>
-          <span class="bmeta">
-            {#if b.location}@ {b.location}{/if}
-            {#if b.characters?.length} · {b.characters.join(', ')}{/if}
-          </span>
-        </li>
-      {/each}
-    </ol>
-  {:else}
-    <div class="empty-plot">No plot yet — ask the Author to draft arcs, or generate a storyboard.</div>
+    {:else if !st.storyboard?.beats?.length}
+    <div class="empty-plot">No plot yet — draft arcs or generate a storyboard.</div>
   {/if}
 
   {:else if tab === 'relationships'}
     <!-- Cast grouped by where they live (map locations). Bonds show as chips; click a face to
          open the card. Replaces the old relationship ring. -->
-    <LocationRoster cast={castOptions} locations={st.locations || []}
+    <LocationRoster storyKey={st.key} cast={castOptions} locations={st.locations || []}
                     relationships={st.relationships || []} addItems={castAddItems}
-                    onSelect={openCharModal} onSetHome={setCharHome} onAddHere={addCharToLocation} />
+                    onSelect={openCharModal} onSetHome={setCharHome} onAddHere={addCharToLocation}
+                    onSaveBonds={saveBonds} />
 
   {:else if tab === 'map'}
     <!-- The world's locations, grouped by area — each edits in place + carries its scene image. -->
@@ -627,22 +654,30 @@
   .ip-title   { font-size: 22px; font-weight: 800; margin: 0 0 2px -8px; }
   .ip-logline { font-size: 14.5px; font-style: italic; margin-left: -8px; }
   .ip-prem    { font-size: 13.5px; color: var(--muted); line-height: 1.6; resize: none; margin-left: -8px; }
-  /* ── premise coverage ── */
+  .ip-style   { font-size: 12.5px; color: var(--muted); line-height: 1.55; resize: none; }
+  /* ── premise components — editable, AI-draftable ── */
   .cov { margin: 4px 0 14px; }
-  .cov-head { display: flex; align-items: baseline; gap: 10px; }
+  .cov-head { display: flex; align-items: center; gap: 10px; }
   .cov-t { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
   .cov-status { font-size: 11.5px; color: var(--faint); }
   .cov-err { font-size: 11.5px; color: var(--bad); }
-  .cov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 6px; margin-top: 8px; }
-  .cov-item { display: flex; gap: 8px; padding: 7px 10px; border-radius: 9px; border: 1px solid var(--border-soft); background: var(--elev); transition: border-color .15s, opacity .15s; }
-  .cov-item.pend { opacity: .5; }
-  .cov-item.gap { border-color: color-mix(in srgb, var(--bad) 45%, transparent); background: color-mix(in srgb, var(--bad) 6%, var(--elev)); }
-  .cov-mark { font-weight: 700; line-height: 1.5; color: var(--faint); }
-  .cov-item.ok .cov-mark { color: var(--accent); }
-  .cov-item.gap .cov-mark { color: var(--bad); }
-  .cov-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
-  .cov-label { font-size: 12px; font-weight: 600; color: var(--text); }
-  .cov-note { font-size: 11.5px; color: var(--faint); line-height: 1.4; }
+  .pfill { font-size: 11.5px; font-weight: 600; padding: 4px 11px; border-radius: 999px; background: none;
+           border: 1px dashed var(--accent); color: var(--accent); cursor: pointer; }
+  .pfill:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+  .cov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 8px; }
+  .cov-item { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 9px;
+              border: 1px solid var(--border-soft); background: var(--elev); transition: border-color .15s; }
+  .cov-item.gap { border-style: dashed; }
+  .cov-item:focus-within { border-color: var(--accent); }
+  .cov-top { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+  .cov-label { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
+  .pbtn { width: 22px; height: 22px; flex: none; padding: 0; border-radius: 6px; display: grid; place-items: center;
+          background: none; border: 1px solid var(--border-soft); color: var(--faint); font-size: 11px; cursor: pointer; }
+  .pbtn:hover:not(:disabled) { color: var(--accent); border-color: var(--accent); }
+  .cov-input { width: 100%; box-sizing: border-box; background: transparent; border: none; resize: none;
+               font: inherit; font-size: 12.5px; color: var(--text); line-height: 1.5; padding: 0; min-height: 20px; }
+  .cov-input:focus { outline: none; }
+  .cov-input::placeholder { color: var(--faint); font-style: italic; }
   .title-row { display: flex; align-items: center; gap: 10px; }
   .title-row .ip-title { flex: 1; }
   .type-badge { flex: none; font-size: 11.5px; color: var(--muted); padding: 3px 9px; border-radius: 999px;

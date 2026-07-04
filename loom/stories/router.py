@@ -268,12 +268,16 @@ def register(app, ctx):
 
     def _facet_cards(scope: str) -> list[dict]:
         from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import FACET_TYPES
         out = []
         for e in LS.load_lorebook(ctx.root, scope):
-            if (e.source or "") != "interview":
+            # An exemplar is anything typed as a facet — regardless of which tool wrote it
+            # (interview, deepen, harvest, contrast). Filtering by source hid deepen's bank.
+            if (e.facet or "") not in FACET_TYPES:
                 continue
             out.append({"id": e.id, "type": e.facet or "life", "title": e.title,
-                        "keywords": list(e.keywords or []), "content": e.content})
+                        "keywords": list(e.keywords or []), "content": e.content,
+                        "source": e.source or ""})
         return out
 
     @app.post("/api/stories/character/{key}/interview")
@@ -310,6 +314,74 @@ def register(app, ctx):
                 saved.append(e.id)
         return {"ok": True, "reply": (data.get("reply") or "").strip(),
                 "saved": saved, "facets": _facet_cards(scope)}
+
+    @app.post("/api/stories/character/{key}/deepen")
+    def character_deepen(key: str, body: dict):
+        """TWO passes: (1) a REASONED psychological portrait — the model actually thinks the
+        person through (mechanism, contradictions, the defense's daily cost), free prose, no
+        slot structure; (2) the exemplar bank written FROM that portrait, the model choosing
+        which moments this person needs captured. The portrait persists to fields.psychology
+        (working material for later steps); exemplars go to the character's lorebook, which
+        play retrieves per scene. Returns {saved, facets, portrait}."""
+        from ..server.services import lorebook_store as LS
+        from .pipeline.character_scaffold import (
+            DEEPEN_SYSTEM, DEEPEN_FACETS_SCHEMA, PORTRAIT_SYSTEM, deepen_prompt,
+            facet_to_entry, portrait_prompt)
+        ch = ctx.base_settings.characters.get(key)
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        f = ch.fields or {}
+        harness = {k: f.get(k) or "" for k in
+                   ("role", "temperament", "want", "lie", "wound", "secret", "good_memory")}
+        if not any(harness.values()):
+            return JSONResponse({"error": "character has no harness (want/lie/wound…) to deepen from"},
+                                status_code=400)
+        # The owning story supplies the frame: premise as world, philosophy as the central question.
+        world, philosophy = "", ""
+        owner = ctx._char_owner(key)
+        st = ctx.base_settings.stories.get(owner) if owner else None
+        if st is not None:
+            world = (st.premise or "")[:500]
+            philosophy = ((st.premise_parts or {}).get("philosophy") or "")[:500]
+
+        # Phase 1 — think the person through (REASONING ON, plain prose).
+        thinker = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "high"})
+        if thinker is None or not hasattr(thinker, "generate_text"):
+            return JSONResponse({"error": "no text model available"}, status_code=400)
+        try:
+            portrait = (thinker.generate_text(
+                system=PORTRAIT_SYSTEM,
+                prompt=portrait_prompt(ch.name, ch.system, harness, world=world, philosophy=philosophy),
+            ).text or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"portrait failed: {exc}"}, status_code=500)
+        if not portrait:
+            return JSONResponse({"error": "portrait came back empty"}, status_code=500)
+        # Persist the portrait — working material for later steps (contrast, weave, play prompts).
+        try:
+            data_c = ctx._read_character_data(key) or {}
+            data_c.setdefault("fields", {})["psychology"] = portrait
+            ctx._write_character_data(key, data_c)
+        except Exception:  # noqa: BLE001 — the bank still lands; portrait persistence is best-effort
+            pass
+
+        # Phase 2 — the bank, FROM the portrait (structured; reasoning off for schema reliability).
+        scope = _char_scope(key)
+        entries = LS.load_lorebook(ctx.root, scope)
+        writer = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+        try:
+            data = (writer.generate_text(system=DEEPEN_SYSTEM,
+                                         prompt=deepen_prompt(ch.name, portrait, entries),
+                                         emits=DEEPEN_FACETS_SCHEMA).data) or {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"exemplar write failed: {exc}"}, status_code=500)
+        saved = []
+        for fc in (data.get("facets") or []):
+            e = facet_to_entry(fc, source="deepen")
+            if e is not None:
+                LS.upsert_entry(ctx.root, scope, e)
+                saved.append(e.id)
+        return {"ok": True, "saved": saved, "portrait": portrait, "facets": _facet_cards(scope)}
 
     @app.get("/api/stories/character/{key}/facets")
     def character_facets(key: str):
@@ -727,6 +799,9 @@ def register(app, ctx):
     # The premise's core components — what a strong premise must address. Replaces the old scripted
     # "premise interview"; the overview checks these against the story instead (premise-coverage).
     _PREMISE_COMPONENTS = [
+        ("philosophy", "Overarching philosophy",
+         "the argument the story interrogates — a real question with two DEFENSIBLE sides, which "
+         "characters embody through their lies and choices (not a moral, an open contest)"),
         ("protagonist", "Protagonist", "who the story is about — a specific person, not a type"),
         ("lie", "The lie they live by", "the false belief / self-deception the story will test"),
         ("inciting", "Inciting incident", "what breaks the calm and sets the story in motion"),
@@ -735,51 +810,62 @@ def register(app, ctx):
         ("texture", "Tone & texture", "the mood, genre and sensory feel of the world"),
     ]
 
-    @app.post("/api/stories/{key}/premise-coverage")
-    def premise_coverage(key: str, body: dict):
-        """Check whether the story's premise addresses each core component (protagonist, lie,
-        inciting, opposition, stakes, texture). Replaces the scripted premise interview — the
-        overview calls this to flag gaps the writer fills in place (with the Author agent). Returns
-        { components: [{id, label, covered, note}] }."""
+    @app.post("/api/stories/{key}/premise-parts/draft")
+    def premise_parts_draft(key: str, body: dict):
+        """AI-DRAFT premise components (protagonist / lie / inciting / opposition / stakes /
+        texture). Body {component: id} drafts that ONE (even if already filled — a redraft);
+        empty body drafts every empty component. Drafts from the premise + tone + themes + cast
+        + the parts already written, so components stay consistent with each other. Returns
+        {parts: {id: text}} — NOT saved; the overview's fields are the editing surface and the
+        normal story PUT persists them."""
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
         sd = st.model_dump()
-        sb = sd.get("storyboard") or {}
+        parts = {k: v for k, v in (sd.get("premise_parts") or {}).items() if (v or "").strip()}
+        only = ((body or {}).get("component") or "").strip()
+        want = ([c for c in _PREMISE_COMPONENTS if c[0] == only] if only
+                else [c for c in _PREMISE_COMPONENTS if c[0] not in parts])
+        if not want:
+            return JSONResponse({"error": "unknown component" if only else "nothing to draft"},
+                                status_code=400)
         cast = ", ".join(getattr(ctx.base_settings.characters.get(m.get("character")), "name", m.get("character"))
                          for m in (sd.get("cast") or []) if m.get("character")) or "(none yet)"
+        written = "\n".join(f"- {cid}: {parts[cid]}" for cid, _l, _d in _PREMISE_COMPONENTS if cid in parts)
         ctx_text = "\n".join([
             f"Premise: {sd.get('premise') or '(empty)'}",
-            f"Logline: {sb.get('logline') or ''}",
+            f"Logline: {(sd.get('storyboard') or {}).get('logline') or ''}",
             f"Tone: {sd.get('tone') or ''}",
             f"Themes: {', '.join(sd.get('themes') or [])}",
             f"Cast: {cast}",
+            f"Components already written:\n{written}" if written else "",
         ])
-        comp_lines = "\n".join(f"- {cid} ({label}): {desc}" for cid, label, desc in _PREMISE_COMPONENTS)
-        provider, _systems = ctx.builder_ctx(body or {}, "premise")
-        if provider is None:
-            return JSONResponse({"error": _systems}, status_code=400)
-        schema = {"type": "object", "additionalProperties": False, "required": ["components"],
-                  "properties": {"components": {"type": "array", "items": {
-                      "type": "object", "additionalProperties": False,
-                      "required": ["id", "covered", "note"],
-                      "properties": {"id": {"type": "string"}, "covered": {"type": "boolean"},
-                                     "note": {"type": "string", "description": "if covered, one phrase "
-                                              "on how; if not, one concrete suggestion to address it"}}}}}}
-        system = ("You assess whether a story PREMISE addresses each required component. For each, decide "
-                  "if the material below ADDRESSES it (covered=true) or leaves it absent/vague "
-                  "(covered=false). Judge substance, not keywords. Keep each note to one short phrase.")
-        prompt = f"STORY SO FAR:\n{ctx_text}\n\nCOMPONENTS TO CHECK:\n{comp_lines}"
+        comp_lines = "\n".join(f"- {cid} ({label}): {desc}" for cid, label, desc in want)
+        # v4pro with REASONING for construction quality (fallback to non-thinking below if the
+        # reasoning channel breaks structured output).
+        provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "high"})
+        if provider is None or not hasattr(provider, "generate_text"):
+            return JSONResponse({"error": "no text model available"}, status_code=400)
+        schema = {"type": "object", "additionalProperties": False, "required": ["parts"],
+                  "properties": {"parts": {"type": "array", "items": {
+                      "type": "object", "additionalProperties": False, "required": ["id", "text"],
+                      "properties": {"id": {"type": "string", "enum": [c[0] for c in want]},
+                                     "text": {"type": "string", "description": "1-2 concrete sentences"}}}}}}
+        system = ("You draft the missing COMPONENTS of a story premise. Write each as 1-2 concrete, "
+                  "specific sentences grounded in the material given — name names, pick particulars, "
+                  "no vague archetypes. Stay consistent with the components already written.")
+        prompt = f"STORY SO FAR:\n{ctx_text}\n\nDRAFT THESE COMPONENTS:\n{comp_lines}"
         try:
             out = (provider.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": f"coverage check failed: {exc}"}, status_code=500)
-        by_id = {c.get("id"): c for c in (out.get("components") or []) if isinstance(c, dict)}
-        return {"components": [
-            {"id": cid, "label": label,
-             "covered": bool(by_id.get(cid, {}).get("covered")),
-             "note": str(by_id.get(cid, {}).get("note") or "").strip()}
-            for cid, label, _desc in _PREMISE_COMPONENTS]}
+        except Exception:  # noqa: BLE001 — reasoning channel can break structured output; retry plain
+            try:
+                provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+                out = (provider.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": f"draft failed: {exc}"}, status_code=500)
+        drafted = {p["id"]: p["text"].strip() for p in (out.get("parts") or [])
+                   if isinstance(p, dict) and p.get("id") and (p.get("text") or "").strip()}
+        return {"parts": drafted}
 
     # ── Relationship-first genesis (harnesses → web → derived stories) ────────────
     # See loom/stories/GENESIS.md. Premise is an OUTPUT: design unnamed harnesses, weave
@@ -2826,8 +2912,8 @@ def register(app, ctx):
         if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
         fields = {f: body[f] for f in (
-            "name", "type", "premise", "tone", "themes", "storyboard", "cast",
-            "lorebook", "locations", "places", "start", "background", "fields",
+            "name", "type", "premise", "tone", "themes", "art_style", "premise_parts",
+            "storyboard", "cast", "lorebook", "locations", "places", "start", "background", "fields",
             "arcs", "chapters", "scenes", "features", "start_scene",
             "relationships", "connections", "default_personas", "recent_window")
             if f in (body or {})}
@@ -2836,6 +2922,146 @@ def register(app, ctx):
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
         return {"ok": True, "key": key}
+
+    @app.post("/api/stories/{key}/weave-bonds")
+    def weave_bonds(key: str, body: dict):
+        """PROPOSE the relationship web (nothing saved — the roster reviews and accepts).
+        The register is daylight-over-depth: every bond gets an innocent, specific surface
+        read per side AND a hidden undercurrent rooted in the characters' wounds/lies/secrets,
+        plus a trajectory for when the truth surfaces. Existing bonds are respected (only new
+        pairs are proposed). Returns {bonds: [Relationship-shaped dicts]}."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        sd = st.model_dump()
+        cast_keys = [m.get("character") for m in sd.get("cast") or [] if m.get("character")]
+        if len(cast_keys) < 2:
+            return JSONResponse({"error": "need at least two cast members"}, status_code=400)
+        loc_names = {l.get("id"): l.get("name") or l.get("id") for l in sd.get("locations") or []}
+        homes = {m.get("character"): loc_names.get(m.get("home"), "") for m in sd.get("cast") or []}
+        lines = []
+        for ck in cast_keys:
+            ch = ctx.base_settings.characters.get(ck)
+            f = (getattr(ch, "fields", None) or {}) if ch else {}
+            nm = getattr(ch, "name", ck) or ck
+            bits = [f"{ck} ({nm})"]
+            for fk in ("role", "want", "lie", "wound", "secret", "temperament"):
+                if (f.get(fk) or "").strip():
+                    bits.append(f"  {fk}: {str(f[fk]).strip()[:220]}")
+            if homes.get(ck):
+                bits.append(f"  lives at: {homes[ck]}")
+            lines.append("\n".join(bits))
+        existing = {(r.get("source"), r.get("target")) for r in sd.get("relationships") or []}
+        existing |= {(t, s) for (s, t) in existing}
+        parts = sd.get("premise_parts") or {}
+        ctx_text = "\n".join(filter(None, [
+            f"Premise: {sd.get('premise') or ''}",
+            f"Tone: {sd.get('tone') or ''}",
+            "\n".join(f"{k}: {v}" for k, v in parts.items() if (v or '').strip()),
+            "\nCAST (their hidden harnesses — the undercurrents grow FROM these):",
+            "\n".join(lines),
+            f"\nBonds that already exist (do NOT re-propose these pairs): "
+            f"{', '.join(f'{s}-{t}' for s, t in sorted(existing)) or '(none)'}",
+        ]))
+        stances = ["devoted", "warm", "neutral", "strained", "hostile"]
+        schema = {"type": "object", "additionalProperties": False, "required": ["bonds"],
+                  "properties": {"bonds": {"type": "array", "maxItems": 8, "items": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["source", "target", "nature", "stance", "dynamic",
+                                   "target_stance", "target_dynamic", "potential", "trajectory"],
+                      "properties": {
+                          "source": {"type": "string", "enum": cast_keys},
+                          "target": {"type": "string", "enum": cast_keys},
+                          "nature": {"type": "string", "maxLength": 40,
+                                     "description": "PLAIN mundane label, 1-4 words: 'landlady', 'childhood friend', 'rival herbalist'. No poetry."},
+                          "stance": {"type": "string", "enum": stances},
+                          "dynamic": {"type": "string",
+                                      "description": "ONE observable daylight HABIT of source toward target, one short sentence — a thing a bystander could watch: 'steals her pens, denies it badly'. Behavior only, no analysis."},
+                          "target_stance": {"type": "string", "enum": stances},
+                          "target_dynamic": {"type": "string",
+                                             "description": "target's observable habit toward source, one short sentence, same rules"},
+                          "potential": {"type": "string",
+                                        "description": "the UNDERCURRENT: what is secretly true between them RIGHT NOW, grown from a named wound/lie — a fact, not a prediction. 1-2 sentences."},
+                          "trajectory": {"type": "string", "description": "from → to: how the bond turns when the hidden thing surfaces (1 sentence; predictions live HERE, not in potential)"},
+                      }}}}}
+        system = (
+            "You weave the RELATIONSHIP WEB for a character-driven story. The register is daylight "
+            "innocence over hidden depth: the surface is light and CONCRETE — running jokes, petty "
+            "thefts, borrowed things never returned, dumb shared rituals — while underneath, every "
+            "bond carries something secretly true, grown from the characters' named wounds and lies.\n"
+            "Field discipline:\n"
+            "- nature = a label a census would record. dynamic = an observable habit, filmable.\n"
+            "- potential = a present-tense hidden FACT (who knows what, who is really what, what "
+            "actually happened between them). NOT a prediction.\n"
+            "- trajectory = the prediction: from → to when the hidden fact surfaces.\n"
+            "The best undercurrents make the innocent surface RE-READ as something else entirely "
+            "once known. Asymmetry is good: the two sides may misread each other. Not every bond is "
+            "dark. Propose only bonds that matter; skip pairs with nothing real between them.")
+        # Reasoning ON for construction quality; fall back to non-thinking if the reasoning
+        # channel breaks structured output.
+        out = {}
+        for effort in ("high", "none"):
+            provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": effort})
+            if provider is None or not hasattr(provider, "generate_text"):
+                return JSONResponse({"error": "no text model available"}, status_code=400)
+            try:
+                out = (provider.generate_text(system=system, prompt=ctx_text, emits=schema).data) or {}
+                break
+            except Exception as exc:  # noqa: BLE001
+                if effort == "none":
+                    return JSONResponse({"error": f"weave failed: {exc}"}, status_code=500)
+        bonds = []
+        for b in out.get("bonds") or []:
+            s, t = b.get("source"), b.get("target")
+            if not s or not t or s == t or (s, t) in existing:
+                continue
+            existing.add((s, t)); existing.add((t, s))   # dedupe within the proposal too
+            bonds.append({"id": f"r-{s}-{t}", **b})
+        return {"bonds": bonds}
+
+    @app.get("/api/stories/{key}/card")
+    def story_card(key: str):
+        """The story's CONTEXT CARD — the layered spine every generator reads (see
+        stories/card.py). One layer per tab (overview → cast), each with content +
+        the step's `todo` checklist. The cast layer's per-sprite deep zoom is
+        POST /api/characters/{key}/sprite-stack."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        from .card import build_card
+        from ..server.services.prompts import style_anchor
+        manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
+        card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
+        card["story"] = key
+        return card
+
+    @app.post("/api/stories/{key}/card/{layer}")
+    def story_card_patch(key: str, layer: str, body: dict):
+        """Mutate ONE card layer — the chokepoint narrative functions (plot dialogue,
+        play consolidation) route through. The patch is filtered to the layer's
+        whitelisted story fields (card.LAYER_FIELDS) and lands via the validated
+        update path. Returns the rebuilt layer so callers can re-check the step."""
+        if ctx.base_settings.stories.get(key) is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        from .card import build_card, layer_patch_fields
+        try:
+            fields = layer_patch_fields(layer, body or {})
+        except KeyError:
+            return JSONResponse({"error": f"layer '{layer}' has no patchable story fields"},
+                                status_code=400)
+        if not fields:
+            return JSONResponse({"error": "nothing patchable for this layer in the body"},
+                                status_code=400)
+        try:
+            ctx.update_story_fields(key, fields)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
+        st = ctx.base_settings.stories.get(key)
+        from ..server.services.prompts import style_anchor
+        manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
+        card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
+        lay = next((l for l in card["layers"] if l["id"] == layer), None)
+        return {"ok": True, "layer": lay}
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
@@ -3620,6 +3846,10 @@ def register(app, ctx):
         prompt = (location.background_prompt or location.description or "").strip()
         if not prompt:
             return JSONResponse({"error": "location has no background prompt"}, status_code=400)
+        # L0 of the image card: the story's art style leads the scene prompt, so
+        # locations and sprites come out of the same visual world.
+        if (st.art_style or "").strip():
+            prompt = f"{ctx.art_style(story_key=key)} {prompt}"
         # Go through the single role chokepoint so the active image preset's LoRA
         # look is injected, same as base/sprite renders.
         provider, model_id = ctx.role_image_provider("scene", (body or {}).get("image_model"))
@@ -3663,6 +3893,8 @@ def register(app, ctx):
         prompt = (scene.background_prompt or scene.name or "").strip()
         if not prompt:
             return JSONResponse({"error": "scene has no background prompt"}, status_code=400)
+        if (st.art_style or "").strip():   # L0: same style layer as sprites + locations
+            prompt = f"{ctx.art_style(story_key=key)} {prompt}"
         provider, model_id = ctx.role_image_provider("scene", (body or {}).get("image_model"))
         if provider is None:
             return JSONResponse({"error": model_id}, status_code=400)
