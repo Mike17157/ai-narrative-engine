@@ -69,6 +69,14 @@ class BaseJob:
 
     # --- emit / subscribe -------------------------------------------------
     def _emit(self, ev: dict) -> None:
+        # Progress events carry the live counts — mirror them onto the job so the /api/jobs
+        # SNAPSHOT (Activity panel) reflects real progress, not a frozen 0/0. Without this a long
+        # streaming render looks hung to anyone not watching its live SSE stream.
+        if ev.get("type") == "progress":
+            if ev.get("total") is not None:
+                self.total = ev["total"]
+            if ev.get("done") is not None:
+                self.done = ev["done"]
         self.events.append(ev)
         if self._log_cap and ev.get("type") == "log":
             logs = sum(1 for e in self.events if e.get("type") == "log")

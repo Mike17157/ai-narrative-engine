@@ -37,20 +37,26 @@ def render_batch(
     on_progress: ProgressCb | None = None,
     cancel: CancelCb | None = None,
     seed: int | None = None,
+    on_result: "Callable[[int, bytes | None], None] | None" = None,
+    force_local: bool = False,
 ) -> list[bytes | None]:
     """Render ``prompts`` concurrently; return one PNG (bytes) per prompt, in order
     (``None`` for a failed or cancelled render).
 
     Each prompt dict may carry: ``prompt``, ``negative_prompt``, ``init_image``, ``latent``.
-    ``on_progress(done, total)`` fires as each image finishes; ``cancel()`` is polled and
-    aborts pending + in-flight jobs.
+    ``on_progress(done, total)`` fires as each image finishes; ``on_result(idx, png)`` fires as
+    each finishes too, carrying its bytes — so callers can SAVE/stream each output the moment it
+    lands instead of waiting for the whole batch. ``cancel()`` is polled and aborts pending +
+    in-flight jobs.
     """
     total = len(prompts)
     if total == 0:
         return []
 
     cfg = (getattr(ctx, "runpod_config", None) or {}) if ctx else {}
-    serverless = bool(
+    # force_local: for workflows that only exist on the local ComfyUI (e.g. the krea2 sprite
+    # detailer) — the serverless worker lacks them, so routing there just fails the whole batch.
+    serverless = not force_local and bool(
         cfg.get("enabled", True) and cfg.get("serverless_endpoint_id") and cfg.get("api_key")
     )
 
@@ -61,7 +67,7 @@ def render_batch(
         cap = 2   # one local GPU; deepcopy-per-task just avoids shared-workflow races
         make = _local_factory(provider, seed)
 
-    return _fan_out(prompts, make, cap, out_prefix_template, latent, on_progress, cancel)
+    return _fan_out(prompts, make, cap, out_prefix_template, latent, on_progress, cancel, on_result)
 
 
 # --------------------------------------------------------------------------- #
@@ -112,6 +118,7 @@ def _fan_out(
     latent: tuple[int, int] | None,
     on_progress: ProgressCb | None,
     cancel: CancelCb | None,
+    on_result: "Callable[[int, bytes | None], None] | None" = None,
 ) -> list[bytes | None]:
     total = len(prompts)
     results: list[bytes | None] = [None] * total
@@ -142,6 +149,8 @@ def _fan_out(
             try:
                 idx, png = fut.result()
                 results[idx] = png
+                if on_result:
+                    on_result(idx, png)   # stream: save/emit this output as soon as it lands
             except Exception as exc:  # noqa: BLE001
                 print(f"render_batch: a render failed: {exc}")
             done += 1

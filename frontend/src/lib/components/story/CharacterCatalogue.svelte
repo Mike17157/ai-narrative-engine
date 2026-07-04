@@ -173,15 +173,27 @@
   }
 
   let emoJob = $state(null);
+  let emoProg = $state({ done: 0, total: 0 });   // live render progress → the divider bar
   async function renderAllEmos() {
     if (!outfit || emoJob) return;
-    err = '';
+    err = ''; emoProg = { done: 0, total: 0 };
     const r = await post(`/characters/${charKey}/portraits/render-emotions`,
                          { screen: 'catalogue', outfit_id: outfit.id });
     if (r.ok && r.data?.job) emoJob = r.data.job;
     else err = r.data?.error || 'could not start the render';
   }
-  function onEmosDone() { emoJob = null; refreshChar(charKey); }
+  // STREAM: each sprite announces itself the moment it's saved → patch that one cell live
+  // (no full refetch) so the strip fills in as renders land.
+  function onSprite(ev) {
+    if (ev?.type === 'progress') return;   // handled by onProgress
+    if (ev?.type !== 'sprite' || !ev.url) return;
+    const p = portraits[charKey]; if (!p) return;
+    const o = (p.outfits || []).find((x) => x.id === ev.outfit); if (!o) return;
+    const cell = (o.expression_set || []).find((e) => e.emotion === ev.emotion);
+    if (cell) { cell.url = ev.url; o.expressions = { ...(o.expressions || {}), [ev.emotion]: `${ev.emotion}.png` }; }
+    portraits = { ...portraits }; bust++;
+  }
+  function onEmosDone() { emoJob = null; emoProg = { done: 0, total: 0 }; refreshChar(charKey); }
 
   // ── EMOTION RANGE EDITING — the outfit's emotion SET is register-specific and editable. The
   // POST returns the fresh portrait payload, so the strip cells (driven by in_range) update live.
@@ -278,10 +290,9 @@
         </div>
       {/if}
       {#if emoJob}
-        <div class="wjob">
-          <GenStream jobId={emoJob} title={`${outfit?.name || 'Outfit'} — rendering the emotion set`}
-                     onError={(m) => (err = m)} onDone={onEmosDone} />
-        </div>
+        <!-- Plumbing only (bare): progress drives the divider bar, sprite events fill cells live. -->
+        <GenStream jobId={emoJob} bare onProgress={(d, t) => (emoProg = { done: d, total: t })}
+                   onEvent={onSprite} onError={(m) => (err = m)} onDone={onEmosDone} />
       {/if}
     {/if}
     {#if err}<div class="err">{err}</div>{/if}
@@ -291,6 +302,13 @@
        per-cell render/re-roll and a render-all job. -->
   {#if charKey && outfit}
     <div class="emopane">
+    <!-- Render progress rides the divider line between the stage and the emotion grid. -->
+    {#if emoJob}
+      <div class="progline" title={`${emoProg.done}/${emoProg.total} rendered`}>
+        <div class="pfill" style={`width:${emoProg.total ? (emoProg.done / emoProg.total) * 100 : 0}%`}></div>
+        <span class="pnum">{emoProg.done}/{emoProg.total || '…'}</span>
+      </div>
+    {/if}
     <div class="emohead">
       <b>🎭 {outfit.name}</b>
       <span class="hint">{shownEmos.filter((e) => e.url).length}/{shownEmos.length} rendered · click a card to put it on stage</span>
@@ -413,7 +431,15 @@
   /* The selected outfit's EMOTION pane — a slim header (name · rendered count · Render all)
      over TWO fixed rows of sprite cards (scrolls horizontally; fixed height so the stage never
      resizes). Clicking a card puts that sprite ON STAGE. */
-  .emopane { border-top: 1px solid var(--border-soft); background: var(--panel); }
+  .emopane { border-top: 1px solid var(--border-soft); background: var(--panel); position: relative; }
+
+  /* Render progress bar — sits on the divider line between the stage and the emotion grid. */
+  .progline { position: relative; height: 5px; background: var(--elev-2, var(--elev));
+              overflow: visible; }
+  .pfill { height: 100%; background: var(--accent); transition: width .35s ease;
+           box-shadow: 0 0 8px color-mix(in srgb, var(--accent) 60%, transparent); }
+  .pnum { position: absolute; top: 6px; right: 12px; font-size: 10.5px; font-weight: 700;
+          color: var(--accent); background: var(--panel); padding: 0 5px; border-radius: 4px; }
   .emohead { display: flex; align-items: center; gap: 10px; padding: 7px 14px 0;
              font-size: 12.5px; color: var(--text); }
   .emohead .plan { padding: 5px 12px; font-size: 12px; }

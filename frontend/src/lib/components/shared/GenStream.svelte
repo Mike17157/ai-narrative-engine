@@ -5,8 +5,11 @@
   // generator endpoint (regenerate-cast, plan-wardrobe, …); it consumes /api/jobs/<id>/stream
   // (the shared jobhub SSE) and shows phases, the live token text, and per-item results.
   // onResult(data) fires on the final `result` event; onError(msg) fires on an `error` event;
-  // onDone() fires when the job finishes.
-  let { jobId = null, title = 'Generating', onResult = null, onError = null, onDone = null } = $props();
+  // onDone() fires when the job finishes. onProgress(done,total) fires on `progress` events;
+  // onEvent(ev) receives every raw event (e.g. custom `sprite` events for live cell-fill).
+  // bare=true renders NOTHING (plumbing only) — for when the parent shows its own progress UI.
+  let { jobId = null, title = 'Generating', onResult = null, onError = null, onDone = null,
+        onProgress = null, onEvent = null, bare = false } = $props();
 
   let lines = $state([]);   // [{kind:'phase'|'delta'|'item'|'error', text, name?}]
   let live = $state(true);  // false once the job is done
@@ -22,7 +25,9 @@
     es = new EventSource('/api/jobs/' + id + '/stream');
     es.onmessage = (e) => {
       let ev; try { ev = JSON.parse(e.data); } catch { return; }
-      if (ev.type === 'phase') { lines = [...lines, { kind: 'phase', text: ev.label }]; scroll(); }
+      onEvent?.(ev);
+      if (ev.type === 'progress') { onProgress?.(ev.done, ev.total); }
+      else if (ev.type === 'phase') { lines = [...lines, { kind: 'phase', text: ev.label }]; scroll(); }
       else if (ev.type === 'delta') {
         const last = lines[lines.length - 1];
         if (last && last.kind === 'delta') { last.text += ev.text; lines = [...lines]; }
@@ -42,6 +47,7 @@
   onDestroy(close);
 </script>
 
+{#if !bare}
 <div class="gs">
   <div class="gshead">
     {#if live}<span class="spin" aria-hidden="true"></span>{:else}<span class="tick">✓</span>{/if}
@@ -56,6 +62,7 @@
     {/each}
   </div>
 </div>
+{/if}
 
 <style>
   .gs { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; background: var(--panel); margin: 4px 0 12px; }

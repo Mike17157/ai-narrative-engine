@@ -960,32 +960,41 @@ def register(app, ctx):
             if cancelled():
                 return {"ok": True, "rendered": 0, "outfits": 0}
 
-            emit({"type": "phase", "label": f"Rendering {len(all_jobs)} sprites across {len(outfits)} outfits"})
+            total = len(all_jobs)
+            emit({"type": "phase", "label": f"Rendering {total} sprites across {len(outfits)} outfits"})
+            emit({"type": "progress", "done": 0, "total": total})   # arm the bar immediately
 
             batch_prompts = [{"prompt": j["prompt"], "latent": j["latent"],
                               "wildcard": face_wildcard("" if j["is_unified"] else appearance,
                                                         EMOTION_LABELS.get(j["emotion"], j["emotion"]),
                                                         j["emotion"], canon.get(j["emotion"], ""))}
                              for j in all_jobs]
-            results = render_batch(
+            saved = {"n": 0}
+            img_base = f"/api/characters/{key}/portraits/img"
+
+            def _on_result(idx, png):
+                # STREAM: persist + announce each sprite the instant it lands, so the pane fills
+                # cell-by-cell instead of a burst at the end. Runs serially in the fan-out thread.
+                job = all_jobs[idx]
+                if not png:
+                    return
+                oid, emo = job["outfit"].get("id"), job["emotion"]
+                (job["out_dir"] / f"{emo}.png").write_bytes(png)
+                job["outfit"].setdefault("expressions", {})[emo] = f"{emo}.png"
+                ctx.save_portrait_manifest(key, m)
+                saved["n"] += 1
+                emit({"type": "item", "name": emo, "text": job["outfit"].get("name") or oid})
+                emit({"type": "sprite", "outfit": oid, "emotion": emo,
+                      "url": f"{img_base}/{oid}/{emo}.png"})
+
+            render_batch(
                 provider, batch_prompts, ctx=ctx, out_prefix_template=oprefix,
                 cancel=cancelled, seed=SPRITE_SEED,   # fixed seed → consistent set
                 on_progress=lambda d, t: emit({"type": "progress", "done": d, "total": t}),
+                on_result=_on_result,
+                force_local=True,   # the krea2 sprite detailer lives only on local ComfyUI
             )
-
-            # Save results and update manifests
-            for idx, job in enumerate(all_jobs):
-                if cancelled():
-                    break
-                png = results[idx] if idx < len(results) else None
-                if png:
-                    (job["out_dir"] / f"{job['emotion']}.png").write_bytes(png)
-                    job["outfit"].setdefault("expressions", {})[job["emotion"]] = f"{job['emotion']}.png"
-                    done += 1
-                    emit({"type": "item", "name": job["emotion"], "text": job["outfit"].get("name") or job["outfit"].get("id")})
-                ctx.save_portrait_manifest(key, m)   # persist each outfit's sprites
-
-            return {"ok": True, "rendered": done, "outfits": len(outfits)}
+            return {"ok": True, "rendered": saved["n"], "outfits": len(outfits)}
 
         job = _start_stream_job("sprites", "Render emotions", ch.name,
                                 body.get("screen") or f"characters/{key}", work)
