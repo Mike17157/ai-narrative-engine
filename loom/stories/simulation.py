@@ -85,10 +85,6 @@ CLOSE_SCHEMA = {
 SIM_LEVEL = "sim"
 
 
-def empty_sim(premise: str = "") -> dict:
-    return {"premise": premise, "characters": [], "scenes": []}
-
-
 def sim_of(state: dict | None) -> dict:
     """Read the simulation state from a State doc's `sim` level (normalized shape)."""
     from .state_doc import get_level

@@ -19,6 +19,7 @@ handlers on this same bus, not more inline code.
 """
 from __future__ import annotations
 
+import json
 from collections import defaultdict, deque
 from typing import Any, Callable
 
@@ -287,11 +288,14 @@ def _h_plot(sm: StoryMaster, d: dict) -> None:
 
 _ARC_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["name", "question", "stages"],
+    "required": ["name", "question", "conditions", "stages"],
     "properties": {
         "name": {"type": "string"},
         "question": {"type": "string", "description": "the arc's dramatic question in YOUR OWN "
                      "words — one line, never a copy of the request"},
+        "conditions": {"type": "array", "items": {"type": "string"},
+                       "description": "setting-stage ids this arc runs under (from the list given); "
+                       "these activate while the arc is live. Empty if none."},
         "stages": {"type": "array", "minItems": 3, "maxItems": 7, "items": {
             "type": "object", "additionalProperties": False,
             "required": ["title", "purpose", "milestone", "events"],
@@ -316,14 +320,22 @@ def generate_arc(provider, ctx, st, world: dict, request: str) -> dict:
         c = ctx.base_settings.characters.get(m.character)
         nm = (c.name if c else m.character) or m.character
         cast.append(f"- {nm}: {((c.system or '').splitlines()[0] if c else '')[:120]}")
+    stage_ids = [c.id for c in (getattr(st, "conditions", None) or []) if c.id]
+    stage_menu = "\n".join(f"- {c.id}: {c.name} — {(c.effect or c.description or '')[:100]}"
+                           for c in (getattr(st, "conditions", None) or []) if c.id)
     system = (
         "You plan ONE story arc for an interactive novel — a staged emotional progression the "
         "story will live through, scene by scene. Stages are earned and ordinary-human, never "
         "melodrama. Each stage has: a purpose (what it does to the characters), ONE concrete "
         "observable milestone that completes it (an action someone takes, not a feeling), and "
         "a few small planned events — particular, quiet moments a scene can weave in naturally. "
-        "Use ONLY the people who exist. Fit the story's world and its pressures.")
+        "Use ONLY the people who exist. Fit the story's world and its pressures.\n"
+        "SETTING: if the story has SETTING STAGES, pick the one(s) whose world this arc lives in "
+        "and put their ids in `conditions` — the arc runs under those conditions, changing how the "
+        "cast behaves. Use only ids from the list, or leave empty if the arc is under none.")
     prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST:\n" + "\n".join(cast)
+              + (f"\n\nSETTING STAGES (assign the arc's `conditions` from these ids):\n{stage_menu}"
+                 if stage_menu else "")
               + f"\n\nARC REQUEST: {request}\n\nPlan the arc.")
     g = generate_guarded(provider, system=system, prompt=prompt, root=ctx.root,
                          emits=_ARC_SCHEMA)
@@ -335,6 +347,130 @@ def generate_arc(provider, ctx, st, world: dict, request: str) -> dict:
     return data
 
 
+def design_arc(provider, ctx, st, messages: list[dict], draft: dict | None) -> dict:
+    """COLLABORATIVE arc design — the user and the model shape the arc together over turns.
+    Each call takes the conversation + the current draft and returns {reply, arc}: the reply
+    speaks to the writer, the arc is the FULL updated draft (the model maintains it every
+    turn, applying what was agreed). Nothing installs until the user keeps it — the draft
+    rides the story's pending store so the work queue tracks it. See generate_arc (one-shot)."""
+    from .guards import generate_guarded
+    cast = []
+    for m in st.cast:
+        c = ctx.base_settings.characters.get(m.character)
+        nm = (c.name if c else m.character) or m.character
+        cast.append(f"- {nm}: {((c.system or '').splitlines()[0] if c else '')[:120]}")
+    stage_menu = "\n".join(f"- {c.id}: {c.name} — {(c.effect or c.description or '')[:100]}"
+                           for c in (getattr(st, "conditions", None) or []) if c.id)
+    schema = {"type": "object", "additionalProperties": False, "required": ["reply", "arc"],
+              "properties": {
+                  "reply": {"type": "string", "description": "your spoken turn to the writer — "
+                            "conversational, one idea or question at a time, never a lecture"},
+                  "arc": _ARC_SCHEMA}}
+    system = (
+        "You are co-designing ONE story arc WITH a writer — a staged emotional progression the "
+        "story will live through. You propose, they steer; build on what they say, never restart "
+        "unless asked. Stages are earned and ordinary-human, never melodrama: each has a purpose "
+        "(what it does to the characters), ONE concrete observable milestone that completes it "
+        "(an action someone takes, not a feeling), and a few small planned events. Use ONLY the "
+        "people who exist.\n"
+        "EVERY turn return BOTH: `reply` (talk to the writer — react, then offer the next choice "
+        "or question) and `arc` (the FULL current draft with everything agreed so far applied — "
+        "it is the living document, keep unchanged parts intact).\n"
+        + ("SETTING STAGES: pick the stage(s) whose world this arc lives in and keep their ids in "
+           "the draft's `conditions` (only ids from the list; empty if none).\n" if stage_menu else ""))
+    convo = "\n".join(f"{'Writer' if m.get('role') == 'user' else 'You'}: {m.get('text', '')}"
+                      for m in (messages or []) if m.get("text"))
+    prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST:\n" + "\n".join(cast)
+              + (f"\n\nSETTING STAGES:\n{stage_menu}" if stage_menu else "")
+              + ("\n\nCURRENT DRAFT (update this, don't restart):\n"
+                 + json.dumps(draft, ensure_ascii=False) if draft else "")
+              + f"\n\nCONVERSATION:\n{convo}\n\nRespond and return the updated draft.")
+    g = generate_guarded(provider, system=system, prompt=prompt, root=ctx.root, emits=schema)
+    data = g.get("data") or {}
+    return {"reply": (data.get("reply") or "").strip(), "arc": data.get("arc") or None,
+            "error": g.get("error")}
+
+
+# ── The DAY: a fixed three-slot rhythm (morning → evening → night) the playthrough moves
+# through. A slot holds ONE scene; the user advances slots deliberately, and NIGHT ends only
+# by sleeping (which fires consolidation/dreams and turns the day over). Scenes are offered,
+# not imposed: suggest_slot_scenes proposes options grounded in the arc + whereabouts.
+
+DAY_SLOTS = ("morning", "evening", "night")
+
+
+def day_of(world: dict) -> dict:
+    """The current day marker {n, slot}, seeding day 1 morning on first touch."""
+    d = world.get("day")
+    if not (isinstance(d, dict) and d.get("slot") in DAY_SLOTS):
+        d = {"n": 1, "slot": "morning"}
+        world["day"] = d
+    return d
+
+
+def advance_slot(world: dict) -> dict:
+    """Move to the next slot within the day (morning→evening→night). Night does NOT roll
+    over here — sleeping is the only door out of night (see next_day). Returns {n, slot}."""
+    d = day_of(world)
+    i = DAY_SLOTS.index(d["slot"])
+    if i + 1 < len(DAY_SLOTS):
+        d["slot"] = DAY_SLOTS[i + 1]
+    return d
+
+
+def next_day(world: dict) -> dict:
+    """Sleep turned the day over: next day, morning slot. Returns {n, slot}."""
+    d = day_of(world)
+    world["day"] = {"n": int(d.get("n") or 1) + 1, "slot": "morning"}
+    world.setdefault("log", []).append(f"(day {world['day']['n']} begins)")
+    return world["day"]
+
+
+def suggest_slot_scenes(provider, ctx, st, world: dict) -> dict:
+    """Offer 3 scene options for the CURRENT slot — suggestion-based, the user picks (or
+    ignores them and free-plays). Grounded in the arc's current stage, who is where, the
+    active setting stages, and the time of day. Returns {day, slot, options} — each option
+    {title, location, who, hook} with `location` a real location id."""
+    from .guards import generate_guarded
+    d = day_of(world)
+    loc_ids = [l.id for l in st.locations] or ["nowhere"]
+    locs = "\n".join(f"- {l.id} | {l.name}: {(l.description or '')[:80]}" for l in st.locations)
+    cast = ", ".join((ctx.base_settings.characters.get(m.character).name
+                      if ctx.base_settings.characters.get(m.character) else m.character)
+                     for m in st.cast)
+    conds = {k[5:] for k, v in (world.get("flags") or {}).items()
+             if isinstance(k, str) and k.startswith("cond:") and v}
+    stage_fx = "; ".join((c.effect or c.name) for c in (getattr(st, "conditions", None) or [])
+                         if c.id in conds)
+    schema = {"type": "object", "additionalProperties": False, "required": ["options"],
+              "properties": {"options": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
+                  "type": "object", "additionalProperties": False,
+                  "required": ["title", "location", "who", "hook"],
+                  "properties": {
+                      "title": {"type": "string", "description": "the scene, plainly named"},
+                      "location": {"type": "string", "enum": loc_ids},
+                      "who": {"type": "array", "items": {"type": "string"},
+                              "description": "cast names present (besides the player), 0-3"},
+                      "hook": {"type": "string", "description": "1-2 sentences: the concrete "
+                               "situation the player walks into — an opening, never an outcome"}}}}}}
+    system = (
+        "You offer the player THREE scene options for one time-slot of the day — small, concrete, "
+        "playable situations (a person to find, a task underway, a moment about to happen). "
+        "Variety over drama: one option should serve the arc's current stage, one should be "
+        "relationship/daily-life, one a wildcard. Hooks are openings the player walks into — "
+        "never outcomes, never spoilers. Fit the time of day and the world's current stage(s).")
+    prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST: {cast}\n"
+              f"TIME: day {d['n']}, {d['slot']}\n"
+              + (f"WORLD STAGE NOW: {stage_fx}\n" if stage_fx else "")
+              + f"LOCATIONS:\n{locs}\n"
+              + (f"\n{plot_direction(world, st)}\n" if plot_direction(world, st) else "")
+              + (f"\n{people_by_location(world, '')}\n" if people_by_location(world, '') else "")
+              + f"\nOffer three {d['slot']} scenes.")
+    g = generate_guarded(provider, system=system, prompt=prompt, root=ctx.root, emits=schema)
+    return {"day": d["n"], "slot": d["slot"],
+            "options": (g.get("data") or {}).get("options") or [], "error": g.get("error")}
+
+
 def arc_milestone(world: dict) -> str:
     """The current stage's completion condition ('' when no active arc) — handed to the
     scribe so every turn's narration is checked against it for free."""
@@ -342,6 +478,27 @@ def arc_milestone(world: dict) -> str:
     stages = arc.get("stages") or []
     i = int(arc.get("stage") or 0)
     return stages[i]["milestone"] if i < len(stages) else ""
+
+
+def sync_arc_conditions(world: dict) -> set:
+    """Setting stages are ARC-SCOPED and RATCHETED — crossing into an arc ACTIVATES its stages, and
+    activation is PERMANENT: once a stage lights up, its `cond:<id>` flag stays on for the rest of
+    the playthrough. So a character's facets accumulate — arc 1 unlocks one side of them, arc 2 adds
+    another, and neither reverts. (A stage's content still only SURFACES when the beat is relevant —
+    salience-gated in play — so latched-but-irrelevant stages stay quiet; they're eligible, not
+    forced.) Deterministic, no LLM; run each turn before context assembly. Returns the FULL set of
+    stages activated so far (the ratchet)."""
+    arc = world.get("arc") if isinstance(world.get("arc"), dict) else {}
+    active = set(arc.get("conditions") or [])
+    stages = arc.get("stages") or []
+    i = int(arc.get("stage") or 0)
+    if 0 <= i < len(stages) and isinstance(stages[i], dict):
+        active |= set(stages[i].get("conditions") or [])   # a stage inside an arc may add one
+    flags = world.setdefault("flags", {})
+    for cid in active:
+        flags[f"cond:{cid}"] = True                          # LATCH on — never dropped
+    # The ratchet: report EVERY stage ever activated, not just this arc's.
+    return {k[5:] for k, v in flags.items() if isinstance(k, str) and k.startswith("cond:") and v}
 
 
 def advance_arc(world: dict) -> str:

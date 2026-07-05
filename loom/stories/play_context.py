@@ -37,6 +37,11 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     from ..server.services.emotions import EMOTION_KEYS, NORMAL_KEYS
     from ..server.services import lorebook_store as _LS0
 
+    # SETTING STAGES are arc-scoped: sync the active arc's conditions onto world_state `cond:` flags
+    # before anything reads them, so this turn's situational content matches where we are in the plot.
+    from .storymaster import sync_arc_conditions
+    sync_arc_conditions(world_state)
+
     def _char_emotion_keys(char_key: str) -> list[str]:
         """Return this character's affect.range keys (new or old manifest format)."""
         mf = ctx.portrait_manifest(char_key)
@@ -150,6 +155,20 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
             dest = next((l.name for l in st.locations if l.id == moved), moved)
             directive = f"\n\n[The player moves to: {dest}. Narrate the transition and arrival there; set location to '{moved}'.]"
 
+    # A picked SCENE SUGGESTION (the day's slot offer): open the scene it names — its location,
+    # its people, its hook. Acts like a move for the roster; the hook is an opening, not an outcome.
+    seed = body.get("scene_seed") if isinstance(body.get("scene_seed"), dict) else None
+    if seed and not moved:
+        cur = seed.get("location") or cur
+        _n2k0 = {(_cname(m.character) or "").lower(): m.character for m in st.cast}
+        move_keys = {k for k in (_n2k0.get((n or "").lower()) for n in (seed.get("who") or [])) if k}
+        _who = ", ".join(n for n in (seed.get("who") or []) if n)
+        _ln = next((l.name for l in st.locations if l.id == cur), cur)
+        directive = (f"\n\n[A new scene opens: {seed.get('title', 'the next scene')} — at {_ln}."
+                     + (f" {_who} {'are' if ',' in _who else 'is'} here." if _who else "")
+                     + (f" {seed.get('hook', '')}" if seed.get("hook") else "")
+                     + " Narrate the player arriving into this situation — an opening, not an outcome.]")
+
     # The persistent SCENE (space + co-located members + a sticky POV). It carries between
     # turns; the narrator maintains it (reports `present` + `pov`), story_play persists it.
     prior_scene = world_state.get("scene") if isinstance(world_state.get("scene"), dict) else {}
@@ -176,8 +195,8 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     _prior_space = (prior_scene.get("space") or "")
     _arrived = bool(_prior_space) and cur != _prior_space   # scene boundary by travel
 
-    if moved:
-        on_screen = move_keys & set(_cast_keys)          # a move brings its anchors on stage
+    if moved or seed:
+        on_screen = move_keys & set(_cast_keys)          # a move/scene-seed brings its anchors on
     elif _arrived:
         # Travel boundary: presence RE-DERIVES from the world model — only who is actually
         # recorded AT the new place is here; the old room does NOT teleport along. An empty
@@ -257,9 +276,14 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     _born_block = ("PEOPLE MET IN PLAY (voice them from this — they ARE these people):\n"
                    + "\n".join(f"- {_people[n]['card']}" for n in _born_here)) if _born_here else ""
 
+    # TIME — the day's three-slot rhythm (morning/evening/night); '' before the day model exists.
+    _day = world_state.get("day") if isinstance(world_state.get("day"), dict) else {}
+    _time_line = (f"TIME: day {_day.get('n')}, {_day.get('slot')}.\n"
+                  if _day.get("slot") else "")
+
     system = (
         f"You are the narrator of an interactive novel titled \"{st.name}\".\n"
-        f"PREMISE: {st.premise}\nTONE: {st.tone}\n"
+        f"PREMISE: {st.premise}\nTONE: {st.tone}\n" + _time_line
         + f"{player_line}\n"
         f"CAST (use these names):\n{cast}\n"
         f"LOCATIONS (the scene is in exactly one):\n{locs}\n"
@@ -305,8 +329,15 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # else the POV) could know about each character. surface = anyone; known = people they're
     # bonded to; secret = self only (a character's buried layer never leaks through mere presence —
     # it surfaces through the plot). Keeps deep secrets deep. See [[bond-depth-weave]].
-    from .pipeline.character_scaffold import entry_tier as _entry_tier
+    from .pipeline.character_scaffold import (entry_tier as _entry_tier,
+                                              entry_when as _entry_when,
+                                              select_exemplars as _select)
     _observer = player_char or pov_key
+    # SETTING STAGE gate: a `when:<id>` exemplar is live only while that stage is active. Active
+    # stages are world_state flags prefixed `cond:` (the director flips them; slice c). When a stage
+    # holds, its situational content is drawn FIRST — the whole cast re-reads through that lens.
+    _active_conds = {k[5:] for k, v in (world_state.get("flags") or {}).items()
+                     if isinstance(k, str) and k.startswith("cond:") and v}
     _bonded = set()
     for _r in (st.relationships or []):
         if _r.source == _observer:
@@ -327,18 +358,31 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         if c is None or n <= 0:
             return ""
         scope = re.sub(r"[^\w\-]+", "_", str(k))
-        allowed = _allowed_tiers(k)
-        # Pull a generous pool, then gate by tier, then apply the per-role budget — so a hidden
-        # secret exemplar doesn't just eat a slot and leave the character underspecified.
-        pool = _LS0.top_by_priority(ctx.root, scope, max(n * 4, 24))
-        ex = [e for e in pool if _entry_tier(e) in allowed][:n]
-        lines = "\n".join(f"    · [{e.facet or 'life'}] {e.content}" for e in ex if e.content)
+        # SALIENCE: rank the FULL bank against the current beat (BM25+vector RRF — the same
+        # retrieval the lore lane uses), so the exemplars that voice this character are the
+        # ones the scene is actually touching, not a static top-N. Opening turn (no beat) or
+        # empty index falls back to priority order. Never pre-truncate before the gates.
+        pool = (_LS0.retrieve(ctx.root, _beat, [scope], top_k=200, one_per_facet=False)
+                if _beat.strip() else [])
+        ranked = bool(pool)
+        # completeness backstop: an entry the search missed (no vector, no lexical hit) still
+        # reaches the gates — appended after the ranked ones, so salience order is preserved.
+        full = _LS0.top_by_priority(ctx.root, scope, 500)
+        _have = {(e.id, e.title) for e in pool}
+        pool = pool + [e for e in full if (e.id, e.title) not in _have]
+        ex = _select(pool, allowed_tiers=_allowed_tiers(k), active_conds=_active_conds, n=n)
+        # A guard renders as a [steer] directive (deflect away from a subject); everything else as
+        # its facet. The narrator obeys steers without knowing why — that's how the secret holds.
+        lines = "\n".join(
+            f"    · [{'steer' if (e.facet or '') == 'guard' else (e.facet or 'life')}] {e.content}"
+            for e in ex if e.content)
         block = f"- {c.name}:\n{lines}" if lines else ""
-        # Behavioral backstop (NOT the secret — the model never sees that): if this character holds
-        # closed-off ground, tell the narrator they DEFLECT there rather than produce an answer, so
-        # a pointed question doesn't get a confabulated revelation. This is who they are, per their
-        # own tells above — not a rule about a secret the model isn't allowed to know.
-        if any(_entry_tier(e) == "secret" for e in pool):
+        # Behavioral backstop (NOT the secret — the model never sees that): when the beat is
+        # BRUSHING this character's closed ground (a secret-tier entry ranks salient), tell the
+        # narrator they DEFLECT there rather than produce an answer, so a pointed question doesn't
+        # get a confabulated revelation. Salience-gated so they aren't cagey in innocent scenes;
+        # without a relevance ranking (opening turn) it stays on whenever a secret exists.
+        if any(_entry_tier(e) == "secret" for e in (pool[:max(n * 2, 8)] if ranked else pool)):
             guard = (f"    · [closed] {c.name} has ground they keep closed off. Pushed onto it, they "
                      f"deflect, deny, go quiet, or change the subject — they do NOT have a "
                      f"revelation to give in this scene, and never invent one. Play the deflection.")
@@ -357,7 +401,9 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     embodiment = "\n".join(b for b in (_embody(k, _n_for(k)) for k in _voice) if b)
     if embodiment:
         system += ("\n\nEMBODY THE CAST — voice each character from THEIR OWN remembered moments "
-                   "below; stay true to these, they ARE the person:\n" + embodiment)
+                   "below; stay true to these, they ARE the person. A [steer] line is a subject "
+                   "they turn AWAY from: when it comes up, deflect exactly as written and do NOT "
+                   "explain why — you don't know why, and neither do they let on:\n" + embodiment)
     if _people_block:
         system += "\n\n" + _people_block
     if _born_block:

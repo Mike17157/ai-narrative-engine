@@ -357,42 +357,6 @@ def exemplar_notes(root, query: str, k: int = 3, book: str = "_char_exemplars") 
         return ""
 
 
-def seed_story(provider, seed: str = "", root=None) -> dict:
-    """ONE call → the playable fact sheet. Returns {} on failure. With `root`, real-work
-    studies (premises, characters, places) are retrieved as register references (never copied)."""
-    if provider is None:
-        return {}
-    ref = ""
-    if root is not None:
-        _blocks = [("how real serials frame a premise (SITUATION/PRESSURE/ENGINE — match the "
-                    "concreteness)", exemplar_notes(root, seed, 2, "_premise_exemplars")),
-                   ("how real serials build people (a simple profound want, a thin introduction, "
-                    "depth shown only through behavior)", exemplar_notes(root, seed, 3)),
-                   ("how real serials make places feel worked-in", exemplar_notes(root, seed, 2, "_location_exemplars"))]
-        ref = "\n\n".join(f"REFERENCE — {label}. Match the REGISTER; never copy names or "
-                          f"specifics:\n{txt}" for label, txt in _blocks if txt)
-    prompt = ((f"SEED:\n{seed.strip()}\n\n" if (seed or "").strip() else "")
-              + (f"{ref}\n\n" if ref else "")
-              + "Set up the start of this story.")
-    res = provider.generate_text(system=SEED_SYS, prompt=prompt, emits=SEED_SCHEMA)
-    d = _data(res)
-    if not (isinstance(d, dict) and (d.get("protagonist") or {}).get("name")):
-        return {}
-    # Field-discipline cleanup (models blur containers): drop `people` entries that duplicate
-    # the protagonist, and blank a `life` that merely echoes the name.
-    pname = " ".join((d["protagonist"].get("name") or "").lower().split())
-    people = []
-    for q in d.get("people") or []:
-        qn = " ".join((q.get("name") or "").lower().split())
-        if not qn or qn == pname:
-            continue
-        if " ".join((q.get("life") or "").lower().split()) in (qn, ""):
-            q = {**q, "life": ""}
-        people.append(q)
-    d["people"] = people
-    return d
-
-
 # ── CHARACTER BIRTH — transpose a real character (template) into a named story role. The model
 # is bad at inventing a person from a rule, good at moving a real person into a new situation:
 # the substance is borrowed, the model only does the analogical transfer. Output is a PROSE card
@@ -458,34 +422,6 @@ def birth_character(provider, *, role: str, story: str, prominence: str = "suppo
     return {"name": name or _lead_name(card), "prominence": prominence, "role": role, "card": card}
 
 
-def populate_cast(provider, sheet: dict, root=None) -> dict:
-    """Give a seed sheet real embodiment cards: the protagonist is fleshed from their own facts
-    (no template — the seed authored them); each supporting person is TRANSPOSED from a distinct
-    real template. Births are SEQUENTIAL and context-aware — each character sees the cast already
-    made, so the household coheres (no son who exists in one card and not another). Attaches
-    `sheet['cast']` = [protagonist_card, *people_cards]."""
-    if provider is None or not sheet:
-        return sheet
-    p = sheet.get("protagonist") or {}
-    story = sheet.get("pressure", "") + " " + (sheet.get("place") or {}).get("name", "")
-
-    def _brief(cs: list[dict]) -> str:
-        return "\n".join(f"- {c['name']}: {c['card'].split('.')[0]}." for c in cs)
-
-    cast = [birth_character(provider, name=p.get("name", ""),
-                            role=f"{p.get('life', '')} Wants: {p.get('want', '')}",
-                            story=story, prominence="protagonist", template="")]
-    for i, q in enumerate([q for q in (sheet.get("people") or []) if q.get("name")]):
-        c = birth_character(provider, name=q.get("name", ""),
-                            role=f"{q.get('life', '')} Wants: {q.get('want', '')}",
-                            story=story, prominence="supporting", root=root, rank=i,
-                            known=_brief([c for c in cast if c]))
-        if c:
-            cast.append(c)
-    sheet["cast"] = [c for c in cast if c]
-    return sheet
-
-
 # ── PROLOGUE — the opening of the NOVEL: the protagonist living their ordinary life, slow, in
 # close third, so the reader has real context before anything happens. The world/people/pressure
 # are established through lived detail; the strange thing stays at the edge until the last beat
@@ -542,11 +478,6 @@ def generate_prologue(provider, sheet: dict) -> dict:
             sections.append({"title": title, "text": text})
             prev = (prev + "\n\n" + text).strip()
     return {"sections": sections}
-
-
-def prologue_text(prologue: dict) -> str:
-    """The prologue joined into continuous prose (the novel opening the reader sees)."""
-    return "\n\n".join(s["text"] for s in (prologue or {}).get("sections", []) if s.get("text"))
 
 
 def seed_brief(s: dict) -> str:

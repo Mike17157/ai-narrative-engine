@@ -325,7 +325,7 @@ def register(app, ctx):
         play retrieves per scene. Returns {saved, facets, portrait}."""
         from ..server.services import lorebook_store as LS
         from .pipeline.character_scaffold import (
-            DEEPEN_SYSTEM, DEEPEN_FACETS_SCHEMA, PORTRAIT_SYSTEM, deepen_prompt,
+            DEEPEN_SYSTEM, PORTRAIT_SYSTEM, deepen_facets_schema, deepen_prompt,
             facet_to_entry, portrait_prompt)
         ch = ctx.base_settings.characters.get(key)
         if ch is None:
@@ -336,13 +336,15 @@ def register(app, ctx):
         if not any(harness.values()):
             return JSONResponse({"error": "character has no harness (want/lie/wound…) to deepen from"},
                                 status_code=400)
-        # The owning story supplies the frame: premise as world, philosophy as the central question.
-        world, philosophy = "", ""
+        # The owning story supplies the frame: premise as world, philosophy as the central question,
+        # and its SETTING STAGES so the bank can carry per-stage (situational) reactions/secrets.
+        world, philosophy, conds = "", "", []
         owner = ctx._char_owner(key)
         st = ctx.base_settings.stories.get(owner) if owner else None
         if st is not None:
             world = (st.premise or "")[:500]
             philosophy = ((st.premise_parts or {}).get("philosophy") or "")[:500]
+            conds = [c.model_dump() for c in (st.conditions or [])]
 
         # Phase 1 — think the person through (REASONING ON, plain prose).
         thinker = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "high"})
@@ -370,9 +372,10 @@ def register(app, ctx):
         entries = LS.load_lorebook(ctx.root, scope)
         writer = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
         try:
-            data = (writer.generate_text(system=DEEPEN_SYSTEM,
-                                         prompt=deepen_prompt(ch.name, portrait, entries),
-                                         emits=DEEPEN_FACETS_SCHEMA).data) or {}
+            data = (writer.generate_text(
+                system=DEEPEN_SYSTEM,
+                prompt=deepen_prompt(ch.name, portrait, entries, conditions=conds),
+                emits=deepen_facets_schema([c.get("id") for c in conds])).data) or {}
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"exemplar write failed: {exc}"}, status_code=500)
         saved = []
@@ -2912,7 +2915,7 @@ def register(app, ctx):
         if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
         fields = {f: body[f] for f in (
-            "name", "type", "premise", "tone", "themes", "art_style", "premise_parts",
+            "name", "type", "premise", "tone", "themes", "art_style", "premise_parts", "conditions",
             "storyboard", "cast", "lorebook", "locations", "places", "start", "background", "fields",
             "arcs", "chapters", "scenes", "features", "start_scene",
             "relationships", "connections", "default_personas", "recent_window")
@@ -3017,7 +3020,148 @@ def register(app, ctx):
                 continue
             existing.add((s, t)); existing.add((t, s))   # dedupe within the proposal too
             bonds.append({"id": f"r-{s}-{t}", **b})
+        if bonds:   # pipe into the work queue: proposals survive navigation until reviewed
+            from .queue import set_pending
+            try:
+                ctx.update_story_fields(key, {"fields": set_pending(_story_fields(key), "bonds", bonds)})
+            except FileNotFoundError:
+                pass   # draft story (genesis, not committed) — review stays in-page only
         return {"bonds": bonds}
+
+    @app.post("/api/stories/{key}/conditions/generate")
+    def conditions_generate(key: str, body: dict):
+        """PROPOSE the setting's recurring STAGES — the modes this world moves through (seasons,
+        event-states, place-states) that will visibly change daily life and switch on situational
+        character content. Reasoned from the premise/tone/philosophy + the existing geography.
+        Not saved — the Map tab reviews and keeps them. Returns {conditions: [Condition-shaped]}."""
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        sd = st.model_dump()
+        parts = sd.get("premise_parts") or {}
+        locs = ", ".join(l.get("name") or l.get("id") for l in (sd.get("locations") or [])) or "(none yet)"
+        have = [(c.get("name") or "").strip() for c in (sd.get("conditions") or []) if (c.get("name") or "").strip()]
+        ctx_text = "\n".join(filter(None, [
+            f"PREMISE: {sd.get('premise') or ''}",
+            f"TONE: {sd.get('tone') or ''}",
+            f"PHILOSOPHY: {parts.get('philosophy') or ''}",
+            f"PLACES: {locs}",
+            f"ALREADY HAVE (don't repeat): {', '.join(have)}" if have else "",
+        ]))
+        schema = {"type": "object", "additionalProperties": False, "required": ["conditions"],
+                  "properties": {"conditions": {"type": "array", "minItems": 3, "maxItems": 6, "items": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["name", "kind", "description", "effect"],
+                      "properties": {
+                          "name": {"type": "string", "description": "the stage, plainly named — 'The flood season', 'The deep snows'"},
+                          "kind": {"type": "string", "enum": ["seasonal", "event", "place"]},
+                          "description": {"type": "string", "description": "what it IS — the objective world-change, 1-2 sentences"},
+                          "effect": {"type": "string", "description": "how it bends DAILY LIFE: what stops, what becomes dangerous or possible, what ordinary people do differently while it holds"},
+                      }}}}}
+        system = (
+            "You define the recurring STAGES a story-world moves through — the modes it enters and "
+            "leaves that reshape ordinary life while they last. Think seasons (deep snow, flood, "
+            "drought), event-states (a siege, a festival, a plague), and place-states (a dungeon "
+            "opens beneath the city, the tide exposes a causeway). Each must: recur or toggle (a "
+            "persistent MODE, not a one-off plot beat), visibly change what people can and can't do, "
+            "and grow from THIS world's specifics — its geography, its central pressure. Concrete "
+            "and lived, never generic 'the weather changes'. These are the stages that will bring out "
+            "different sides of the cast, so make each one a genuinely different way to live.")
+        provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "high"})
+        if provider is None or not hasattr(provider, "generate_text"):
+            provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+        if provider is None or not hasattr(provider, "generate_text"):
+            return JSONResponse({"error": "no text model available"}, status_code=400)
+        try:
+            out = (provider.generate_text(system=system, prompt=ctx_text, emits=schema).data) or {}
+        except Exception:  # noqa: BLE001 — reasoning channel can break structured output
+            try:
+                provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
+                out = (provider.generate_text(system=system, prompt=ctx_text, emits=schema).data) or {}
+            except Exception as exc:  # noqa: BLE001
+                return JSONResponse({"error": f"condition gen failed: {exc}"}, status_code=500)
+        conds, seen = [], {c.lower() for c in have}
+        for c in out.get("conditions") or []:
+            nm = (c.get("name") or "").strip()
+            if not nm or nm.lower() in seen:
+                continue
+            seen.add(nm.lower())
+            conds.append({"id": re.sub(r"[^\w]+", "_", nm.lower()).strip("_") or f"cond{len(conds)}",
+                          "name": nm, "kind": (c.get("kind") or "").strip(),
+                          "description": (c.get("description") or "").strip(),
+                          "effect": (c.get("effect") or "").strip()})
+        if conds:   # pipe into the work queue: proposals survive navigation until reviewed
+            from .queue import set_pending
+            try:
+                ctx.update_story_fields(key, {"fields": set_pending(_story_fields(key), "conditions", conds)})
+            except FileNotFoundError:
+                pass   # draft story (genesis, not committed) — review stays in-page only
+        return {"conditions": conds}
+
+    @app.get("/api/stories/{key}/conditions/usage")
+    def conditions_usage(key: str):
+        """LINT the setting stages: how many cast exemplars each stage would activate
+        (`when:<id>` tags across the cast's banks), plus ORPHANS — when: ids bound to no
+        existing stage (a renamed/deleted condition silently kills its content otherwise).
+        Returns {usage: {cond_id: count}, orphans: {when_id: count}}."""
+        from ..server.services import lorebook_store as _LS
+        from .pipeline.character_scaffold import entry_when
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        known = {c.id for c in (st.conditions or []) if c.id}
+        usage = {cid: 0 for cid in known}
+        orphans: dict[str, int] = {}
+        for m in st.cast:
+            scope = re.sub(r"[^\w\-]+", "_", str(m.character))
+            for e in _LS.load_lorebook(ctx.root, scope):
+                w = entry_when(e)
+                if not w:
+                    continue
+                if w in known:
+                    usage[w] += 1
+                else:
+                    orphans[w] = orphans.get(w, 0) + 1
+        return {"usage": usage, "orphans": orphans}
+
+    # ── The WORK QUEUE — pending approvals + card todos as one ordered, non-locking list ──
+    def _story_fields(key: str) -> dict:
+        return dict((ctx._read_story_data(key).get("fields")) or {})
+
+    @app.get("/api/stories/{key}/pending")
+    def pending_get(key: str):
+        """This story's pending approvals ({kind: {items}}) — generation output awaiting
+        a human decision, persisted so review survives navigation. See stories/queue.py."""
+        if ctx.base_settings.stories.get(key) is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        return {"pending": _story_fields(key).get("pending") or {}}
+
+    @app.put("/api/stories/{key}/pending/{kind}")
+    def pending_put(key: str, kind: str, body: dict):
+        """Set one kind's pending items (the review surfaces call this as the user keeps or
+        dismisses proposals; an empty list clears the kind and its queue entry)."""
+        from .queue import PENDING_KINDS, set_pending
+        if ctx.base_settings.stories.get(key) is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        if kind not in PENDING_KINDS:
+            return JSONResponse({"error": f"unknown pending kind '{kind}'"}, status_code=400)
+        fields = set_pending(_story_fields(key), kind, (body or {}).get("items") or [])
+        ctx.update_story_fields(key, {"fields": fields})
+        return {"pending": fields["pending"]}
+
+    @app.get("/api/stories/{key}/queue")
+    def story_queue(key: str):
+        """The ordered work queue: for each card layer (overview → cast), pending approvals
+        first, then the layer's todos. Advisory order — every item deep-links to its tab."""
+        from .card import build_card
+        from .queue import build_queue
+        from ..server.services.prompts import style_anchor
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
+        card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
+        return {"items": build_queue(card, _story_fields(key).get("pending"))}
 
     @app.get("/api/stories/{key}/card")
     def story_card(key: str):
@@ -3062,6 +3206,136 @@ def register(app, ctx):
         card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
         lay = next((l for l in card["layers"] if l["id"] == layer), None)
         return {"ok": True, "layer": lay}
+
+    def _rebuilt_layer(key: str, layer: str):
+        st = ctx.base_settings.stories.get(key)
+        from .card import build_card
+        from ..server.services.prompts import style_anchor
+        manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
+        card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
+        return next((l for l in card["layers"] if l["id"] == layer), None)
+
+    @app.post("/api/stories/{key}/card/{layer}/ops")
+    def story_card_ops(key: str, layer: str, body: dict):
+        """TARGETED partial edits to ONE layer — apply a list of ops that each touch a single part
+        (set a field, merge one dict key, upsert/remove one list item by id) WITHOUT resending the
+        whole section. Ops naming non-whitelisted fields are dropped. Body {ops:[...]}. Returns
+        {ok, applied, layer}. This is the apply half of the section agent's suggest→approve loop."""
+        from .card import apply_layer_ops, LAYER_FIELDS
+        if ctx.base_settings.stories.get(key) is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        if layer not in LAYER_FIELDS:
+            return JSONResponse({"error": f"layer '{layer}' has no editable fields"}, status_code=400)
+        try:
+            data = ctx._read_story_data(key)
+        except FileNotFoundError:
+            return JSONResponse({"error": "story not committed"}, status_code=400)
+        new_data, applied, stale = apply_layer_ops(data, layer, (body or {}).get("ops") or [])
+        if not applied:
+            # a drifted anchor (someone edited underneath) → tell the caller to re-read, not clobber
+            msg = "the section changed since these edits were proposed — re-open it" if stale else "no applicable ops"
+            return JSONResponse({"error": msg, "stale": stale}, status_code=409 if stale else 400)
+        # persist only the fields the ops touched
+        touched = {op["field"] for op in applied if op.get("field")}
+        try:
+            ctx.update_story_fields(key, {f: new_data.get(f) for f in touched})
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
+        return {"ok": True, "applied": applied, "stale": stale, "layer": _rebuilt_layer(key, layer)}
+
+    _SECTION_BRIEF = {
+        "overview": "the PREMISE & THEME — premise, tone, themes, art style, and the premise components "
+                    "(philosophy/protagonist/lie/inciting/opposition/stakes/texture). The controlling idea.",
+        "map": "the WORLD — locations (each an item with an id) and the recurring setting conditions/stages.",
+        "relationships": "the CAST & fixed BONDS — relationship items (each with source/target/nature and the "
+                         "hidden potential/trajectory). Warmth drifts in play; you set the fixed structure.",
+        "plot": "the PROGRESSION — arcs and the storyboard beats (the staged plan).",
+    }
+
+    @app.post("/api/stories/{key}/card/{layer}/chat")
+    def story_card_chat(key: str, layer: str, body: dict):
+        """The SECTION AGENT — converse about ONE section and propose TARGETED ops (never a whole-doc
+        rewrite). Given the section's current JSON + the writer's message, returns {reply, ops} where
+        each op edits one part (set/merge/upsert/remove). The client shows ops as approve cards and
+        applies the kept ones via /card/{layer}/ops. Body {messages:[{role,text}]}."""
+        from ..server.services import config_files as _cf
+        from .card import LAYER_FIELDS, build_card
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        if layer not in LAYER_FIELDS:
+            return JSONResponse({"error": f"layer '{layer}' isn't editable by chat"}, status_code=400)
+        messages = [m for m in ((body or {}).get("messages") or []) if isinstance(m, dict) and m.get("text")]
+        if not messages:
+            return JSONResponse({"error": "say something"}, status_code=400)
+        from ..server.services.prompts import style_anchor
+        manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
+        content = next((l["content"] for l in build_card(st.model_dump(), manifests,
+                        global_style=style_anchor(ctx.root))["layers"] if l["id"] == layer), {})
+        allowed = list(LAYER_FIELDS[layer])
+        op_item = {"type": "object", "additionalProperties": False, "required": ["op", "field", "summary"],
+                   "properties": {
+                       "op": {"type": "string", "enum": ["set", "merge", "upsert", "remove"]},
+                       "field": {"type": "string", "enum": allowed},
+                       "key": {"type": "string", "description": "for merge: the dict key to set (e.g. a premise-component id)"},
+                       "id": {"type": "string", "description": "for upsert/remove: the item's id"},
+                       "value": {"type": "string", "description": "for set/merge: the new text value"},
+                       "json": {"type": "string", "description": "for upsert: the item's fields as a JSON "
+                                "object string, e.g. {\"source\":\"eli\",\"target\":\"mara\",\"nature\":\"rival\"}"},
+                       "summary": {"type": "string", "description": "one short line describing this edit"}}}
+        schema = {"type": "object", "additionalProperties": False, "required": ["reply", "ops"],
+                  "properties": {"reply": {"type": "string", "description": "your conversational turn "
+                                           "to the writer — brief, one idea at a time"},
+                                 "ops": {"type": "array", "items": op_item}}}
+        system = (
+            "You are the writer's editor for ONE section of their story bible. Discuss it and propose "
+            "TARGETED ops that edit only the affected part — never rewrite the whole section. Ops: set "
+            "(a whole field), merge (one key of a dict like premise_parts — `key` is the component id, "
+            "`value` the text), upsert (add/update one list item — `id` + `json` of the fields to set; "
+            "existing keys are kept), remove (one list item by id). WHEN THE WRITER ASKS FOR A CHANGE "
+            "OR APPROVES ONE, you MUST include the op(s) — do not merely describe them in `reply`. If "
+            "you're only clarifying, return an empty ops list. Only the listed fields are editable. "
+            f"Keep prose concrete and in the story's voice.\nSECTION: {_SECTION_BRIEF.get(layer, layer)}")
+        convo = "\n".join(f"{'Writer' if m.get('role') == 'user' else 'You'}: {m['text']}" for m in messages)
+        import json as _json
+        prompt = (f"CURRENT SECTION JSON:\n{_json.dumps(content, ensure_ascii=False)[:6000]}\n\n"
+                  f"EDITABLE FIELDS: {', '.join(allowed)}\n\nCONVERSATION:\n{convo}\n\n"
+                  "Reply, and include ops for every change the writer asked for or approved.")
+        _roles = _cf.load_text_roles(ctx.root)
+
+        def _run(effort):
+            p = ctx.text_provider_for(_roles.get("director") or _roles.get("narrator"),
+                                      {"reasoning_effort": effort})
+            if p is None:
+                return None
+            try:
+                return (p.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
+            except Exception:  # noqa: BLE001 — reasoning channel can break structured output
+                return {}
+        out = _run("medium")
+        if out is None:
+            return JSONResponse({"error": "no editor model configured"}, status_code=400)
+        if not out.get("reply") and not out.get("ops"):
+            out = _run("none") or out          # non-thinking fallback for the empty-structured flake
+
+        from .card import op_base_hash
+        try:
+            raw = ctx._read_story_data(key)      # anchor against the RAW story fields apply edits
+        except FileNotFoundError:
+            raw = {}
+        ops = []
+        for o in (out.get("ops") or []):
+            if not isinstance(o, dict) or o.get("field") not in allowed:
+                continue
+            if o.get("op") == "upsert" and o.get("json") and "item" not in o:
+                try:
+                    o["item"] = _json.loads(o["json"])   # JSON-string → dict (robust structured output)
+                except Exception:  # noqa: BLE001
+                    continue
+            o.pop("json", None)
+            o["base"] = op_base_hash(raw, o)     # hash-anchor the edit to what it expects to change
+            ops.append(o)
+        return {"reply": (out.get("reply") or "").strip(), "ops": ops}
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
@@ -3459,11 +3733,36 @@ def register(app, ctx):
             return JSONResponse({"error": "no such story"}, status_code=404)
         body = body or {}
         request = (body.get("request") or "").strip()
-        if not request:
-            return JSONResponse({"error": "give the arc a one-line request"}, status_code=400)
         sid = body.get("sid") or f"play-{key}"
         sess = load_session(ctx.root, sid) or {}
         ws = _SE.world_of(sess.get("state"))
+        # INSTALL mode: a full `arc` (from the collaborative designer) becomes THE active arc
+        # on this thread's world model, stage 0; its pending draft clears from the work queue.
+        if not request and isinstance(body.get("arc"), dict) and (body["arc"].get("stages")):
+            arc = dict(body["arc"])
+            arc["stage"] = 0
+            known = {c.id for c in (st.conditions or []) if c.id}
+            arc["conditions"] = [c for c in (arc.get("conditions") or []) if c in known]
+            ws["arc"] = arc
+            save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
+            from .queue import set_pending
+            try:
+                ctx.update_story_fields(key, {"fields": set_pending(_story_fields(key), "arc", [])})
+            except FileNotFoundError:
+                pass
+            return {"arc": arc}
+        # PATCH mode: no request + a `conditions` list = hand-edit the ACTIVE arc's setting
+        # stages (validated against the story's stage-set). The next turn's sync flips the flags.
+        if not request and isinstance(body.get("conditions"), list):
+            arc = ws.get("arc") if isinstance(ws.get("arc"), dict) else None
+            if not arc:
+                return JSONResponse({"error": "no active arc to edit"}, status_code=400)
+            known = {c.id for c in (st.conditions or []) if c.id}
+            arc["conditions"] = [c for c in body["conditions"] if c in known]
+            save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
+            return {"arc": arc}
+        if not request:
+            return JSONResponse({"error": "give the arc a one-line request"}, status_code=400)
         _roles = _cf.load_text_roles(ctx.root)
         prov = ctx.text_provider_for(_roles.get("director") or _roles.get("narrator"),
                                      {"reasoning_effort": "medium"})
@@ -3474,6 +3773,75 @@ def register(app, ctx):
             return JSONResponse({"error": "the model returned no arc"}, status_code=502)
         save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
         return {"arc": arc}
+
+    @app.post("/api/stories/{key}/arc/design")
+    def story_arc_design(key: str, body: dict):
+        """COLLABORATIVE arc design — one conversational turn. Body {messages: [{role,text}]};
+        the current draft rides the story's pending store (fields.pending.arc), so design
+        survives navigation and shows in the work queue until kept (POST /arc {sid, arc}).
+        Returns {reply, arc}."""
+        from ..server.services import config_files as _cf
+        from .storymaster import design_arc
+        from .queue import set_pending
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        messages = [m for m in (body.get("messages") or []) if isinstance(m, dict)]
+        if not messages:
+            return JSONResponse({"error": "say something to start designing"}, status_code=400)
+        draft = ((_story_fields(key).get("pending") or {}).get("arc") or {}).get("items") or []
+        _roles = _cf.load_text_roles(ctx.root)
+        prov = ctx.text_provider_for(_roles.get("director") or _roles.get("narrator"),
+                                     {"reasoning_effort": "medium"})
+        if prov is None:
+            return JSONResponse({"error": "no director model configured"}, status_code=400)
+        out = design_arc(prov, ctx, st, messages, draft[0] if draft else None)
+        if not out.get("reply") and not out.get("arc"):
+            return JSONResponse({"error": out.get("error")
+                                 or "the designer returned nothing — say it again"}, status_code=502)
+        if out.get("arc"):
+            try:
+                ctx.update_story_fields(
+                    key, {"fields": set_pending(_story_fields(key), "arc", [out["arc"]])})
+            except FileNotFoundError:
+                pass
+        return {"reply": out.get("reply", ""), "arc": out.get("arc")}
+
+    @app.post("/api/stories/{key}/day/suggest")
+    def story_day_suggest(key: str, body: dict):
+        """The DAY's scene offers: 3 suggested scenes for the current slot (morning/evening/
+        night), grounded in the arc + whereabouts + world stage. Body {sid?, advance?: bool} —
+        advance moves to the NEXT slot first (night never advances here; sleeping in play is
+        the only door out of night). Returns {day, slot, options}."""
+        from ..server.services.story_sessions import load_session, save_session
+        from ..server.services import config_files as _cf
+        from . import state_engine as _SE
+        from .storymaster import suggest_slot_scenes, advance_slot, day_of
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        sess = load_session(ctx.root, sid) or {}
+        ws = _SE.world_of(sess.get("state"))
+        if body.get("advance"):
+            if day_of(ws)["slot"] == "night":
+                return JSONResponse({"error": "night ends by sleeping, not by moving on"},
+                                    status_code=400)
+            advance_slot(ws)
+        else:
+            day_of(ws)   # seed day 1 morning on first touch
+        _roles = _cf.load_text_roles(ctx.root)
+        prov = ctx.text_provider_for(_roles.get("director") or _roles.get("narrator"),
+                                     {"reasoning_effort": "medium"})
+        if prov is None:
+            return JSONResponse({"error": "no director model configured"}, status_code=400)
+        out = suggest_slot_scenes(prov, ctx, st, ws)
+        save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), ws)})
+        if out.get("error") and not out.get("options"):
+            return JSONResponse({"error": out["error"]}, status_code=502)
+        return {"day": out["day"], "slot": out["slot"], "options": out["options"]}
 
     @app.get("/api/stories/{key}/manuscript")
     def story_manuscript(key: str, sid: str = ""):

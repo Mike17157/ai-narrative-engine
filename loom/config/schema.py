@@ -126,6 +126,19 @@ class CastMember(BaseModel):
 # from the conversation). So there are no authored transitions and no per-scene
 # cast — only the cast roster and the available places.
 # --------------------------------------------------------------------------- #
+# Condition — a recurring SETTING STAGE (a mode the world enters and leaves): a season
+# (deep snow, flood), an event-state (siege, festival), a place-state (the dungeon is open).
+# These are the AUTHORED vocabulary; which are ACTIVE is per-thread world_state (flags/clock).
+# Characters carry `when:<id>` exemplars that switch on while the condition holds — so each
+# stage brings out new reactions and secrets. See [[bond-depth-weave]].
+class Condition(BaseModel):
+    id: str = ""
+    name: str = ""                 # "Flood season", "The deep snows", "The dungeon opens"
+    kind: str = ""                 # seasonal | event | place | "" (advisory grouping)
+    description: str = ""          # what it IS — the objective world-change
+    effect: str = ""              # how it bends daily life: what stops, what people do differently
+
+
 class Location(BaseModel):
     id: str
     name: str
@@ -252,6 +265,10 @@ class Arc(BaseModel):
     # Relationship-first cross-refs (GENESIS.md §6): the arc↔character and arc↔graph links.
     owner: str = ""               # character key whose LIE this arc plots (the arc IS a lie over time)
     pressures: list[str] = Field(default_factory=list)  # relationship ids this arc rides on / strains
+    # SETTING STAGES live during this arc (Condition ids). The arc boundary IS the setting switch:
+    # entering an arc activates its conditions (world_state `cond:` flags), so the whole cast's
+    # situational content changes at the major beats. See Condition + storymaster.sync_arc_conditions.
+    conditions: list[str] = Field(default_factory=list)
     nodes: dict[str, ArcBeat] = Field(default_factory=dict)  # legacy flat chain
     start: str = ""               # id of the first ArcBeat node (legacy)
     order: int = 0
@@ -410,6 +427,9 @@ class Story(BaseModel):
     cast: list[CastMember] = Field(default_factory=list)  # the roster (presence is dynamic)
     lorebook: dict[str, Any] = Field(default_factory=dict)
     locations: list[Location] = Field(default_factory=list)
+    # Recurring SETTING STAGES (seasons, event-states, place-states) the world moves through —
+    # the vocabulary that situation-keyed character content (`when:<id>`) switches on. See Condition.
+    conditions: list[Condition] = Field(default_factory=list)
     # Story-authored Places (containers) + their character-anchored Scenes. Additive over
     # `locations` — the world's "spots" (mom's kitchen, the baker's bakery). See Place/Scene.
     places: list[Place] = Field(default_factory=list)

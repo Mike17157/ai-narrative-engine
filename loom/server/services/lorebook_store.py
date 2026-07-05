@@ -440,15 +440,6 @@ def load_lorebook(root: Path, scope: str) -> list[LoreEntry]:
     return [_row_to_entry(r) for r in rows]
 
 
-def save_lorebook(root: Path, scope: str, entries: list[LoreEntry]) -> None:
-    """Replace ALL entries in a scope."""
-    con = _conn(root)
-    con.execute("DELETE FROM lore WHERE scope=?", (scope,))
-    for e in entries:
-        _insert(con, scope, e)
-    con.commit()
-
-
 def _embed_text(title: str, keywords, content: str) -> str:
     """The passage text we embed for an entry (title + triggers + body)."""
     return f"{title}. {' '.join(keywords or [])}. {content}".strip()
@@ -517,11 +508,6 @@ def delete_entry(root: Path, scope: str, entry_id: str) -> None:
     con = _conn(root)
     con.execute("DELETE FROM lore WHERE scope=? AND entry_id=?", (scope, entry_id))
     con.commit()
-
-
-def all_scopes(root: Path) -> list[str]:
-    con = _conn(root)
-    return [r[0] for r in con.execute("SELECT DISTINCT scope FROM lore ORDER BY scope").fetchall()]
 
 
 # ── Retrieval — HYBRID: FTS5 BM25 (lexical) + native vector cosine (semantic) ────

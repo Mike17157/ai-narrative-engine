@@ -167,21 +167,6 @@ def stage_spec(content: str) -> dict | None:
     return None
 
 
-def parse_stage_function(entry) -> StageFunction | None:
-    """Turn a stage-shaped lore entry into a StageFunction (or None)."""
-    spec = stage_spec(getattr(entry, "content", "") or "")
-    if spec is None:
-        return None
-    return StageFunction(
-        fn=str(spec["fn"]).strip(),
-        describe=str(spec.get("describe") or getattr(entry, "title", "") or "").strip(),
-        schema=str(spec.get("schema") or "").strip(),
-        image_workflow=str(spec.get("image_workflow") or "").strip(),
-        writes=str(spec.get("writes") or "").strip(),
-        reads=[str(r) for r in (spec.get("reads") or []) if r],
-    )
-
-
 # ── Trigger offering (transcript → which functions are available this turn) ──────
 
 def offered(functions: list[GraphFunction], transcript: str, cap: int = 12) -> list[GraphFunction]:

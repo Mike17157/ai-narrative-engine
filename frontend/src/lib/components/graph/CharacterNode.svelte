@@ -3,13 +3,15 @@
   // centred so bond edges run card-to-card. data._onClick(data) → open the character's detail modal.
   import { Handle, Position } from '@xyflow/svelte';
   let { data } = $props();
-  const H = 'opacity:0;border:0;width:1px;height:1px;min-width:0;min-height:0;left:50%;top:50%;';
+  // Handles MUST sit at the component ROOT (not inside .cnode) — a handle inside the styled card
+  // isn't measured against the Svelte Flow node wrapper, so edges can't resolve their endpoints
+  // and get silently dropped. This is the exact gotcha the workflow SectionNode documents.
+  const H = 'opacity:0;border:0;width:8px;height:8px;';
 </script>
 
+<Handle type="target" position={Position.Left} id="t" style={H} />
+<Handle type="source" position={Position.Right} id="s" style={H} />
 <div class="cnode" class:focus={data.focus} class:primary={data.primary} onclick={() => data._onClick?.(data)}>
-  <Handle type="target" position={Position.Top} id="t" style={H} />
-  <Handle type="source" position={Position.Top} id="s" style={H} />
-
   <div class="av">
     {#if data.img}<img src={data.img} alt={data.name} />{:else}<span class="ph">🎭</span>{/if}
   </div>

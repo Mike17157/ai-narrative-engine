@@ -57,15 +57,6 @@ def arch_of(family_id: str) -> str:
     return (_BY_ID.get(family_id) or {}).get("arch", "")
 
 
-def family_label(family_id: str) -> str:
-    return (_BY_ID.get(family_id) or {}).get("label", family_id or "Unknown")
-
-
-def families_for_arch(arch: str) -> list[str]:
-    a = (arch or "").lower()
-    return [f["id"] for f in FAMILIES if f["arch"] == a]
-
-
 def family_of(rel_name: str | None, *, arch: str | None = None,
               civitai_base: str | None = None, override: str | None = None) -> str:
     """Resolve a file's family. Order: override → civitai baseModel → folder/filename hint → arch."""
@@ -92,16 +83,3 @@ def family_of(rel_name: str | None, *, arch: str | None = None,
     if arch:
         return _ARCH_FALLBACK.get(arch.lower(), "unknown")
     return "unknown"
-
-
-def family_compat(lora_family: str, model_family: str) -> str:
-    """Soft compatibility: 'native' (same family), 'cross' (same arch, different sub-family — usually
-    works), or 'incompatible' (different arch). Unknowns are treated as cross (don't hard-hide)."""
-    if not lora_family or not model_family or "unknown" in (lora_family, model_family):
-        return "cross"
-    if lora_family == model_family:
-        return "native"
-    la, ma = arch_of(lora_family), arch_of(model_family)
-    if la and ma and la == ma:
-        return "cross"
-    return "incompatible"

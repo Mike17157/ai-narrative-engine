@@ -225,9 +225,3 @@ def set_active(root: Path, preset_id: str) -> dict:
         lib["active"] = preset_id
         lib = save_image_presets(root, lib)
     return lib
-
-
-def active_image_preset(root: Path) -> dict:
-    """The global-default preset. Always returns a preset (falls back to 'none')."""
-    lib = load_image_presets(root)
-    return get_image_preset(root, lib.get("active")) or lib["presets"][0]

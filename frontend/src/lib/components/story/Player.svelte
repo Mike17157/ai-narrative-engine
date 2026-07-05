@@ -43,6 +43,55 @@
   let pgEmotions = $derived(curPage?.emotions || {});
   function nextPage() { if (cursor < pages.length - 1) cursor++; }
   function backPage() { if (cursor > 0) cursor--; }
+
+  // ── VN line stepping — a fresh turn reveals its lines one at a time (click to advance);
+  // the current line's SPEAKER pulls sprite focus (their sprite lit, the others dimmed).
+  // Only the live edge steps; reading back shows whole pages at once.
+  let lineCursor = $state(Infinity);
+  let pgLines = $derived(curPage?.lines || []);
+  let visibleLines = $derived(atEnd && pgLines.length ? pgLines.slice(0, lineCursor + 1) : pgLines);
+  let linesLeft = $derived(atEnd && pgLines.length ? Math.max(0, pgLines.length - visibleLines.length) : 0);
+  function advanceLine() { if (linesLeft > 0) lineCursor += 1; }
+  let nameToKey = $derived(Object.fromEntries(
+    Object.entries(names).map(([k, n]) => [String(n).toLowerCase(), k])));
+  // Who we see THROUGH this turn: the POV character, else the player's own puppet. In a
+  // first-person or narrator view you don't watch yourself — the stage rotates to show the
+  // LAST OTHER character (whoever last spoke), never the viewpoint holder's own sprite.
+  let selfKey = $derived(puppet?.key || primaryKey);
+  let povKey = $derived(curPage?.pov ? (nameToKey[String(curPage.pov).toLowerCase()] || null) : null);
+  let viewerKey = $derived(povKey || selfKey);
+  let firstPerson = $derived(!povKey || povKey === selfKey);
+  let lastSpeakerKey = $derived.by(() => {
+    const l = [...visibleLines].reverse().find((x) => x.kind === 'dialogue' && x.speaker);
+    return l ? nameToKey[l.speaker.toLowerCase()] || null : null;
+  });
+  let lastOtherKey = $derived.by(() => {
+    const spoke = [...visibleLines].reverse().find((x) => x.kind === 'dialogue' && x.speaker
+        && nameToKey[x.speaker.toLowerCase()] && nameToKey[x.speaker.toLowerCase()] !== viewerKey);
+    if (spoke) return nameToKey[spoke.speaker.toLowerCase()];
+    const others = pgPresent.filter((k) => k !== viewerKey);
+    return others[others.length - 1] || null;
+  });
+  // Sprites on stage: first-person/narrator → only the last other character (rotates as the
+  // exchange moves); a third-person character POV → everyone present but the viewpoint holder.
+  let stageKeys = $derived(firstPerson
+    ? (lastOtherKey ? [lastOtherKey] : [])
+    : pgPresent.filter((k) => k !== viewerKey));
+  // The lit sprite: the current speaker if they're on stage, else the single staged character.
+  let speakingKey = $derived((lastSpeakerKey && stageKeys.includes(lastSpeakerKey))
+    ? lastSpeakerKey : (stageKeys.length === 1 ? stageKeys[0] : null));
+  // Per-line EMOTION: as lines reveal, each dialogue line's emotion becomes its speaker's
+  // current sprite expression (latest revealed line wins). '' before the first dialogue line.
+  let lineEmotions = $derived.by(() => {
+    const m = {};
+    for (const l of visibleLines) {
+      if (l.kind === 'dialogue' && l.speaker && l.emotion) {
+        const k = nameToKey[l.speaker.toLowerCase()];
+        if (k) m[k] = l.emotion;
+      }
+    }
+    return m;
+  });
   let lastGuard = $state(null);
   // The world-state engine owns the `world` level; the panel also surfaces the sibling
   // levels (graph / sim / facts) so the whole State doc is visible at a glance.
@@ -90,6 +139,37 @@
   // The storymaster's FEVER-DREAM: when the player sleeps, the cast's latent pressures surface as a
   // single foreboding, oblique portent (not options) — shown as a dream overlay until dismissed.
   let dream = $state('');
+
+  // ── The DAY — three scene slots (morning → evening → night). Each slot holds ONE scene,
+  // OFFERED not imposed: 🎬 fetches three suggestions grounded in the arc + whereabouts; pick
+  // one (or ignore them and free-play). Ending a slot is deliberate; night ends only by
+  // sleeping, which fires the dream/consolidation pass and turns the day over.
+  let day = $state(null);              // {n, slot} — maintained by the server
+  let offers = $state([]);             // suggested scenes for the current slot
+  let offersBusy = $state(false);
+  const SLOTS = ['morning', 'evening', 'night'];
+  const SLOT_ICON = { morning: '☀', evening: '🌆', night: '🌙' };
+  async function suggestScenes(advance = false) {
+    if (offersBusy) return;
+    offersBusy = true; err = null;
+    const r = await post(`/stories/${storyKey}/day/suggest`, { sid: playSid, advance });
+    offersBusy = false;
+    if (r.ok) { day = { n: r.data.day, slot: r.data.slot }; offers = r.data.options || []; }
+    else err = r.data?.error || 'no scene offers';
+  }
+  async function pickScene(o) {
+    if (busy) return;
+    offers = [];
+    curScene = null;
+    history = [...history, { role: 'user', text: `(Scene: ${o.title})` }];
+    await turn({ history, location: scene.location, scene_seed: { ...o, slot: day?.slot } });
+  }
+  async function sleepNow() {
+    if (busy) return;
+    offers = [];
+    history = [...history, { role: 'user', text: '(I turn in for the night and sleep.)' }];
+    await turn({ history, location: scene.location });
+  }
 
   // Who YOU are this playthrough. A "puppet" is any character card flagged `playable`;
   // you embody it (its backstory + lorebook flow into the director's context) and drive
@@ -175,13 +255,15 @@
     const d = r.data;
     history = [...history, { role: 'assistant', text: d.reply }];
     scene = { location: d.location, present: d.present || [], emotions: d.emotions || {}, movement: !!d.movement };
-    pages = [...pages, { kind: 'turn', text: d.reply, present: d.present || [], emotions: d.emotions || {} }];
+    pages = [...pages, { kind: 'turn', text: d.reply, lines: d.lines || [], present: d.present || [], emotions: d.emotions || {}, pov: d.pov || '' }];
     cursor = pages.length - 1;       // a new turn jumps you to the live edge
+    lineCursor = d.lines?.length ? 0 : Infinity;   // a lined turn starts its VN reveal
     if (d.beat) lastBeat = d.beat;   // the consequence reasoning behind this turn (🧠 Logic panel)
     if (d.state?.state) worldState = d.state.state;
     if (typeof d.state?.revision === 'number') stateRev = d.state.revision;
     lastGuard = d.guard || null;
     if (d.consolidation?.dream) dream = d.consolidation.dream;   // the player slept → a fever-dream rises
+    if (d.day) day = d.day;                                      // the slot rhythm follows the server
     if (showState) loadState();   // refresh sibling-level counts (facts/sim grow as you play)
   }
   async function send() {
@@ -204,7 +286,13 @@
     history = [...history, { role: 'user', text: `(Go to ${where}.)` }];
     await turn({ history, location: scene.location, choice: s.id });
   }
-  const spriteOf = (k) => (sprites[k]?.[pgEmotions[k]] || refs[k] || null);
+  // Sprite for a character: the current REVEALED line's emotion wins (VN expression changes
+  // per line); an unknown per-line key falls back to the turn emotion, then the ref image.
+  const spriteOf = (k) => {
+    const le = lineEmotions[k];
+    const emo = (le && sprites[k]?.[le]) ? le : pgEmotions[k];
+    return sprites[k]?.[emo] || refs[k] || null;
+  };
   let bg = $derived.by(() => {
     const sb = activeScene?.background || activeScene?._place?.background;
     if (sb) return `${sb}?b=${bust}`;
@@ -366,9 +454,11 @@
       <Manuscript {storyKey} sid={playSid} onclose={() => (showMs = false)} />
     {/if}
     <div class="cast">
-      {#each pgPresent as k (k)}
+      {#each stageKeys as k (k)}
         {#if spriteOf(k)}
-          <div class="sprite" style="height:{spriteH(k)}%"><img src={spriteOf(k)} alt={names[k] || k} /></div>
+          <div class="sprite" class:speaking={speakingKey === k}
+               class:dimmed={speakingKey && speakingKey !== k}
+               style="height:{spriteH(k)}%"><img src={spriteOf(k)} alt={names[k] || k} /></div>
         {/if}
       {/each}
     </div>
@@ -376,11 +466,60 @@
     <div class="dialogue">
       {#if err}<div class="err">⚠ {err}</div>{/if}
       {#if curPage?.kind === 'prologue'}<div class="ptag">Prologue · {curPage.title}</div>{/if}
-      <p class="narr">
-        {#if prologueBusy}<span class="loading">Writing the prologue…</span>
-        {:else if busy && atEnd}{@html formatChat(curPage?.text || '')}<span class="loading"> …</span>
-        {:else}{@html formatChat(curPage?.text || '')}{/if}
-      </p>
+      {#if pgLines.length}
+        <!-- VN presentation: lines reveal one by one at the live edge; click to advance.
+             The current speaker's sprite is focused above. -->
+        <div class="vnlines" role="button" tabindex="0" onclick={advanceLine}
+             onkeydown={(e) => e.key === 'Enter' && advanceLine()}>
+          {#each visibleLines as ln, i (i)}
+            {#if ln.kind === 'dialogue'}
+              <div class="vnline dlg">{#if ln.speaker}<span class="vnwho">{ln.speaker}</span>{/if}<span class="vntext">{ln.text}</span></div>
+            {:else if ln.kind === 'thought'}
+              <div class="vnline tht"><span class="vntext">{ln.text}</span></div>
+            {:else}
+              <div class="vnline"><span class="vntext">{ln.text}</span></div>
+            {/if}
+          {/each}
+          {#if linesLeft > 0}<div class="vnmore">▼ <span class="vnleft">{linesLeft} more</span></div>
+          {:else if busy && atEnd}<span class="loading"> …</span>{/if}
+        </div>
+      {:else}
+        <p class="narr">
+          {#if prologueBusy}<span class="loading">Writing the prologue…</span>
+          {:else if busy && atEnd}{@html formatChat(curPage?.text || '')}<span class="loading"> …</span>
+          {:else}{@html formatChat(curPage?.text || '')}{/if}
+        </p>
+      {/if}
+
+      {#if atEnd && !prologueBusy}
+        <div class="dayrow">
+          {#if day}
+            <span class="dlab">Day {day.n}</span>
+            {#each SLOTS as s (s)}<span class="slot" class:on={day.slot === s}>{SLOT_ICON[s]} {s}</span>{/each}
+          {/if}
+          <span class="dsp"></span>
+          {#if !day}
+            <button class="dbtn" onclick={() => suggestScenes(false)} disabled={offersBusy || busy}>{offersBusy ? '…' : '🎬 Start the day'}</button>
+          {:else if day.slot === 'night'}
+            <button class="dbtn" onclick={() => suggestScenes(false)} disabled={offersBusy || busy}>{offersBusy ? '…' : '🎬 Scenes'}</button>
+            <button class="dbtn zz" onclick={sleepNow} disabled={busy}>😴 Sleep</button>
+          {:else}
+            <button class="dbtn" onclick={() => suggestScenes(false)} disabled={offersBusy || busy}>{offersBusy ? '…' : '🎬 Scenes'}</button>
+            <button class="dbtn" onclick={() => suggestScenes(true)} disabled={offersBusy || busy}>→ end {day.slot}</button>
+          {/if}
+        </div>
+        {#if offers.length}
+          <div class="offers">
+            {#each offers as o, i (i)}
+              <button class="offer" onclick={() => pickScene(o)} disabled={busy}>
+                <b>{o.title}</b>
+                <span class="owhere">{locs[o.location]?.name || o.location}{o.who?.length ? ` · ${o.who.join(', ')}` : ''}</span>
+                <span class="ohook">{o.hook}</span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+      {/if}
 
       {#if scene.movement && moveOptions.length && atEnd}
         <div class="choices">
@@ -527,15 +666,21 @@
   .cast { position: absolute; inset: 2% 0 0 0; display: flex; align-items: flex-end; justify-content: center; gap: 5%; pointer-events: none; }
   .sprite { height: 96%; }   /* fallback; per-character height set inline from height_cm */
   .sprite img { height: 100%; width: auto; object-fit: contain; filter: drop-shadow(0 6px 18px rgba(0,0,0,.5)); }
+  /* the current line's speaker holds the stage; everyone else recedes (VN focus) */
+  .sprite { transition: filter .25s, transform .25s; }
+  .sprite.dimmed img { filter: brightness(.5) saturate(.75) drop-shadow(0 6px 18px rgba(0,0,0,.5)); }
+  .sprite.speaking { transform: translateY(-4px); }
+  .sprite.speaking img { filter: brightness(1.06) drop-shadow(0 8px 22px rgba(0,0,0,.6)); }
 
   /* OPAQUE text box at the foot — sized so a normal turn fits without scrolling */
   .dialogue {
     position: relative; z-index: 2; padding: 15px 18px;
-    background: rgba(11,13,19,.96); border-top: 1px solid var(--border);
+    background: rgba(11,13,19,.55); backdrop-filter: blur(4px); border-top: 1px solid rgba(255,255,255,.1);
     display: flex; flex-direction: column; gap: 10px;
   }
-  .narr { margin: 0; font-size: 14.5px; line-height: 1.55; color: #f0f3f9; white-space: pre-wrap; min-height: 1.4em;
-          max-height: 40vh; overflow: auto; }
+  .narr { margin: 0; font-size: 14.5px; line-height: 1.55; color: #f4f6fb; white-space: pre-wrap; min-height: 1.4em;
+          max-height: 40vh; overflow: auto;
+          text-shadow: -1px -1px 1px #000, 1px -1px 1px #000, -1px 1px 1px #000, 1px 1px 1px #000; }
   .ptag { font-size: 10.5px; text-transform: uppercase; letter-spacing: 2px; color: var(--muted); }
   .loading { color: var(--muted); font-style: italic; }
   .navrow { display: flex; align-items: center; gap: 12px; }
@@ -552,6 +697,37 @@
     background: rgba(12,14,20,.95); border: 1px solid var(--accent); border-radius: 10px; padding: 8px 11px; }
   .beattext { font-size: 12px; line-height: 1.5; color: #cdd4e2; white-space: pre-wrap; }
   .err { font-size: 12.5px; }
+  .vnlines { display: flex; flex-direction: column; gap: 9px; cursor: pointer; }
+  .vnmore { font-size: 12px; color: var(--accent); animation: vnpulse 1.4s ease-in-out infinite; }
+  .vnleft { color: var(--faint); font-size: 10.5px; }
+  @keyframes vnpulse { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+  /* black outline on every line so text stays legible over the see-through box */
+  .vnline { font-size: 14.5px; line-height: 1.65; color: #d7dcea;
+            text-shadow: -1px -1px 1px #000, 1px -1px 1px #000, -1px 1px 1px #000, 1px 1px 1px #000; }
+  .vnline.dlg { color: #f4f6fb; }
+  .vnwho { display: inline-block; margin-right: 9px; padding: 1px 9px; border-radius: 999px;
+           font-size: 11px; font-weight: 800; letter-spacing: .3px; vertical-align: 2px; text-shadow: none;
+           background: rgba(124,109,255,.32); border: 1px solid rgba(124,109,255,.6); color: #fff; }
+  .vnline.tht .vntext { font-style: italic; color: #c2c9dc; }
+  .dayrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .dlab { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--faint); }
+  .slot { font-size: 11px; padding: 2px 9px; border-radius: 999px; color: var(--faint);
+          border: 1px solid transparent; }
+  .slot.on { color: var(--text); border-color: var(--accent);
+             background: color-mix(in srgb, var(--accent) 10%, transparent); }
+  .dsp { flex: 1; }
+  .dbtn { font-size: 11.5px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
+          background: rgba(124,109,255,.14); border: 1px solid rgba(124,109,255,.35); color: var(--text); }
+  .dbtn:hover:not(:disabled) { background: var(--accent); color: #0b0e14; }
+  .dbtn.zz { border-color: rgba(255,255,255,.25); background: rgba(255,255,255,.07); }
+  .offers { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 8px; }
+  .offer { display: flex; flex-direction: column; gap: 3px; text-align: left; padding: 9px 11px;
+           border-radius: 10px; cursor: pointer; background: rgba(124,109,255,.10);
+           border: 1px solid rgba(124,109,255,.3); color: var(--text); }
+  .offer:hover:not(:disabled) { border-color: var(--accent); background: rgba(124,109,255,.2); }
+  .offer b { font-size: 12.5px; }
+  .owhere { font-size: 10.5px; color: var(--accent); }
+  .ohook { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
   .choices { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
   .clab { font-size: 12px; color: var(--muted); }
   .choice { font-size: 12.5px; padding: 6px 12px; border-radius: 999px; background: rgba(124,109,255,.18);

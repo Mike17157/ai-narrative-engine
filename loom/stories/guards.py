@@ -68,13 +68,6 @@ def detect(text: str, rules: list[dict]) -> dict | None:
     return None
 
 
-# Back-compat alias (older callers / tests).
-def detect_refusal(text: str, rules) -> str | None:
-    hit = detect(text, rules if rules and isinstance(rules[0], dict) else
-                 [{"phrases": rules, "script": "fallback"}])
-    return hit["phrase"] if hit else None
-
-
 def _attempt(provider, *, system, prompt, emits, rules, on_delta=None):
     """Run one provider. Returns (res, error_str|None, hit_rule|None)."""
     try:

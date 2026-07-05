@@ -17,7 +17,11 @@ import re
 
 from ...config.schema import LoreEntry
 
-FACET_TYPES = ("life", "saying", "reaction")
+FACET_TYPES = ("life", "saying", "reaction", "guard")
+# guard = a stage-gated DEFLECTION: an observable behaviour that steers away from a subject which
+# would expose a secret, stated as pure conduct with NO reason ("When the forest comes up, she
+# points the way to the mill and talks past it"). Surface/known tier — the narrator executes it
+# blind, so the character keeps their own secret while the model playing them never learns it.
 
 # Depth tiers — how deeply an exemplar is held, which gates who ever sees it in play
 # (surface = anyone; known = people who know them; secret = self / plot-revealed only).
@@ -34,6 +38,35 @@ def entry_tier(entry) -> str:
             if t in FACET_TIERS:
                 return t
     return "surface"
+
+
+def entry_when(entry) -> str:
+    """The SETTING STAGE an exemplar is tied to (a Condition id), or '' for always-on. Only
+    eligible in play while that stage is active — how a character changes flood-season vs festival."""
+    for kw in (getattr(entry, "keywords", None) or []):
+        if isinstance(kw, str) and kw.startswith("when:"):
+            return kw[5:].strip()
+    return ""
+
+
+def select_exemplars(pool, *, allowed_tiers, active_conds, n, situ_cap=2):
+    """Salience-based exemplar selection (the contextual-dialog shape: hard criteria filter
+    over the FULL rule set → salience order → slotted budget). `pool` arrives ranked
+    most-relevant-first (retrieval against the current beat, else priority order) and must
+    NEVER be pre-truncated — a pre-cut pool is how the stage gate starved (situational
+    entries sit at priority 0). Gates: tier (what the observer is cleared to read) and
+    setting stage (`when:` content only while its stage holds). GUARDS (active deflections)
+    are always kept — they're few and behaviourally load-bearing (a character must protect
+    their secret every turn its stage holds). Then active-stage content AUGMENTS the core —
+    up to `situ_cap` lines ON TOP of `n` baseline slots — so a long arc can't flatten someone
+    into their stage reaction."""
+    elig = [e for e in pool if entry_tier(e) in allowed_tiers
+            and (not entry_when(e) or entry_when(e) in active_conds)]
+    guards = [e for e in elig if (getattr(e, "facet", "") or "") == "guard"]
+    rest = [e for e in elig if (getattr(e, "facet", "") or "") != "guard"]
+    situ = [e for e in rest if entry_when(e)][:situ_cap]
+    base = [e for e in rest if not entry_when(e)][:n]
+    return guards + situ + base
 
 # The interview agent. It co-develops ONE character with the writer, proposing plausible
 # backstory and reacting — then commits agreed beats as exemplars (the `facets` array).
@@ -119,6 +152,9 @@ def facet_to_entry(facet: dict, source: str = "interview") -> LoreEntry | None:
     tier = (facet.get("tier") or "").strip().lower()
     if tier in FACET_TIERS:
         kws.append(f"tier:{tier}")
+    when = (facet.get("when") or "").strip()
+    if when:
+        kws.append(f"when:{when}")
     return LoreEntry(
         id=f"{ftype}-{_slug(title or content)}",
         title=title or ftype.capitalize(),
@@ -270,34 +306,62 @@ DEEPEN_SYSTEM = (
     "rely on the narrator knowing the secret; it won't. Bake the consequence into the behavior.\n\n"
     "Texture: ordinary and lived, never twee — real rooms, chores, weather; no invented signature "
     "quirks. All sayings are ONE voice — same vocabulary, rhythm, education, era. 3-6 retrieval "
-    "keywords each. Output structured JSON only."
+    "keywords each.\n\n"
+    "SITUATIONAL CONTENT: you may be given the SETTING STAGES this world moves through (flood "
+    "season, a siege, the dungeon opening). For each stage that would genuinely change THIS "
+    "person, write 1-3 exemplars with that stage's id in `when` — how they act, what surfaces, "
+    "what they hide or reveal WHILE IT HOLDS (a stage can bring out a new reaction, or lift the "
+    "lid on a secret). Most exemplars are `when:''` (always). Situational ones are the exception "
+    "that make each stage feel like a different person; only ever use an id from the list, never "
+    "invent one.\n\n"
+    "GUARDS — for every secret, write the DEFLECTIONS that keep it (type `guard`). A guard is a "
+    "concrete, observable steer AWAY from the subject that would expose the secret: the topic they "
+    "change, the place they'll never suggest going, the question they answer with a question, how "
+    "they redirect and to what. State ONLY the behaviour, in the moment it triggers — 'When the "
+    "forest comes up, she points the way to the mill and talks past it' — and NEVER the reason. "
+    "tier `surface` or `known` (the narrator must be able to read it); `when` the stage where "
+    "exposure is most dangerous, or '' if the guard is always up. Write a guard per secret per "
+    "stage that threatens it. This is the mechanism: the character protects their own secret while "
+    "the model playing them is never told what it is. Output structured JSON only."
 )
 
-# Deepen emits tiered facets; the base _FACET_ITEM stays untiered for harvest/interview.
-_DEEPEN_FACET_ITEM = {
-    "type": "object", "additionalProperties": False,
-    "required": ["type", "tier", "title", "keywords", "content"],
-    "properties": {
-        "type": {"type": "string", "enum": list(FACET_TYPES)},
-        "tier": {"type": "string", "enum": list(FACET_TIERS)},
-        "title": {"type": "string"},
-        "keywords": {"type": "array", "items": {"type": "string"}},
-        "content": {"type": "string"},
-    },
-}
-DEEPEN_FACETS_SCHEMA = {
-    "type": "object", "additionalProperties": False, "required": ["facets"],
-    "properties": {"facets": {"type": "array", "items": _DEEPEN_FACET_ITEM}},
-}
+
+def deepen_facets_schema(condition_ids=None) -> dict:
+    """The deepen bank schema. `when` is constrained to the story's real Condition ids (+ '' for
+    always-on) so situational exemplars can only key to stages that exist."""
+    ids = [""] + [c for c in (condition_ids or []) if c]
+    item = {
+        "type": "object", "additionalProperties": False,
+        "required": ["type", "tier", "when", "title", "keywords", "content"],
+        "properties": {
+            "type": {"type": "string", "enum": list(FACET_TYPES)},
+            "tier": {"type": "string", "enum": list(FACET_TIERS)},
+            "when": {"type": "string", "enum": ids,
+                     "description": "a setting-stage id this exemplar is tied to (active only while "
+                                    "that stage holds); '' = always true"},
+            "title": {"type": "string"},
+            "keywords": {"type": "array", "items": {"type": "string"}},
+            "content": {"type": "string"},
+        },
+    }
+    return {"type": "object", "additionalProperties": False, "required": ["facets"],
+            "properties": {"facets": {"type": "array", "items": item}}}
 
 
-def deepen_prompt(name: str, portrait: str, existing: list[LoreEntry]) -> str:
-    return "\n\n".join([
+def deepen_prompt(name: str, portrait: str, existing: list[LoreEntry], conditions=None) -> str:
+    parts = [
         f"CHARACTER: {name}",
         f"PORTRAIT (the person to capture):\n{portrait}",
-        f"ALREADY ESTABLISHED (don't duplicate):\n{_facet_digest(existing)}",
-        f"Write the exemplar bank for {name}.",
-    ])
+    ]
+    if conditions:
+        stages = "\n".join(
+            f"- {c.get('id')} — {c.get('name')}: {(c.get('effect') or c.get('description') or '')[:180]}"
+            for c in conditions if c.get("id"))
+        parts.append("SETTING STAGES (tag situational exemplars with these ids in `when`; '' otherwise):\n"
+                     + stages)
+    parts.append(f"ALREADY ESTABLISHED (don't duplicate):\n{_facet_digest(existing)}")
+    parts.append(f"Write the exemplar bank for {name}.")
+    return "\n\n".join(parts)
 
 
 # ── Contrast: sharpen what makes ONE character distinct from the rest of the cast ──

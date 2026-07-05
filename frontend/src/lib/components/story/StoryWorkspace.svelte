@@ -16,9 +16,17 @@
   import Section from '$lib/components/story/Section.svelte';
   import DefaultPersonas from '$lib/components/story/DefaultPersonas.svelte';
   import ArcPanel from '$lib/components/story/ArcPanel.svelte';
-  import LocationRoster from '$lib/components/story/LocationRoster.svelte';
+  import RelationshipFlow from '$lib/components/story/RelationshipFlow.svelte';
   import LocationsPanel from '$lib/components/story/LocationsPanel.svelte';
-  import CardRail from '$lib/components/story/CardRail.svelte';
+  import QueueButton from '$lib/components/story/QueueButton.svelte';
+  import WorkflowModal from '$lib/components/story/WorkflowModal.svelte';
+  import SectionChat from '$lib/components/story/SectionChat.svelte';
+  import { workflow, closeWorkflow } from '$lib/workflow.svelte.js';
+
+  // The active tab IS the editable section (overview/map/relationships/plot all map to a card layer).
+  const SECTION_LABEL = { overview: 'Premise & theme', map: 'World', relationships: 'Cast & bonds', plot: 'Arc & scenes' };
+  let editable = $derived(['overview', 'map', 'relationships', 'plot'].includes(tab));
+  import ConditionsPanel from '$lib/components/story/ConditionsPanel.svelte';
 
   let st = $derived(stories.current);
   loadChars();
@@ -64,38 +72,6 @@
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persistCurrent, 600); }
 
-  // ── Premise components — REAL editable fields (protagonist, lie, inciting, opposition,
-  //    stakes, texture) stored on story.premise_parts, each AI-draftable (✨ per field redrafts
-  //    that one; "Fill gaps" drafts every empty one). Replaced the read-only coverage checker. ──
-  const PREMISE_COMPONENTS = [
-    { id: 'philosophy', label: 'Overarching philosophy', ph: 'the argument the story interrogates — two defensible sides, embodied by characters' },
-    { id: 'protagonist', label: 'Protagonist', ph: 'who the story is about — a specific person, not a type' },
-    { id: 'lie', label: 'The lie they live by', ph: 'the false belief the story will test' },
-    { id: 'inciting', label: 'Inciting incident', ph: 'what breaks the calm and sets the story in motion' },
-    { id: 'opposition', label: 'Opposition', ph: 'who or what pushes back' },
-    { id: 'stakes', label: 'Stakes', ph: 'what is lost if they fail' },
-    { id: 'texture', label: 'Tone & texture', ph: 'the mood, genre and sensory feel' },
-  ];
-  let partBusy = $state({});      // component id (or '_all') → drafting
-  let partErr = $state(null);
-  function setPart(id, v) {
-    stories.current.premise_parts = { ...(st.premise_parts || {}), [id]: v };
-    saveSoon();
-  }
-  async function draftPart(id) {
-    // id → redraft that one component; null → fill every empty one
-    const k = id || '_all';
-    if (partBusy[k]) return;
-    partBusy = { ...partBusy, [k]: true }; partErr = null;
-    const r = await post(`/stories/${st.key}/premise-parts/draft`, id ? { component: id } : {});
-    partBusy = { ...partBusy, [k]: false };
-    if (r.ok && r.data?.parts) {
-      stories.current.premise_parts = { ...(st.premise_parts || {}), ...r.data.parts };
-      saveSoon();
-    } else partErr = r.data?.error || 'draft failed';
-  }
-  let partGaps = $derived(PREMISE_COMPONENTS.filter((c) => !(st?.premise_parts?.[c.id] || '').trim()).length);
-
   // Themes ↔ comma-string mirror (re-seed when the story changes; avoids array churn per keystroke).
   let themesStr = $state(''); let themesSeed = null;
   $effect(() => { if (st && themesSeed !== st.key) { themesStr = (st.themes || []).join(', '); themesSeed = st.key; } });
@@ -128,6 +104,8 @@
     saveSoon();
   }
   function setStart(id) { stories.current.start = id; saveSoon(); }
+  // Setting conditions: replace the list wholesale (generate/accept/edit/remove) + persist.
+  function setConditions(next) { stories.current.conditions = next; saveSoon(); }
 
   // ── Memory window: how many recent turns stay verbatim before older ones compress ──
   let windowTimer = null;
@@ -301,19 +279,28 @@
   }
 </script>
 
-<div class="page"><div class="col">
+{#if editable}
+  <SectionChat storyKey={st.key} layer={tab} layerLabel={SECTION_LABEL[tab] || tab} />
+{/if}
+
+<div class="page" class:withchat={editable}><div class="col">
 
   <!-- Header row: title (edit in place) + format badge + actions, one line -->
   <div class="title-row">
     <input class="ip ip-title" bind:value={st.name} oninput={saveSoon} placeholder="Untitled story" />
     <span class="type-badge">{st.type === 'vn' ? '🎴 Visual novel' : '📖 Novel'}</span>
+    <QueueButton storyKey={st.key} />
     <button class="ghost sm del" onclick={() => deleteStory(st.key)}>Delete</button>
   </div>
 
-  <!-- The context card's readout: per-layer todo badges, checkable at every step -->
-  <CardRail storyKey={st.key} active={tab} />
+  <!-- The ONE workflow modal — opened from the To-do button (or any deep-link) to walk sections -->
+  {#if workflow.open && workflow.storyKey === st.key}
+    <WorkflowModal storyKey={st.key} startLayer={workflow.startLayer} onClose={closeWorkflow} />
+  {/if}
 
   {#if tab === 'overview'}
+  <!-- Overview = basic configuration + structure. The premise COMPONENTS (philosophy, lie,
+       inciting…) and other AI-drafted work live in the To-do queue, not on this page. -->
   <!-- Heart callout (read-only — the storyboard's emotional core) -->
   {#if st.storyboard?.heart}
     <div class="heart-callout">
@@ -328,38 +315,6 @@
   {/if}
   <textarea class="ip ip-prem" use:autosize={st.premise} bind:value={st.premise} oninput={saveSoon}
             placeholder="Premise — what is this story about?"></textarea>
-
-  <!-- Premise components — real editable fields (stored on the story), each AI-draftable -->
-  <div class="cov">
-    <div class="cov-head">
-      <span class="cov-t">Premise components</span>
-      <span class="cov-status">
-        {#if partErr}<span class="cov-err">{partErr}</span>
-        {:else}{partGaps ? `${partGaps} to write` : 'all written ✓'}{/if}
-      </span>
-      <span class="sp"></span>
-      {#if partGaps}
-        <button class="pfill" onclick={() => draftPart(null)} disabled={partBusy['_all']}
-                title="AI-draft every empty component from the premise, tone and cast">
-          {partBusy['_all'] ? '✨ Drafting…' : `✨ Fill ${partGaps} gap${partGaps > 1 ? 's' : ''}`}</button>
-      {/if}
-    </div>
-    <div class="cov-grid">
-      {#each PREMISE_COMPONENTS as comp (comp.id)}
-        {@const val = st.premise_parts?.[comp.id] || ''}
-        <div class="cov-item" class:gap={!val.trim()}>
-          <div class="cov-top">
-            <span class="cov-label">{comp.label}</span>
-            <button class="pbtn" onclick={() => draftPart(comp.id)} disabled={partBusy[comp.id]}
-                    title={val.trim() ? 'Redraft this component (AI)' : 'Draft this component (AI)'}>
-              {partBusy[comp.id] ? '…' : '✨'}</button>
-          </div>
-          <textarea class="cov-input" use:autosize={val} value={val} placeholder={comp.ph}
-                    oninput={(e) => setPart(comp.id, e.currentTarget.value)}></textarea>
-        </div>
-      {/each}
-    </div>
-  </div>
 
   <!-- Tone + themes (edit in place) -->
   <div class="ip-meta">
@@ -411,7 +366,7 @@
 
   {:else if tab === 'plot'}
   <!-- The ARC — the planned progression play steers through (view + plan) -->
-  <ArcPanel storyKey={st.key} />
+  <ArcPanel storyKey={st.key} conditions={st.conditions || []} />
 
   <!-- Storyboard outline — the beat plan, whatever the story format (novels draft chapters
        FROM these; the rail counts them, so they must be visible here). -->
@@ -563,14 +518,18 @@
   {/if}
 
   {:else if tab === 'relationships'}
-    <!-- Cast grouped by where they live (map locations). Bonds show as chips; click a face to
-         open the card. Replaces the old relationship ring. -->
-    <LocationRoster storyKey={st.key} cast={castOptions} locations={st.locations || []}
-                    relationships={st.relationships || []} addItems={castAddItems}
-                    onSelect={openCharModal} onSetHome={setCharHome} onAddHere={addCharToLocation}
-                    onSaveBonds={saveBonds} />
+    <!-- The MC-rooted relationship FLOW: every bond radiates from the lead; the left→right seam is
+         the depth axis (surface → known → secret, coming next). Click a face → card, a bond → edit. -->
+    <RelationshipFlow storyKey={st.key} cast={castOptions} locations={st.locations || []}
+                      relationships={st.relationships || []}
+                      onSelect={openCharModal} onSaveBonds={saveBonds} onSetHome={setCharHome} />
 
   {:else if tab === 'map'}
+    <!-- Setting stages: the recurring conditions the world moves through (situational content keys to these) -->
+    <Section icon="🌐" title="Setting stages" count={(st.conditions || []).length || ''}>
+      <ConditionsPanel storyKey={st.key} conditions={st.conditions || []} onChange={setConditions} />
+    </Section>
+
     <!-- The world's locations, grouped by area — each edits in place + carries its scene image. -->
     <LocationsPanel storyKey={st.key} locations={st.locations || []} start={st.start || ''}
                     onChange={saveSoon} onAdd={addLocation} onRemove={removeLocationById} onSetStart={setStart} />
@@ -619,6 +578,8 @@
 <style>
   /* ── Layout ───────────────────────────────────────────────────────────────── */
   .page { padding: 0; }
+  .page.withchat { padding-left: 336px; }   /* room for the fixed left section editor (320px) */
+  @media (max-width: 1100px) { .page.withchat { padding-left: 0; } }
   .col  { display: flex; flex-direction: column; gap: 14px; }
 
   /* ── Actions ──────────────────────────────────────────────────────────────── */

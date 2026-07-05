@@ -195,7 +195,7 @@
         {:else if node.action}
           <button class="snbtn" onclick={node.action}>{node.label}</button>
         {:else}
-          <a href={node.href} class="snbtn" class:on={nodeActive(node)}
+          <a href={node.href} class="snbtn" class:on={nodeActive(node)} class:standalone={node.standalone}
              class:dimmed={node.dimmed} class:done={node.done}>{node.label}</a>
         {/if}
       {/each}
@@ -283,6 +283,9 @@
   .snbtn.dimmed:hover { opacity: 0.7; }
   .snbtn.done { color: var(--good); }
   .snbtn.picker { font-weight: 700; }
+  /* Play sits apart — it's the runtime, not an authoring tier */
+  .snbtn.standalone { margin-left: 14px; border-left: 1px solid var(--border); border-radius: 0 7px 7px 0; padding-left: 16px; color: var(--accent); }
+  .snbtn.standalone.on { color: #fff; }
   .snwrap { position: relative; }
   .sarr { font-size: 10px; transition: transform .15s; display: inline-block; }
   .sarr.up { transform: rotate(180deg); }

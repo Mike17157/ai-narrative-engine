@@ -68,12 +68,20 @@ export function storiesTree(path = '') {
     const t = (tab) => `/stories/${key}/structure?tab=${tab}`;
     return [
       { id: 'all', label: '← Stories', href: '/stories', match: 'exact' },
-      { id: `${key}-overview`,      label: 'Overview',      href: t('overview') },
-      { id: `${key}-plot`,          label: 'Plot',          href: t('plot') },
-      { id: `${key}-relationships`, label: 'Relationships', href: t('relationships') },
-      { id: `${key}-map`,           label: 'Map',           href: t('map') },
-      { id: `${key}-cast`,          label: 'Cast',          href: `/stories/${key}/cast` },
-      { id: `${key}-play`,          label: '▶ Play',        href: `/stories/${key}/play` },
+      // The three authoring TIERS as header buttons, each a dropdown of its tabs
+      // (loom/stories/card.py LAYERS/TIERS). Runtime (Play) sits apart.
+      { id: `${key}-bible`, label: 'Bible', children: [
+        { id: `${key}-overview`,      label: 'Overview',      href: t('overview') },
+        { id: `${key}-map`,           label: 'World',         href: t('map') },
+        { id: `${key}-relationships`, label: 'Relationships', href: t('relationships') },
+      ] },
+      { id: `${key}-prog`, label: 'Progression', children: [
+        { id: `${key}-plot`,          label: 'Plot',          href: t('plot') },
+      ] },
+      { id: `${key}-prod`, label: 'Production', children: [
+        { id: `${key}-cast`,          label: 'Cast',          href: `/stories/${key}/cast` },
+      ] },
+      { id: `${key}-play`, label: '▶ Play', href: `/stories/${key}/play`, standalone: true },
     ];
   }
 

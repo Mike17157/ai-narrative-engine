@@ -131,10 +131,6 @@ def _find_first(graph: dict, types: tuple[str, ...]) -> str | None:
     return None
 
 
-def _find_checkpoint(graph: dict) -> str | None:
-    return _find_first(graph, _CKPT_TYPES)
-
-
 def _find_render_clip(graph: dict) -> str | None:
     """The CLIP loader that conditions the IMAGE — feeding a CLIPTextEncode etc.,
     not an in-graph LLM prompt-optimizer (TextGenerate). With a single CLIP loader

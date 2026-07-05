@@ -179,11 +179,30 @@ async def step_scribe(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
         "current arc stage's milestone (see the system brief); false otherwise or if no arc"}
     schema["required"] = [r for r in schema["required"] if r != "reply"] \
         + ["state_deltas", "player_status", "people", "arc_milestone"]
+    # VN/webnovel LINES: code cuts the narration into verbatim segments; the scribe (already
+    # reading this turn) only LABELS them — speaker per quote, narrator/thought per narration.
+    from .lines import segment_prose, lines_prompt
+    _segs = segment_prose(s.narration)
+    _pname = ((s.body.get("player") or {}).get("name") or "Player").strip() or "Player"
+    _cnames = [getattr(d.ctx.base_settings.characters.get(m.character), "name", m.character)
+               or m.character for m in d.st.cast]
+    if _segs:
+        schema["properties"]["lines"] = {"type": "array", "items": {
+            "type": "object", "additionalProperties": False,
+            "required": ["i", "speaker", "emotion"],
+            "properties": {"i": {"type": "integer", "description": "the segment's number"},
+                           "speaker": {"type": "string", "description": "exact cast/player name "
+                                       "for a quoted line; 'narrator' or 'thought' for narration"},
+                           "emotion": {"type": "string", "description": "for a quoted line, ONE "
+                                       "emotion key from the speaker's listed range (the sprite "
+                                       "shown on this line); '' for narration/thought"}}}}
+        schema["required"] = schema["required"] + ["lines"]
     hist = s.body.get("history") or []
     last_user = next((m.get("text", "") for m in reversed(hist) if m.get("role") == "user"), "")
     prompt = (f"PLAYER'S LATEST ACTION: {last_user}\n\n"
               f"NARRATION (the turn that just happened):\n{s.narration}\n\n"
-              f"Report the scene state.")
+              f"Report the scene state."
+              + lines_prompt(_segs, _cnames, _pname))
     g = await _thread(generate_guarded, d.scribe_provider, system=s.tc["scribe_system"],
                       prompt=prompt, root=d.ctx.root, emits=schema,
                       fallback=d.provider if d.scribe_provider is not d.provider else d.fallback)
@@ -204,6 +223,16 @@ async def step_apply(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     d.on_event({"type": "node", "node": "apply",
                 "present": s.result.get("present"), "pov": s.result.get("pov")})
     return s.result
+
+
+def _vn_lines(d, s, data: dict) -> list[dict]:
+    """The narration re-cut as VN lines (segments are code-verbatim; the scribe's `lines`
+    labels attribute them). Pure; [] when there's nothing to split."""
+    from .lines import segment_prose, assemble_lines
+    pname = ((s.body.get("player") or {}).get("name") or "Player").strip() or "Player"
+    cnames = {getattr(d.ctx.base_settings.characters.get(m.character), "name", m.character)
+              or m.character for m in d.st.cast}
+    return assemble_lines(segment_prose(s.narration), data.get("lines"), cnames, pname)
 
 
 # Noun-phrase scan for the detail backstop. Token scanner, not a regex span — regex matches
@@ -344,10 +373,16 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     if status in ("sleeping", "dead") and key:
         from . import stage_tools as _ST
         consolidation = _ST.consolidate_on_rest(appctx, key, world_state, status)
+        if status == "sleeping":                       # sleep is the only door out of night:
+            from .storymaster import next_day          # the day turns over to the next morning
+            next_day(world_state)
         save_session(appctx.root, d.sid, {**d.sess, "state": _SE.with_world(d.sess.get("state"), world_state)})
 
     return {
         "reply": data.get("reply", ""), "location": loc,
+        # VN/webnovel LINES: the same narration as speaker-attributed lines (dialogue /
+        # narration / the player's inner-voice thoughts). Flat `reply` stays the source of truth.
+        "lines": _vn_lines(d, s, data),
         "beat": s.beat,                 # the consequence reasoning (what-happens), for the UI
         "scene_plan": world_state.get("scene_plan") or {},   # the per-scene director's agenda
         "card": _sm_card(world_state, st),   # the STATE CARD: derived view, free every turn
@@ -358,6 +393,7 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         "emotions": emotions,
         "movement": bool(data.get("movement")),
         "player_status": status,
+        "day": world_state.get("day") or None,   # the slot rhythm (None before the day model)
         "consolidation": consolidation,
         "state": _SE.summary(world_state),
         "lanes": tc.get("lanes"),

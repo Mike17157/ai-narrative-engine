@@ -411,18 +411,6 @@ _IDENTITY_SYSTEM = (
     "Output ONE plain sentence (or two), 25-45 words, present tense, no name, no preamble.")
 
 
-def strip_clothing_note() -> str:
-    return _IDENTITY_SYSTEM   # exported alias for callers that only need the constant
-
-
-def identity_core(attire: str) -> str:
-    """The FIRST sentence of a unified attire prompt — the identity line (hair, eyes, skin,
-    build). Img2img sprite renders must carry this in TEXT: with no identity words, denoise
-    ~0.7 freely repaints hair colour (measured: a dark-haired base produced blond sprites)."""
-    first = re.split(r"(?<=[.!?])\s+", (attire or "").strip())[:1]
-    return (first[0] if first else "")[:200]
-
-
 # v4pro composes each emotion's FULL image prompt (appearance + clothing + pose + facial
 # expression) — richer & more varied than the mechanical STRONG_FACE assembly, per user request.
 # Identity + outfit + style are held constant (only pose/face change) so a fixed seed stays coherent.

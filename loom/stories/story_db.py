@@ -166,10 +166,6 @@ def relationships_for(path, keys) -> list[dict]:
     return [_rel_row(r) for r in rows]
 
 
-def db_path_for(configs_dir, key: str) -> Path:
-    return Path(configs_dir) / "stories" / f"{key}.db"
-
-
 # ── Play sessions (Slice 2) ── A playthrough's whole record (messages + leveled State doc +
 # world_state + draft + attached lorebooks) rides as ONE JSON blob per sid, in the OWNING story's DB.
 # Mutated wholesale each turn, never cross-queried, so a blob is right (cf. normalized relationships).
@@ -226,42 +222,11 @@ def upsert_character(path, key: str, char: dict) -> None:
     con.commit()
 
 
-def patch_story(path, fields: dict) -> dict:
-    """Apply a top-level field patch to a DB-backed story (the update_story_fields equivalent): load
-    the story dict, merge `fields`, save it back. Returns the merged story dict (for validation)."""
-    story, chars = load_story(path)
-    story.update(fields or {})
-    save_story(path, story, chars)
-    return story
-
-
 def delete_db(path) -> None:
     p = Path(path)
     _inited.discard(str(p))
     if p.is_file():
         p.unlink()
-
-
-def migrate_from_yaml(configs_dir) -> list[str]:
-    """One-time: convert every top-level ``configs/stories/<key>.yaml`` into ``<key>.db``, EMBEDDING
-    each cast member's ``configs/characters/<key>.yaml`` record. Non-destructive — the .yaml is left
-    in place as a backup; the loader prefers the .db once present. Returns the migrated story keys."""
-    import yaml
-
-    configs = Path(configs_dir)
-    sdir, cdir = configs / "stories", configs / "characters"
-    done: list[str] = []
-    for ypath in sorted(sdir.glob("*.yaml")):
-        story = yaml.safe_load(ypath.read_text(encoding="utf-8")) or {}
-        chars: dict = {}
-        for m in story.get("cast") or []:
-            ck = (m or {}).get("character")
-            cpath = cdir / f"{ck}.yaml" if ck else None
-            if cpath and cpath.is_file():
-                chars[ck] = yaml.safe_load(cpath.read_text(encoding="utf-8")) or {}
-        save_story(sdir / f"{ypath.stem}.db", story, chars)
-        done.append(ypath.stem)
-    return done
 
 
 if __name__ == "__main__":   # round-trip self-check (ponytail: one runnable check)

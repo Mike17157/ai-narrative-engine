@@ -147,10 +147,6 @@ EMOTION_HINTS: dict[str, str] = {e["key"]: e["hint"] for e in EMOTIONS}
 INTIMACY_KEYS: set[str] = set(NSFW_KEYS) | {"lustful", "pleasure", "begging"}
 
 
-def is_intimacy(key: str) -> bool:
-    return key in INTIMACY_KEYS
-
-
 CORE_KEYS: list[str] = [
     "neutral", "happy", "excited", "amused", "proud", "hopeful", "teasing",   # positive spread
     "curious", "shy", "blushed", "longing", "comfort",                        # social / warm
@@ -196,19 +192,6 @@ def nearest_emotion(valence: float, arousal: float,
         if best_d is None or d < best_d:
             best, best_d = key, d
     return best
-
-
-def canonical_range(keys: list[str] | None = None) -> list[dict]:
-    """Full emotion set as a display-ready range, sorted by circumplex angle.
-
-    Returns [{emotion, valence, arousal}, ...] — the shape the frontend expects
-    for carousel ordering and AffectScatter. Used as the fallback when a character
-    has no authored affect.range."""
-    ks = keys or EMOTION_KEYS
-    out = [{"emotion": k, "valence": EMOTION_COORDS[k][0], "arousal": EMOTION_COORDS[k][1]}
-           for k in ks if k in EMOTION_COORDS]
-    out.sort(key=lambda e: math.atan2(e["arousal"], e["valence"]))
-    return out
 
 
 def range_to_display(keys: list[str]) -> list[dict]:
