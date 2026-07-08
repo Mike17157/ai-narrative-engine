@@ -1307,10 +1307,11 @@ def register(app, ctx):
             name, j = f"{base_name} ({j})", j + 1
         skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
         skey, i = skey_base, 2
-        while (ctx.story_dir() / f"{skey}.yaml").is_file() or (ctx.story_dir() / f"{skey}.json").is_file():
+        while ((ctx.story_dir() / f"{skey}.yaml").is_file() or (ctx.story_dir() / f"{skey}.json").is_file()
+               or (ctx.story_dir() / skey / "story.json").is_file()):
             skey, i = f"{skey_base}_{i}", i + 1
         stype = body.get("type") if body.get("type") in ("novel", "vn") else "novel"
-        db_path = ctx.story_dir() / f"{skey}.json"
+        db_path = _SDB.story_json_path(ctx.story_dir(), skey)   # folder form: <skey>/story.json
         # The DEFINED WORLD survives commit now (it used to be discarded) — the permanent foundation
         # premise & theme distils from. Composed from the genesis draft: frame + substrate + particulars.
         world = compose_world(body.get("world"), body.get("substrate"), body.get("particulars"))
@@ -1352,7 +1353,8 @@ def register(app, ctx):
         try:
             ctx.update_story_fields(skey, {"cast": cast, "relationships": out_rels})
         except Exception as exc:  # noqa: BLE001
-            _SDB.delete_db(db_path)                        # rollback the half-created story
+            import shutil
+            shutil.rmtree(db_path.parent, ignore_errors=True)   # rollback: drop the whole story folder
             return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
         return {"ok": True, "key": skey}
 
@@ -3010,8 +3012,8 @@ def register(app, ctx):
     def list_stories() -> list:
         out = []
         for k, st in ctx.base_settings.stories.items():
-            f = ctx.story_dir() / f"{k}.json"
-            mtime = f.stat().st_mtime if f.is_file() else 0.0
+            f = ctx._story_file(k)                 # folder form or legacy flat
+            mtime = f.stat().st_mtime if f else 0.0
             out.append({"key": k, "name": st.name, "premise": st.premise, "tone": st.tone,
                         "themes": st.themes, "locations": len(st.locations), "start": st.start,
                         "cast": [m.character for m in st.cast], "_mtime": mtime})
@@ -3516,17 +3518,20 @@ def register(app, ctx):
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
+        import shutil
         from .story_db import delete_db
         safe = re.sub(r"[^\w\-]+", "", key)
         yaml_p = ctx.story_dir() / f"{safe}.yaml"
-        db_p = ctx.story_dir() / f"{safe}.json"      # a JSON-backed story (embeds its characters)
-        if not yaml_p.is_file() and not db_p.is_file():
+        legacy_json = ctx.story_dir() / f"{safe}.json"   # legacy flat form
+        folder = ctx.story_dir() / safe                  # folder form: story.json + chars/ + bg/
+        if not yaml_p.is_file() and not legacy_json.is_file() and not (folder / "story.json").is_file():
             return JSONResponse({"error": "no such story"}, status_code=404)
         if yaml_p.is_file():
             yaml_p.unlink()
-        delete_db(db_p)                              # also drops the embedded characters
+        delete_db(legacy_json)                           # legacy flat (+ any <safe>.db)
+        shutil.rmtree(folder, ignore_errors=True)        # folder form: story + its embedded chars' assets
         ctx.reload_settings()
-        removed = ctx.prune_orphan_characters()  # cascade: drop the now-storyless generated cast
+        removed = ctx.prune_orphan_characters()  # cascade: any pre-migration global-pool leftovers
         return {"ok": True, "removed_characters": removed}
 
     @app.post("/api/stories/{key}/regenerate-cast")

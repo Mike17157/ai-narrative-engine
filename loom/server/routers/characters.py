@@ -190,7 +190,7 @@ def register(app, ctx):
                 "imported": _is_imported(c),
                 "home_scenes": [s.model_dump() for s in getattr(c, "home_scenes", []) or []],
                 "image": c.image.model_dump(),
-                "avatar": f"/api/characters/{k}/avatar" if (char_dir / f"{k}.png").is_file() else None,
+                "avatar": f"/api/characters/{k}/avatar" if (ctx.char_asset_dir(k) / f"{k}.png").is_file() else None,
                 "reference": f"/api/characters/{k}/reference" if ctx.reference_path(k) else None,
                 "images": ctx.character_images(k, c),
                 # Story this character is attached to (generated NPCs); None = library.
@@ -221,7 +221,7 @@ def register(app, ctx):
     def character_avatar(key: str):
         """Serve the imported card PNG as the character's avatar (404 if none)."""
         safe = re.sub(r"[^\w\-]+", "", key)
-        path = ctx.char_dir() / f"{safe}.png"
+        path = ctx.char_asset_dir(key) / f"{safe}.png"
         if not path.is_file():
             return JSONResponse({"error": "no avatar"}, status_code=404)
         return FileResponse(path, media_type="image/png")
@@ -246,14 +246,15 @@ def register(app, ctx):
             data = _clean_reference_png(data)
         except Exception:  # noqa: BLE001 — Pillow missing or odd format; store as-is
             pass
-        (ctx.char_dir() / f"{safe}.ref.png").write_bytes(data)
+        d = ctx.char_asset_dir(key); d.mkdir(parents=True, exist_ok=True)
+        (d / f"{safe}.ref.png").write_bytes(data)
         return {"ok": True}
 
     @app.delete("/api/characters/{key}/reference")
     def clear_character_reference(key: str):
         """Drop the dedicated reference, falling back to the avatar."""
         safe = re.sub(r"[^\w\-]+", "", key)
-        p = ctx.char_dir() / f"{safe}.ref.png"
+        p = ctx.char_asset_dir(key) / f"{safe}.ref.png"
         if p.is_file():
             p.unlink()
         return {"ok": True}
@@ -757,7 +758,8 @@ def register(app, ctx):
             data = _clean_reference_png(data)
         except Exception:  # noqa: BLE001 — Pillow missing or odd format; store as-is
             pass
-        (ctx.char_dir() / f"{safe}.ref.png").write_bytes(data)
+        d = ctx.char_asset_dir(key); d.mkdir(parents=True, exist_ok=True)
+        (d / f"{safe}.ref.png").write_bytes(data)
         return {"ok": True}
 
     @app.post("/api/characters/{key}/sprite-candidate")
@@ -1244,7 +1246,8 @@ def register(app, ctx):
             data = _clean_reference_png(data)
         except Exception:  # noqa: BLE001
             pass
-        (ctx.char_dir() / f"{safe}.ref.png").write_bytes(data)
+        d = ctx.char_asset_dir(key); d.mkdir(parents=True, exist_ok=True)
+        (d / f"{safe}.ref.png").write_bytes(data)
         return {"ok": True}
 
     @app.post("/api/characters/{key}/expand-background")
@@ -1293,6 +1296,10 @@ def register(app, ctx):
         if key not in ctx.base_settings.characters:
             return JSONResponse({"error": "no such character"}, status_code=404)
         safe = re.sub(r"[^\w\-]+", "", key)
+        # Resolve the asset dirs BEFORE dropping the DB record — removal flips ownership, so
+        # char_asset_dir/portrait_dir would otherwise point at the global pool, not the story folder.
+        adir = ctx.char_asset_dir(key)
+        pdir = ctx.portrait_dir(key)
         # strip cast references across stories (routed: DB or YAML) + drop the embedded record
         for skey, st in list(ctx.base_settings.stories.items()):
             kept = [m for m in st.cast if m.character != key]
@@ -1301,13 +1308,12 @@ def register(app, ctx):
             db = ctx._story_file(skey)
             if db is not None and key in _SDB.character_keys(db):
                 _SDB.delete_character(db, key)
-        # global library YAML (if any) + the on-disk binaries
-        cdir = ctx.char_dir()
+        # on-disk binaries (in the story folder for owned chars, else the global library) + any YAML
         for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
-            f = cdir / fn
+            f = adir / fn
             if f.is_file():
                 f.unlink()
-        shutil.rmtree(ctx.portrait_dir(key), ignore_errors=True)
+        shutil.rmtree(pdir, ignore_errors=True)
         ctx.reload_settings()
         return {"ok": True}
 

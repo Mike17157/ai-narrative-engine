@@ -52,9 +52,11 @@ def load_settings(root: str | Path) -> Settings:
         for path in sorted(persona_dir.glob("*.yaml")):
             personas[path.stem] = Persona(**_read_yaml(path))
 
-    # stories — ONE self-contained <key>.json per story. A story file EMBEDS its characters and is
+    # stories — ONE self-contained story per story, in its own folder: configs/stories/<key>/story.json
+    # (with the story's generated assets alongside). A story file EMBEDS its characters and is
     # AUTHORITATIVE for them: merge those into the character library, overriding any global file of
-    # the same key. Any legacy <key>.db is auto-migrated to .json on load (see migrate_db_to_json).
+    # the same key. Legacy flat <key>.json still loads (iter_story_files handles both); legacy <key>.db
+    # is auto-migrated to .json on load (see migrate_db_to_json).
     from ..stories import story_db as _SDB
     stories: dict[str, Story] = {}
     story_dir = configs / "stories"
@@ -62,9 +64,9 @@ def load_settings(root: str | Path) -> Settings:
         # Lazy one-time migration: convert any legacy .db to .json before enumerating.
         from ..stories.migrate_db_to_json import migrate_dir as _migrate
         _migrate(story_dir)
-        for path in sorted(story_dir.glob("*.json")):
+        for skey, path in _SDB.iter_story_files(story_dir):
             sdata, embedded = _SDB.load_story(path)
-            stories[path.stem] = Story(**sdata)
+            stories[skey] = Story(**sdata)
             for ck, cdoc in embedded.items():
                 try:
                     characters[ck] = Character(**cdoc)   # story file authoritative for its cast

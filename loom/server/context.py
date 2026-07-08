@@ -711,9 +711,21 @@ class AppContext:
     def story_bg_dir(self, key: str) -> Path:
         return self.story_dir() / re.sub(r"[^\w\-]+", "", key) / "bg"
 
+    def char_asset_dir(self, key: str) -> Path:
+        """The directory holding a character's IMAGE assets — avatar `<key>.png`, reference
+        `<key>.ref.png`, and `portraits/<key>/…`. For a STORY-OWNED character this lives inside the
+        story's own folder (`configs/stories/<owner>/chars`) so the story is self-contained and a
+        delete/backup is one folder; for a global/imported library card it's the shared
+        `configs/characters`. The filename convention inside is identical either way — only the root
+        differs — so per-character path code just swaps `char_dir()` for this."""
+        owner = self._char_owner(key)
+        if owner is not None:
+            return self.story_dir() / re.sub(r"[^\w\-]+", "", owner) / "chars"
+        return self.char_dir()
+
     def portrait_dir(self, key: str, *, create: bool = False) -> Path:
         safe = re.sub(r"[^\w\-]+", "", key)
-        d = self.root / "configs" / "characters" / "portraits" / safe
+        d = self.char_asset_dir(key) / "portraits" / safe
         if create:
             d.mkdir(parents=True, exist_ok=True)
         return d
@@ -738,8 +750,9 @@ class AppContext:
         """The character's img2img reference image: a dedicated <key>.ref.png if
         set, else the card avatar <key>.png. None if neither exists."""
         safe = re.sub(r"[^\w\-]+", "", key)
+        base = self.char_asset_dir(key)
         for fn in (f"{safe}.ref.png", f"{safe}.png"):
-            p = self.char_dir() / fn
+            p = base / fn
             if p.is_file():
                 return p
         return None
@@ -758,7 +771,7 @@ class AppContext:
     def character_images(self, k: str, c) -> list[dict]:
         """All images attached to a character, categorized and checked. Local files
         are verified to exist; URLs found in the card are listed as external."""
-        char_dir = self.char_dir()
+        char_dir = self.char_asset_dir(k)
         out: list[dict] = []
         has_avatar = (char_dir / f"{k}.png").is_file()
         has_ref = (char_dir / f"{k}.ref.png").is_file()
@@ -886,7 +899,9 @@ class AppContext:
             if ref and ref.is_file():
                 import shutil
                 try:
-                    shutil.copyfile(ref, char_dir / f"{key}.ref.png")
+                    dest = self.char_asset_dir(key)   # story folder if the NPC was just embedded
+                    dest.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(ref, dest / f"{key}.ref.png")
                 except Exception:  # noqa: BLE001
                     pass
         return key
@@ -957,9 +972,8 @@ class AppContext:
     # See loom/stories/story_db.py.
     def _story_file(self, key: str):
         from ..stories import story_db as SDB
-        safe = re.sub(r"[^\w\-]+", "", key)
-        p = self.story_dir() / f"{safe}.json"
-        return p if SDB.exists(p) else None
+        p = SDB.story_json_path(self.story_dir(), key)   # folder form, legacy flat as fallback
+        return p if p.is_file() else None
 
     def _read_story_data(self, key: str) -> dict:
         from ..stories import story_db as SDB
@@ -1005,7 +1019,8 @@ class AppContext:
         base = re.sub(r"[^\w\-]+", "_", nm.lower()).strip("_") or "story"
         sdir = self.story_dir(); sdir.mkdir(parents=True, exist_ok=True)
         skey, i = base, 2
-        while (sdir / f"{skey}.yaml").is_file() or (sdir / f"{skey}.json").is_file():
+        while ((sdir / f"{skey}.yaml").is_file() or (sdir / f"{skey}.json").is_file()
+               or (sdir / skey / "story.json").is_file()):
             skey, i = f"{base}_{i}", i + 1
         chars: dict = {}
         for ck in (character_keys or []):
@@ -1014,7 +1029,7 @@ class AppContext:
                 chars[ck] = rec                       # embed the referenced character's record
         story = {"name": nm, "type": type_ if type_ in ("novel", "vn") else "novel", **(fields or {})}
         Story(**story)                                # validate before writing
-        SDB.save_story(sdir / f"{skey}.json", story, chars)
+        SDB.save_story(SDB.story_json_path(sdir, skey), story, chars)   # folder form: <skey>/story.json
         self.reload_settings()
         return skey
 

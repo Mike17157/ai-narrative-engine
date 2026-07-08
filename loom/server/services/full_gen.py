@@ -49,7 +49,8 @@ def render_reference(ctx, key: str) -> str:
                                out_prefix=ctx.output_prefix_for(mid, "base", key))
     if not res.images:
         raise RuntimeError("portrait render produced no image")
-    (ctx.char_dir() / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
+    _d = ctx.char_asset_dir(key); _d.mkdir(parents=True, exist_ok=True)
+    (_d / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
     ctx.reload_settings()
     return f"{safe}.ref.png"
 
@@ -110,7 +111,8 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
     res = provider.generate_image(prompt=base_prompt, latent=ctx.pose_latent("neutral"),
                                   out_prefix=ctx.output_prefix_for(mid, "base", key))
     if res.images:
-        (ctx.char_dir() / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
+        _d = ctx.char_asset_dir(key); _d.mkdir(parents=True, exist_ok=True)
+        (_d / f"{safe}.ref.png").write_bytes(_clean_reference_png(res.images[0]))
         emit({"type": "item", "name": "base image", "text": "saved reference"})
     if cancelled():
         return {"cancelled": True}

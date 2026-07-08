@@ -22,7 +22,40 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
+
+
+def _safe_key(key: str) -> str:
+    return re.sub(r"[^\w\-]+", "", key or "")
+
+
+def story_json_path(story_dir, key: str) -> Path:
+    """Canonical on-disk path for a story's JSON. The layout is ONE FOLDER PER STORY:
+    ``<dir>/<key>/story.json`` (which also holds the story's generated assets). Falls back to the
+    legacy flat ``<dir>/<key>.json`` when only that exists, so both layouts load during the
+    transition. New writes go to the folder form."""
+    d = Path(story_dir)
+    safe = _safe_key(key)
+    folder = d / safe / "story.json"
+    if folder.is_file():
+        return folder
+    legacy = d / f"{safe}.json"
+    if legacy.is_file():
+        return legacy
+    return folder   # default target for new writes
+
+
+def iter_story_files(story_dir) -> list[tuple[str, Path]]:
+    """(key, path) for every story on disk — folder form (``<key>/story.json``) preferred over the
+    legacy flat form (``<key>.json``), deduped by key. `key` is the folder name / file stem."""
+    d = Path(story_dir)
+    out: dict[str, Path] = {}
+    for p in sorted(d.glob("*/story.json")):
+        out[p.parent.name] = p
+    for p in sorted(d.glob("*.json")):
+        out.setdefault(p.stem, p)      # legacy only if no folder form claimed this key
+    return list(out.items())
 
 
 def _doc(path) -> dict:
