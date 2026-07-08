@@ -139,25 +139,11 @@ class Condition(BaseModel):
     effect: str = ""              # how it bends daily life: what stops, what people do differently
 
 
-class Location(BaseModel):
-    id: str
-    name: str
-    description: str = ""                    # the place, objectively (no events/people)
-    # A PURE background plate: the empty environment only — no characters/figures.
-    background_prompt: str = ""
-    background: str | None = None            # rendered background asset (later)
-    # Map grouping: the id of a parent location this one sits inside (an "area" is just a
-    # location with children — a tree, no coordinates/adjacency). "" = top level.
-    # Written by the set_location_area script; see [[persona-scene-roadmap]].
-    parent: str = ""
-
-
 # --------------------------------------------------------------------------- #
-# Scenes & Places — a STORY-AUTHORED, character-anchored layer over bare locations.
-# A Place is a first-class CONTAINER ("The House", "Main Street"); the Scenes inside
-# it are the character spots that happen there — mom in the kitchen, the sister in her
-# room, the baker behind the counter. Several scenes can share one Place, and a scene
-# can be shared by several characters. A scene's `backstory` tells the director who is
+# Locations & Scenes — a location is the objective spatial world (a tree of neutral
+# backdrops, the travel graph); the scenes ON a location are the STORY-AUTHORED,
+# character-anchored spots that happen there — mom in the kitchen, the sister in her
+# room, the baker behind the counter. A scene's `backstory` tells the director who is
 # usually here + what they do; `role` == 'persona_home' marks the swappable "you" home
 # that an embodied playable card can replace.  See [[persona-scene-roadmap]].
 # --------------------------------------------------------------------------- #
@@ -172,12 +158,19 @@ class Scene(BaseModel):
     role: str = ""                           # 'persona_home' = the swappable player-home slot
 
 
-class Place(BaseModel):
+class Location(BaseModel):
     id: str
     name: str
-    description: str = ""                     # the place, objectively
-    background_prompt: str = ""               # establishing plate for the whole place
-    background: str | None = None
+    description: str = ""                    # the place, objectively (no events/people)
+    # A PURE background plate: the empty environment only — no characters/figures.
+    background_prompt: str = ""
+    background: str | None = None            # rendered background asset (later)
+    # Map grouping: the id of a parent location this one sits inside (an "area" is just a
+    # location with children — a tree, no coordinates/adjacency). "" = top level.
+    # Written by the set_location_area script; see [[persona-scene-roadmap]].
+    parent: str = ""
+    # The STORY-AUTHORED, character-anchored spots at this location — the orbits ("who is
+    # usually where"). Empty for a bare backdrop; populated for inhabited places.
     scenes: list[Scene] = Field(default_factory=list)
 
 
@@ -422,6 +415,16 @@ class Story(BaseModel):
     # opposition / stakes / texture) — structured overview-layer data narrative functions read
     # and mutate. Replaces the read-only LLM coverage checker.
     premise_parts: dict[str, str] = Field(default_factory=dict)
+    # The DEFINED WORLD — the permanent foundation the whole story grows from, and the thing premise
+    # & theme are DISTILLED from (never authored before it). Key's writers build the world first and
+    # let the theme emerge; this is where that world SURVIVES commit (it used to be genesis-only
+    # scratch, discarded). Shape (all optional): {genre, tone, setting, place, era,
+    #   pressure: str,                       # the ache/root — the one standing force everything grows from
+    #   forces: [{name, stance}],            # the camps around the pressure → the premise's `creeds`
+    #   traditions: [{name, logic}],         # grounded folk-logic
+    #   people: [{name, life}],              # ordinary lives the world orbits
+    #   fragments: [{kind, text}]}           # lived particulars (shown, rule withheld)
+    world: dict[str, Any] = Field(default_factory=dict)
     # The bounded plot outline this experience was built from; scenes + cast are extracted from it.
     storyboard: Storyboard = Field(default_factory=Storyboard)
     cast: list[CastMember] = Field(default_factory=list)  # the roster (presence is dynamic)
@@ -430,9 +433,6 @@ class Story(BaseModel):
     # Recurring SETTING STAGES (seasons, event-states, place-states) the world moves through —
     # the vocabulary that situation-keyed character content (`when:<id>`) switches on. See Condition.
     conditions: list[Condition] = Field(default_factory=list)
-    # Story-authored Places (containers) + their character-anchored Scenes. Additive over
-    # `locations` — the world's "spots" (mom's kitchen, the baker's bakery). See Place/Scene.
-    places: list[Place] = Field(default_factory=list)
     start: str | None = None                 # starting location id
     background: str | None = None            # cover / default background
     fields: dict[str, Any] = Field(default_factory=dict)  # source card key, creator…
@@ -464,6 +464,75 @@ class Story(BaseModel):
         ids = {l.id for l in self.locations}
         if self.locations and self.start and self.start not in ids:
             raise ValueError(f"story '{self.name}' start '{self.start}' is not a location id")
+        return self
+
+    @model_validator(mode="after")
+    def _check_references(self) -> "Story":
+        """Referential integrity — every intra-story id-reference points at a thing that exists.
+        Collects ALL dangling refs and raises one structured message (so the caller sees the full
+        picture, not just the first). Cross-aggregate refs (cast→global character registry) are
+        checked on Settings._validate_references, not here. See context.update_story_fields for the
+        self-heal that repairs the common repairable cases before this runs."""
+        loc_ids = {l.id for l in self.locations}
+        cast_keys = {m.character for m in self.cast}
+        rel_ids = {r.id for r in self.relationships}
+        cond_ids = {c.id for c in self.conditions}
+        scene_ids = {s.id for l in self.locations for s in (l.scenes or [])}
+        vn_scene_ids = {sc.id for sc in self.scenes}
+        bad: list[str] = []
+
+        # cast.home → location id
+        for m in self.cast:
+            if m.home and m.home not in loc_ids:
+                bad.append(f"cast '{m.character}'.home → '{m.home}' (not a location id)")
+        # location.parent → location id (self-refs are valid once the id exists)
+        for l in self.locations:
+            if l.parent and l.parent not in loc_ids:
+                bad.append(f"location '{l.id}'.parent → '{l.parent}' (not a location id)")
+        # scene.character / scene.characters → cast key
+        for l in self.locations:
+            for s in (l.scenes or []):
+                if s.character and s.character not in cast_keys:
+                    bad.append(f"scene '{s.id}'.character → '{s.character}' (not in cast)")
+                for ck in (s.characters or []):
+                    if ck not in cast_keys:
+                        bad.append(f"scene '{s.id}'.characters → '{ck}' (not in cast)")
+        # relationship.source/target → cast key
+        for r in self.relationships:
+            if r.source and r.source not in cast_keys:
+                bad.append(f"relationship '{r.id}'.source → '{r.source}' (not in cast)")
+            if r.target and r.target not in cast_keys:
+                bad.append(f"relationship '{r.id}'.target → '{r.target}' (not in cast)")
+        # arc.cast / arc.owner → cast key ; arc.pressures → relationship id ; arc.conditions → condition id
+        for a in self.arcs:
+            for ck in (a.cast or []):
+                if ck not in cast_keys:
+                    bad.append(f"arc '{a.id}'.cast → '{ck}' (not in cast)")
+            if a.owner and a.owner not in cast_keys:
+                bad.append(f"arc '{a.id}'.owner → '{a.owner}' (not in cast)")
+            for rid in (a.pressures or []):
+                if rid not in rel_ids:
+                    bad.append(f"arc '{a.id}'.pressures → '{rid}' (not a relationship id)")
+            for cid in (a.conditions or []):
+                if cid not in cond_ids:
+                    bad.append(f"arc '{a.id}'.conditions → '{cid}' (not a condition id)")
+        # connection.source/target → location id
+        for c in self.connections:
+            if c.source and c.source not in loc_ids and c.source not in scene_ids:
+                bad.append(f"connection '{c.id}'.source → '{c.source}' (not a location/scene id)")
+            if c.target and c.target not in loc_ids and c.target not in scene_ids:
+                bad.append(f"connection '{c.id}'.target → '{c.target}' (not a location/scene id)")
+        # VN: start_scene → scene harness id
+        if self.start_scene and self.start_scene not in vn_scene_ids:
+            bad.append(f"start_scene → '{self.start_scene}' (not a VN scene id)")
+        # VN scene on_stage.char → cast key
+        for sc in self.scenes:
+            for os_ in (sc.on_stage or []):
+                if os_.char and os_.char not in cast_keys:
+                    bad.append(f"vn-scene '{sc.id}'.on_stage → '{os_.char}' (not in cast)")
+        if bad:
+            raise ValueError(f"story '{self.name}' has {len(bad)} dangling reference(s): "
+                             + "; ".join(bad[:8]) + ("; …" if len(bad) > 8 else ""))
         return self
 
 

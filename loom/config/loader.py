@@ -52,19 +52,22 @@ def load_settings(root: str | Path) -> Settings:
         for path in sorted(persona_dir.glob("*.yaml")):
             personas[path.stem] = Persona(**_read_yaml(path))
 
-    # stories — ONE self-contained libSQL <key>.db per story (the only story-data system). A story DB
-    # EMBEDS its characters and is AUTHORITATIVE for them: merge those into the character library,
-    # overriding any global file of the same key. See loom/stories/story_db.py + [[per-story-database]].
+    # stories — ONE self-contained <key>.json per story. A story file EMBEDS its characters and is
+    # AUTHORITATIVE for them: merge those into the character library, overriding any global file of
+    # the same key. Any legacy <key>.db is auto-migrated to .json on load (see migrate_db_to_json).
     from ..stories import story_db as _SDB
     stories: dict[str, Story] = {}
     story_dir = configs / "stories"
     if story_dir.is_dir():
-        for path in sorted(story_dir.glob("*.db")):
+        # Lazy one-time migration: convert any legacy .db to .json before enumerating.
+        from ..stories.migrate_db_to_json import migrate_dir as _migrate
+        _migrate(story_dir)
+        for path in sorted(story_dir.glob("*.json")):
             sdata, embedded = _SDB.load_story(path)
             stories[path.stem] = Story(**sdata)
             for ck, cdoc in embedded.items():
                 try:
-                    characters[ck] = Character(**cdoc)   # story DB authoritative for its cast
+                    characters[ck] = Character(**cdoc)   # story file authoritative for its cast
                 except Exception:  # noqa: BLE001 — a bad embedded card never sinks the load
                     pass
 

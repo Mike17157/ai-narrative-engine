@@ -25,34 +25,7 @@ unfinished work at that step — so the card is checkable stage by stage.
 """
 from __future__ import annotations
 
-import hashlib
-import json
-from typing import Any
 
-
-def _content_hash(value) -> str:
-    """A short, stable content hash — the ANCHOR for a targeted edit (oh-my-pi's hash-anchored
-    editing, in structured form). An op carries the hash of what it expected to edit; apply
-    verifies the target still hashes the same, so a stale edit can't clobber changed content."""
-    blob = json.dumps(value, sort_keys=True, ensure_ascii=False, default=str)
-    return hashlib.sha1(blob.encode("utf-8")).hexdigest()[:12]
-
-
-def op_base_hash(data: dict, op: dict) -> str:
-    """The hash an op should anchor to given the CURRENT data — i.e. what it's about to edit right
-    now. '' when there's nothing to anchor (creating a new item, setting an absent field)."""
-    field, kind = op.get("field"), (op.get("op") or "").lower()
-    cur = (data or {}).get(field)
-    if kind == "set":
-        return _content_hash(cur) if cur is not None else ""
-    if kind == "merge":
-        key = op.get("key")
-        return _content_hash(cur.get(key)) if isinstance(cur, dict) and key in cur else ""
-    if kind in ("upsert", "remove"):
-        iid = op.get("id") or (op.get("item") or {}).get("id")
-        item = next((x for x in (cur or []) if isinstance(x, dict) and x.get("id") == iid), None)
-        return _content_hash(item) if item is not None else ""
-    return ""
 
 # Layer taxonomy — ordered by CREATIVE DEPENDENCY (the Snowflake/Truby "expand from the seed"
 # discipline), not by artifact type: the controlling idea first, then the WORLD it happens in,
@@ -85,7 +58,7 @@ LAYER_FIELDS: dict[str, tuple[str, ...]] = {
     "overview":      ("premise", "tone", "themes", "art_style", "premise_parts", "storyboard"),
     "plot":          ("arcs", "chapters", "scenes", "storyboard"),
     "relationships": ("relationships", "cast"),
-    "map":           ("locations", "places", "start", "connections", "conditions"),
+    "map":           ("locations", "start", "connections", "conditions", "world"),
 }
 
 
@@ -106,7 +79,7 @@ def build_card(story: dict, manifests: dict[str, dict] | None = None,
     # overview — the frame + L0 style + the premise's structured components
     style = (story.get("art_style") or "").strip()
     parts = {k: v for k, v in (story.get("premise_parts") or {}).items() if (v or "").strip()}
-    part_ids = ("philosophy", "protagonist", "lie", "inciting", "opposition", "stakes", "texture")
+    part_ids = ("root", "question", "creeds", "tragedy", "protagonist", "stakes", "texture")
     overview = {
         "art_style": style or global_style,
         "art_style_source": "story" if style else "global",
@@ -189,65 +162,6 @@ def layer_patch_fields(layer: str, patch: dict) -> dict:
     return {k: v for k, v in (patch or {}).items() if k in allowed}
 
 
-def apply_layer_ops(data: dict, layer: str, ops: list) -> tuple[dict, list, list]:
-    """TARGETED partial edits — touch one part of a section's JSON without resending the whole
-    thing. Each op names a `field` the layer is allowed to write (LAYER_FIELDS) and one action:
-      set    {field, value}       — replace a scalar / whole field ("premise", "art_style", "tone")
-      merge  {field, key, value}  — set ONE key of a dict field  (premise_parts.philosophy)
-      upsert {field, id, item}    — add or update the item with `id` in a list field (one bond,
-                                     one condition, one location) — existing keys are preserved,
-                                     only the given keys change
-      remove {field, id}          — drop the item with `id` from a list field
-    HASH-ANCHORED (oh-my-pi style): an op may carry `base` — the hash of what it expected to edit.
-    If the target has since drifted (`base` no longer matches), the op is STALE and skipped, so an
-    edit can't land on changed content. Ops on non-whitelisted fields are skipped. Returns
-    (new_data, applied, stale) — pure, so it self-checks and the caller persists + reports stale."""
-    allowed = set(LAYER_FIELDS.get(layer, ()))
-    out = dict(data or {})
-    applied, stale = [], []
-    for op in ops or []:
-        if not isinstance(op, dict):
-            continue
-        field, kind = op.get("field"), (op.get("op") or "").lower()
-        if field not in allowed:
-            continue
-        base = op.get("base")
-        if base:                                    # anchor check against CURRENT data
-            if op_base_hash(out, op) != base:
-                stale.append(op)
-                continue
-        if kind == "set":
-            out[field] = op.get("value")
-        elif kind == "merge":
-            key = op.get("key")
-            if not key:
-                continue
-            d = dict(out.get(field) or {})
-            d[key] = op.get("value")
-            out[field] = d
-        elif kind == "upsert":
-            item = dict(op.get("item") or {})
-            iid = op.get("id") or item.get("id")
-            if not iid:
-                continue
-            item["id"] = iid
-            lst = list(out.get(field) or [])
-            idx = next((i for i, x in enumerate(lst) if isinstance(x, dict) and x.get("id") == iid), None)
-            if idx is None:
-                lst.append(item)
-            else:
-                lst[idx] = {**lst[idx], **item}
-            out[field] = lst
-        elif kind == "remove":
-            iid = op.get("id")
-            out[field] = [x for x in (out.get(field) or [])
-                          if not (isinstance(x, dict) and x.get("id") == iid)]
-        else:
-            continue
-        applied.append(op)
-    return out, applied, stale
-
-
 if __name__ == "__main__":   # ponytail: one runnable check — build + todo + patch filter
     story = {
         "premise": "p", "tone": "t", "themes": ["x"], "art_style": "",
@@ -265,7 +179,7 @@ if __name__ == "__main__":   # ponytail: one runnable check — build + todo + p
     assert ls["overview"]["content"]["art_style"] == "G." and ls["overview"]["content"]["art_style_source"] == "global"
     assert any("art style" in t for t in ls["overview"]["todo"])
     assert ls["overview"]["content"]["premise_parts"] == {"protagonist": "a woodcutter"}
-    assert any(t.startswith("components to write: philosophy, lie,") for t in ls["overview"]["todo"]), ls["overview"]["todo"]
+    assert any(t.startswith("components to write: root, question, creeds, tragedy,") for t in ls["overview"]["todo"]), ls["overview"]["todo"]
     assert ls["plot"]["todo"], "empty plot must todo"
     assert any("place b" in t for t in ls["relationships"]["todo"]), ls["relationships"]["todo"]
     assert any("scene image missing: Home" in t for t in ls["map"]["todo"])
@@ -278,32 +192,4 @@ if __name__ == "__main__":   # ponytail: one runnable check — build + todo + p
     except KeyError:
         pass
 
-    # ── apply_layer_ops: targeted partial edits touch ONE part, leave the rest ──
-    d = dict(story)
-    d, ap, _ = apply_layer_ops(d, "overview", [{"op": "merge", "field": "premise_parts", "key": "lie", "value": "he can't be forgiven"}])
-    assert d["premise_parts"] == {"protagonist": "a woodcutter", "lie": "he can't be forgiven"}, d["premise_parts"]
-    assert len(ap) == 1
-    d, *_ = apply_layer_ops(d, "overview", [{"op": "set", "field": "tone", "value": "wry"}])
-    assert d["tone"] == "wry" and d["premise"] == "p"     # only tone changed
-    d, *_ = apply_layer_ops(d, "relationships", [{"op": "upsert", "field": "relationships", "id": "r-a-b",
-                                                 "item": {"source": "a", "target": "b", "nature": "rival"}}])
-    assert d["relationships"][-1]["nature"] == "rival" and d["relationships"][-1]["id"] == "r-a-b"
-    d, *_ = apply_layer_ops(d, "relationships", [{"op": "upsert", "field": "relationships", "id": "r-a-b",
-                                                 "item": {"potential": "shared grief"}}])   # partial update, keeps nature
-    r = next(x for x in d["relationships"] if x.get("id") == "r-a-b")
-    assert r["nature"] == "rival" and r["potential"] == "shared grief", r
-    d, *_ = apply_layer_ops(d, "map", [{"op": "upsert", "field": "conditions", "id": "flood", "item": {"name": "The flood"}}])
-    assert any(c["id"] == "flood" for c in d["conditions"])
-    d, *_ = apply_layer_ops(d, "map", [{"op": "remove", "field": "conditions", "id": "flood"}])
-    assert not any(c.get("id") == "flood" for c in d["conditions"])
-    # a non-whitelisted field is ignored (overview can't write relationships)
-    d2, ap2, _ = apply_layer_ops(d, "overview", [{"op": "set", "field": "relationships", "value": []}])
-    assert ap2 == [] and d2["relationships"] == d["relationships"]
-
-    # ── HASH-ANCHORED: a matching anchor applies; a drifted one is STALE, not clobbering ──
-    good = op_base_hash(d, {"op": "set", "field": "tone"})          # anchor to current tone ("wry")
-    d3, ap3, st3 = apply_layer_ops(d, "overview", [{"op": "set", "field": "tone", "value": "grim", "base": good}])
-    assert ap3 and not st3 and d3["tone"] == "grim"
-    d4, ap4, st4 = apply_layer_ops(d, "overview", [{"op": "set", "field": "tone", "value": "silly", "base": "deadbeef0000"}])
-    assert not ap4 and st4 and d4["tone"] == "wry"                  # stale anchor rejected, content unchanged
-    print("ok — card build + per-layer todo + patch filter + targeted ops + hash anchors")
+    print("ok — card build + per-layer todo + patch filter")

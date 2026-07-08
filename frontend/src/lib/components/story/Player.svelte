@@ -184,16 +184,16 @@
   let suggested = $derived(playable.filter((c) => suggestedKeys.includes(c.key)));
   let others = $derived(playable.filter((c) => !suggestedKeys.includes(c.key)));
 
-  // Places navigation — story-authored containers + their character-anchored scenes. You
-  // can hop to any spot; the director narrates arrival and brings the anchor on-stage. The
-  // current scene (UI-tracked) drives the background (scene → place → flat location).
-  let places = $derived(story?.places || []);
+  // Places navigation — locations with character-anchored scenes (the orbits). You can hop
+  // to any spot; the director narrates arrival and brings the anchor on-stage. The current
+  // scene (UI-tracked) drives the background (scene → location → flat backdrop).
+  let placeLocs = $derived((story?.locations || []).filter((l) => (l.scenes || []).length));
   // The embodied puppet's OWN portable home scenes — added to the navigator as "Your home".
   let homeScenes = $derived(puppet?.home_scenes || []);
   let curScene = $state(null);              // scene id you're currently standing in
   let showPlaces = $state(false);
   let activeScene = $derived(
-    [...places.flatMap((p) => (p.scenes || []).map((s) => ({ ...s, _place: p }))), ...homeScenes]
+    [...placeLocs.flatMap((l) => (l.scenes || []).map((s) => ({ ...s, _place: l }))), ...homeScenes]
       .find((s) => s.id === curScene) || null
   );
 
@@ -354,7 +354,7 @@
       {/if}
     </div>
 
-    {#if places.length || homeScenes.length}
+    {#if placeLocs.length || homeScenes.length}
       <button class="ghost sm" class:on={showPlaces} onclick={() => (showPlaces = !showPlaces)}
         title="Move to a place / scene">🗺 Places</button>
     {/if}
@@ -389,7 +389,7 @@
             </div>
           </div>
         {/if}
-        {#each places as p (p.id)}
+        {#each placeLocs as p (p.id)}
           <div class="ppplace">
             <div class="ppname">{p.name}</div>
             {#if p.description}<div class="ppdesc">{p.description}</div>{/if}
@@ -403,7 +403,7 @@
                   </span>
                 </button>
               {:else}
-                <span class="ppempty">No scenes in this place.</span>
+                <span class="ppempty">No scenes here.</span>
               {/each}
             </div>
           </div>

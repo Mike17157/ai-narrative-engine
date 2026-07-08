@@ -4,6 +4,9 @@ A session is the durable state of a console: the conversation, the working devel
 graph, and the latest draft — persisted as JSON under configs/story_sessions/{id}.json
 so a consultation resumes across reloads/devices instead of relying on client memory.
 Keyed by an opaque id the client owns (e.g. a wizard uuid, or `story-<key>`).
+
+Sessions NO LONGER live inside the story file — they moved to their own per-sid JSON
+files here. (They used to co-reside in the story's SQLite DB; that DB is gone.)
 """
 from __future__ import annotations
 
@@ -20,33 +23,21 @@ def _safe(sid: str) -> str:
     return re.sub(r"[^\w\-]+", "_", str(sid or "")).strip("_")
 
 
-def _story_db(root: Path, sid: str):
-    """The owning story's DB for a story-bound sid (``play-<key>`` / ``story-<key>``), if it's
-    DB-backed. Other sids (wizard uuids, un-migrated stories) → None → legacy JSON file. So a
-    playthrough's session lives INSIDE its story's .db. See loom/stories/story_db.py."""
-    m = re.match(r"^(?:play|story)-(.+)$", str(sid or ""))
-    if not m:
-        return None
-    from ...stories import story_db as _SDB
-    key = re.sub(r"[^\w\-]+", "", m.group(1))
-    p = root / "configs" / "stories" / f"{key}.db"
-    return p if _SDB.exists(p) else None
+def _path(root: Path, sid: str) -> Path:
+    return _dir(root) / f"{_safe(sid)}.json"
 
 
 def load_session(root: Path, sid: str) -> dict | None:
     safe = _safe(sid)
     if not safe:
         return None
-    from ...stories import story_db as _SDB
-    db = _story_db(root, sid)
-    raw = _SDB.load_session(db, safe) if db is not None else None
-    if raw is None:                                    # file fallback (legacy / lazy-migrate)
-        p = _dir(root) / f"{safe}.json"
-        if p.is_file():
-            try:
-                raw = json.loads(p.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                raw = None
+    p = _dir(root) / f"{safe}.json"
+    if not p.is_file():
+        return None
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — corrupt file surfaces as "no session"
+        return None
     if not isinstance(raw, dict):
         return None
     # Surface the unified State doc alongside the legacy flat fields (lazy + lossless).
@@ -57,12 +48,12 @@ def load_session(root: Path, sid: str) -> dict | None:
 
 
 def save_session(root: Path, sid: str, data: dict) -> dict:
-    from ...stories import state_doc as _SD, story_db as _SDB
+    from ...stories import state_doc as _SD
 
     safe = _safe(sid)
     data = data or {}
-    # The canonical mutable record is the State doc; write BOTH it and the projected flat fields so
-    # readers on either side of the phased migration agree.
+    # The canonical mutable record is the State doc; write BOTH it and the projected flat
+    # fields so readers on either side of the phased migration agree.
     state = _SD.from_session(data)
     legacy = _SD.to_session_fields(state)   # {state, graph?, draft?, world_state?}
     payload = {
@@ -75,18 +66,13 @@ def save_session(root: Path, sid: str, data: dict) -> dict:
         "world_state": legacy.get("world_state", data.get("world_state") or {}),
         "state": state,                                # the unified leveled State doc
     }
-    db = _story_db(root, sid)
-    if db is not None:                                 # store inside the owning story's DB
-        _SDB.save_session(db, safe, payload)
-        try:                                           # lazy-migrate: drop any legacy JSON file
-            (_dir(root) / f"{safe}.json").unlink()
-        except FileNotFoundError:
-            pass
-    else:
-        d = _dir(root)
-        d.mkdir(parents=True, exist_ok=True)
-        (d / f"{safe}.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    d = _dir(root)
+    d.mkdir(parents=True, exist_ok=True)
+    # Atomic write: temp + replace, so a crash mid-write can't corrupt the session.
+    p = _path(root, sid)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp.replace(p)
     return payload
 
 
@@ -94,12 +80,7 @@ def delete_session(root: Path, sid: str) -> None:
     safe = _safe(sid)
     if not safe:
         return
-    from ...stories import story_db as _SDB
-    db = _story_db(root, sid)
-    if db is not None:
-        _SDB.delete_session(db, safe)
-    p = _dir(root) / f"{safe}.json"                    # also drop any legacy file
     try:
-        p.unlink()
+        (_dir(root) / f"{safe}.json").unlink()
     except FileNotFoundError:
         pass

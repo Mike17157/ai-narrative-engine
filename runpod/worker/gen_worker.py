@@ -80,6 +80,7 @@ CORE_NODES = {
     "ModelSamplingDiscrete", "ModelSamplingSD3", "ModelSamplingFlux", "ModelSamplingAuraFlow",
     "SamplerCustom",
     "SamplerCustomAdvanced", "BasicScheduler", "BasicGuider", "RandomNoise", "KSamplerSelect",
+    "SplitSigmas", "SplitSigmasDenoise", "FlipSigmas",  # comfy_extras custom-sampler family (krea2 denoise split)
     "Mahiro", "RescaleCFG", "ImageCrop", "ImageInvert", "ImageBlend", "JoinImageWithAlpha",
     "SplitImageWithAlpha", "VAEEncodeTiled", "VAEDecodeTiled",
     # FLUX.2 core nodes (current ComfyUI master).
@@ -237,6 +238,10 @@ def resolve_node(ct: str) -> tuple[str, str] | None:
 
 def model_dir(ct: str, key: str) -> str | None:
     """Dir a weight belongs under, or None if (ct, key) isn't a real loader input."""
+    # easy loraStack takes a dynamic count of lora_<N>_name inputs (num_loras);
+    # they're all real LoRA files, so key on the pattern rather than every N.
+    if ct == "easy loraStack" and key.startswith("lora_") and key.endswith("_name"):
+        return "loras"
     return LOADER_INPUTS.get((ct, key))
 
 

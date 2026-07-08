@@ -53,6 +53,38 @@ _ROLE_LABELS = {
 _IMG_URL_RE = re.compile(r"https?://[^\s\"'<>)]+?\.(?:png|jpe?g|webp|gif)", re.IGNORECASE)
 
 
+def _self_heal_refs(data: dict) -> None:
+    """Drop the REPAIRABLE dangling references in a raw story dict, in place. These are the ones
+    where "the target was deleted, so forget the pointer" is always the right move — clearing them
+    lets an unrelated edit succeed instead of being blocked by Story._check_references. References
+    we do NOT auto-repair (a relationship pointing at a deleted character — ambiguous, not a simple
+    drop) are left for the validator to raise on. Mirrors the old `start`-only self-heal."""
+    loc_ids = {l.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)}
+    scene_ids = {s.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)
+                 for s in (l.get("scenes") or []) if isinstance(s, dict)}
+    # start → location id
+    if data.get("start") and data["start"] not in loc_ids:
+        data["start"] = None
+    # cast.home → location id
+    for m in (data.get("cast") or []):
+        if isinstance(m, dict) and m.get("home") and m["home"] not in loc_ids:
+            m["home"] = ""
+    # location.parent → location id
+    for l in (data.get("locations") or []):
+        if isinstance(l, dict) and l.get("parent") and l["parent"] not in loc_ids:
+            l["parent"] = ""
+    # connection.source/target → location or scene id
+    for c in (data.get("connections") or []):
+        if isinstance(c, dict):
+            for end in ("source", "target"):
+                if c.get(end) and c[end] not in loc_ids and c[end] not in scene_ids:
+                    c[end] = ""
+    # start_scene → VN scene id
+    if data.get("start_scene") and not any(s.get("id") == data["start_scene"]
+                                           for s in (data.get("scenes") or []) if isinstance(s, dict)):
+        data["start_scene"] = ""
+
+
 class AppContext:
     """Holds app state and the state-bound helpers the web layer needs."""
 
@@ -776,7 +808,7 @@ class AppContext:
         from ..stories import story_db as SDB
         char_dir = self.char_dir()
         char_dir.mkdir(parents=True, exist_ok=True)
-        db = self._story_db(story_key) if story_key else None   # embed into a DB-backed story
+        db = self._story_file(story_key) if story_key else None   # embed into the story's JSON
         taken = {p.stem for p in char_dir.glob("*.yaml")}
         if db is not None:
             taken |= set(SDB.character_keys(db))
@@ -789,7 +821,7 @@ class AppContext:
         if base_prompt:
             fields["base_prompt"] = base_prompt
         # The portable core harness (relationship-first genesis) lives on the card — see GENESIS.md.
-        for hk in ("want", "lie", "wound", "secret"):
+        for hk in ("want", "lie", "contradiction", "wound", "secret"):
             if npc.get(hk):
                 fields[hk] = npc[hk]
         try:                                              # numeric stature → sprite scaling (not a tag)
@@ -879,29 +911,30 @@ class AppContext:
         self._write_story_data(key, data)
         return f"/api/stories/{key}/bg/{loc}.png"
 
-    # ── Persistence routing ── A story is DB-backed iff its <key>.db exists (else legacy YAML). A
-    # character is owned by a story DB iff embedded there (authoritative), else it's a global YAML
-    # card. These helpers hide the split so every read/write path is store-agnostic. See story_db.py.
-    def _story_db(self, key: str):
+    # ── Persistence routing ── A story is JSON-backed: one self-contained <key>.json file that
+    # embeds its characters (authoritative for them). A character not embedded in any story is a
+    # global YAML card. These helpers hide the split so read/write paths are store-agnostic.
+    # See loom/stories/story_db.py.
+    def _story_file(self, key: str):
         from ..stories import story_db as SDB
         safe = re.sub(r"[^\w\-]+", "", key)
-        p = self.story_dir() / f"{safe}.db"
+        p = self.story_dir() / f"{safe}.json"
         return p if SDB.exists(p) else None
 
     def _read_story_data(self, key: str) -> dict:
         from ..stories import story_db as SDB
-        db = self._story_db(key)
+        db = self._story_file(key)
         if db is None:
             raise FileNotFoundError(key)
         story, _chars = SDB.load_story(db)
         return story
 
     def _write_story_data(self, key: str, data: dict) -> None:
-        """Validate + persist a whole story dict to its DB, keeping the embedded characters."""
+        """Validate + persist a whole story dict to its JSON file, keeping the embedded characters."""
         from ..config.schema import Story
         from ..stories import story_db as SDB
         Story(**data)   # validate FIRST — never persist a corrupt story
-        db = self._story_db(key)
+        db = self._story_file(key)
         if db is None:
             raise FileNotFoundError(key)
         _story, chars = SDB.load_story(db)
@@ -909,7 +942,7 @@ class AppContext:
         self.reload_settings()
 
     def create_story(self, name: str, fields: dict, character_keys=None, type_: str = "novel") -> str:
-        """Mint a NEW story as its own ``<skey>.db``, EMBEDDING the records of any referenced
+        """Mint a NEW story as its own ``<skey>.json``, EMBEDDING the records of any referenced
         characters (the file is the whole self-contained story). Derives a unique key from `name`,
         validates, reloads. Returns the key. The single creation chokepoint (genesis_commit + the
         cast/wizard saves route here). See stories/story_db.py."""
@@ -922,7 +955,7 @@ class AppContext:
         base = re.sub(r"[^\w\-]+", "_", nm.lower()).strip("_") or "story"
         sdir = self.story_dir(); sdir.mkdir(parents=True, exist_ok=True)
         skey, i = base, 2
-        while (sdir / f"{skey}.yaml").is_file() or (sdir / f"{skey}.db").is_file():
+        while (sdir / f"{skey}.yaml").is_file() or (sdir / f"{skey}.json").is_file():
             skey, i = f"{base}_{i}", i + 1
         chars: dict = {}
         for ck in (character_keys or []):
@@ -931,7 +964,7 @@ class AppContext:
                 chars[ck] = rec                       # embed the referenced character's record
         story = {"name": nm, "type": type_ if type_ in ("novel", "vn") else "novel", **(fields or {})}
         Story(**story)                                # validate before writing
-        SDB.save_story(sdir / f"{skey}.db", story, chars)
+        SDB.save_story(sdir / f"{skey}.json", story, chars)
         self.reload_settings()
         return skey
 
@@ -939,7 +972,7 @@ class AppContext:
         """The story key that OWNS this character (embeds it), or None for a global library card."""
         from ..stories import story_db as SDB
         for skey in self.base_settings.stories:
-            db = self._story_db(skey)
+            db = self._story_file(skey)
             if db is not None and char_key in SDB.character_keys(db):
                 return skey
         return None
@@ -960,7 +993,7 @@ class AppContext:
         from ..stories import story_db as SDB
         owner = self._char_owner(key)
         if owner is not None:
-            return SDB.get_character(self._story_db(owner), key)
+            return SDB.get_character(self._story_file(owner), key)
         safe = re.sub(r"[^\w\-]+", "", key)
         path = self.char_dir() / f"{safe}.yaml"
         return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
@@ -972,7 +1005,7 @@ class AppContext:
         Character(**cdata)   # validate FIRST
         owner = self._char_owner(key)
         if owner is not None:
-            SDB.upsert_character(self._story_db(owner), key, cdata)
+            SDB.upsert_character(self._story_file(owner), key, cdata)
         else:
             safe = re.sub(r"[^\w\-]+", "", key)
             (self.char_dir() / f"{safe}.yaml").write_text(
@@ -980,15 +1013,13 @@ class AppContext:
         self.reload_settings()
 
     def update_story_fields(self, key: str, fields: dict) -> None:
-        """Patch top-level fields onto a saved story (DB-backed or legacy YAML) + reload. VALIDATES
-        the merged story BEFORE writing. Raises FileNotFoundError for a draft (neither DB nor YAML)."""
+        """Patch top-level fields onto a saved story + reload. VALIDATES the merged story BEFORE
+        writing, after SELF-HEALING the repairable dangling references — so a pre-existing stale
+        ref (e.g. a location was deleted) doesn't block every unrelated edit. Genuinely unrepairable
+        refs (a relationship pointing at a deleted character) still raise. See Story._check_references."""
         data = self._read_story_data(key)
         data.update(fields)
-        # Self-heal a DANGLING start: if it points at a location that no longer exists, drop it —
-        # otherwise the whole-Story validator would block every unrelated edit (e.g. adding a location).
-        loc_ids = {l.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)}
-        if data.get("start") and data["start"] not in loc_ids:
-            data["start"] = None
+        _self_heal_refs(data)
         self._write_story_data(key, data)
 
     def persist_character_entry(self, key: str, doc: dict) -> None:

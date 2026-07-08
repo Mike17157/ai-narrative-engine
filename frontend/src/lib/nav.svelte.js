@@ -62,28 +62,9 @@ export function storiesTree(path = '') {
   const key = m?.[1];
   const active = key && key !== 'new' ? list.find((s) => s.key === key) : null;
 
-  if (active) {
-    // The editor's four surfaces are query-param tabs on the one /structure route (StoryWorkspace
-    // reads ?tab); they sit directly in the subnav alongside Cast · Play. No story-picker dropdown.
-    const t = (tab) => `/stories/${key}/structure?tab=${tab}`;
-    return [
-      { id: 'all', label: '← Stories', href: '/stories', match: 'exact' },
-      // The three authoring TIERS as header buttons, each a dropdown of its tabs
-      // (loom/stories/card.py LAYERS/TIERS). Runtime (Play) sits apart.
-      { id: `${key}-bible`, label: 'Bible', children: [
-        { id: `${key}-overview`,      label: 'Overview',      href: t('overview') },
-        { id: `${key}-map`,           label: 'World',         href: t('map') },
-        { id: `${key}-relationships`, label: 'Relationships', href: t('relationships') },
-      ] },
-      { id: `${key}-prog`, label: 'Progression', children: [
-        { id: `${key}-plot`,          label: 'Plot',          href: t('plot') },
-      ] },
-      { id: `${key}-prod`, label: 'Production', children: [
-        { id: `${key}-cast`,          label: 'Cast',          href: `/stories/${key}/cast` },
-      ] },
-      { id: `${key}-play`, label: '▶ Play', href: `/stories/${key}/play`, standalone: true },
-    ];
-  }
+  // Inside a story the horizontal subnav is replaced by the left EXPLORER tree
+  // (StoryNavigator, mounted in stories/[key]/+layout.svelte). No top subnav bar here.
+  if (active) return [];
 
   // Library (or the genesis draft) — no subnav.
   return [];

@@ -83,14 +83,14 @@ def hops(st, a: str, b: str) -> int:
 # ── Orbits: the spots a character habitually occupies (data that already exists) ────
 
 def orbit(ctx, st, char_key: str) -> list[str]:
-    """Habitual spot names for a cast character: Place scenes anchored to them, plus
+    """Habitual spot names for a cast character: location scenes anchored to them, plus
     their card's portable home scenes. Display strings ('Mara's bench — The Grove')."""
     spots: list[str] = []
-    for p in st.places:
-        for s in p.scenes:
+    for l in st.locations:
+        for s in (l.scenes or []):
             anchors = ([s.character] if s.character else []) + list(s.characters or [])
             if char_key in anchors:
-                spots.append(f"{s.name or s.id} ({p.name})" if p.name else (s.name or s.id))
+                spots.append(f"{s.name or s.id} ({l.name})" if l.name else (s.name or s.id))
     c = ctx.base_settings.characters.get(char_key)
     for h in (getattr(c, "home_scenes", []) or []):
         spots.append(h.name or h.id)
@@ -224,14 +224,13 @@ def _slug(name: str, taken: set[str]) -> str:
 
 
 def apply_geography(geo: dict, st, name_to_key: dict[str, str]) -> dict:
-    """Convert a generated {areas, travel} into story-shaped data: `locations` (tree —
-    existing locations KEPT, matched by name and re-parented), `places` (one per inhabited
-    spot, with character-anchored scenes = the orbits), and `travel` overrides. Pure."""
+    """Convert a generated {areas, travel} into story-shaped data: `locations` (a tree —
+    existing locations KEPT, matched by name and re-parented; inhabited spots gain
+    character-anchored `scenes` = the orbits), and `travel` overrides. Pure."""
     existing = {_norm(l.name): l for l in st.locations}
     locations = [l.model_dump() for l in st.locations]
     by_norm = {_norm(l["name"]): l for l in locations}
     taken = {l["id"] for l in locations}
-    places: list[dict] = []
 
     def _ensure(name: str, description: str, parent: str) -> dict:
         loc = by_norm.get(_norm(name))
@@ -267,8 +266,7 @@ def apply_geography(geo: dict, st, name_to_key: dict[str, str]) -> dict:
                     scenes.append({"id": f"{s['id']}_{ck}", "name": spot.get("name", ""),
                                    "character": ck, "backstory": inh.get("doing", "")})
             if scenes:
-                places.append({"id": f"p_{s['id']}", "name": spot.get("name", ""),
-                               "description": spot.get("description", ""), "scenes": scenes})
+                s["scenes"] = scenes       # orbits live directly on the location now
 
     travel = []
     for e in geo.get("travel") or []:
@@ -277,7 +275,7 @@ def apply_geography(geo: dict, st, name_to_key: dict[str, str]) -> dict:
             travel.append([la["id"], lb["id"], max(1, min(4, int(e.get("hops") or 1)))])
 
     _ = existing  # (kept for clarity: existing locations were merged above, never dropped)
-    return {"locations": locations, "places": places, "travel": travel}
+    return {"locations": locations, "travel": travel}
 
 
 def demo() -> None:
@@ -289,7 +287,7 @@ def demo() -> None:
             NS(id="inn", name="The Wandering Inn", parent="town"),
             NS(id="wilds", name="The Wilds", parent=""),
             NS(id="cave", name="Shield Cave", parent="wilds")]
-    st = NS(locations=locs, places=[], fields={"travel": [["inn", "cave", 3]]})
+    st = NS(locations=locs, fields={"travel": [["inn", "cave", 3]]})
     assert hops(st, "inn", "inn") == 0
     assert hops(st, "market", "inn") == 2      # sibling spots via town
     assert hops(st, "market", "town") == 1     # child → parent
@@ -308,12 +306,12 @@ def demo() -> None:
     assert v(ws, "Pisces", "Shield Cave")      # had time to travel → allowed
     assert v(ws, "Pisces", "the corner of the room")   # micro-spot → allowed
 
-    # apply_geography: existing location kept + re-parented; orbits → places; travel → ids.
+    # apply_geography: existing location kept + re-parented; orbits → location.scenes; travel → ids.
     class _L:                                           # minimal Location stand-in
         def __init__(self, **kw): self.__dict__.update(kw)
         def model_dump(self): return dict(self.__dict__)
     st2 = NS(locations=[_L(id="n1", name="The Whispering Grove", description="", parent="")],
-             places=[], fields={})
+             fields={})
     geo = {"areas": [{"name": "The Village", "description": "a fishing village", "spots": [
         {"name": "The Whispering Grove", "description": "old trees", "inhabitants":
             [{"character": "Mara", "doing": "reads on the bench"}]},
@@ -327,10 +325,12 @@ def demo() -> None:
     geo_self = {"areas": [{"name": "The Whispering Grove", "description": "", "spots": [
         {"name": "The Whispering Grove", "description": "", "inhabitants": []}]}], "travel": []}
     st3 = NS(locations=[_L(id="g1", name="The Whispering Grove", description="", parent="")],
-             places=[], fields={})
+             fields={})
     o2 = apply_geography(geo_self, st3, {})
     assert o2["locations"][0]["parent"] != "g1", o2["locations"][0]
-    assert out["places"][0]["scenes"][0]["character"] == "mara"              # orbit anchored
+    # orbit anchored: the Grove's location now carries a scene for Mara
+    grove = next(l for l in out["locations"] if l["id"] == "n1")
+    assert grove["scenes"][0]["character"] == "mara"
     assert out["travel"][0][:2] == [by["the_north_jetty".replace('_', ' ')]["id"], "n1"] or \
            out["travel"][0][2] == 2                             # ids resolved, hops clamped
     print("geography demo ok")

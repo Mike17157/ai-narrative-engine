@@ -332,7 +332,7 @@ def register(app, ctx):
             return JSONResponse({"error": "no such character"}, status_code=404)
         f = ch.fields or {}
         harness = {k: f.get(k) or "" for k in
-                   ("role", "temperament", "want", "lie", "wound", "secret", "good_memory")}
+                   ("role", "temperament", "want", "lie", "contradiction", "wound", "secret", "good_memory")}
         if not any(harness.values()):
             return JSONResponse({"error": "character has no harness (want/lie/wound…) to deepen from"},
                                 status_code=400)
@@ -343,7 +343,8 @@ def register(app, ctx):
         st = ctx.base_settings.stories.get(owner) if owner else None
         if st is not None:
             world = (st.premise or "")[:500]
-            philosophy = ((st.premise_parts or {}).get("philosophy") or "")[:500]
+            _pp = st.premise_parts or {}
+            philosophy = (_pp.get("question") or _pp.get("creeds") or _pp.get("philosophy") or "")[:500]
             conds = [c.model_dump() for c in (st.conditions or [])]
 
         # Phase 1 — think the person through (REASONING ON, plain prose).
@@ -644,7 +645,7 @@ def register(app, ctx):
             skey = ctx.create_story(name, {
                 "premise": body.get("premise", ""), "cast": cast, "arcs": arcs_validated,
                 "fields": {"source_character": keys[0]}, "locations": locations, "start": start,
-            }, character_keys=keys, type_=body.get("type", "novel"))   # one self-contained <skey>.db
+            }, character_keys=keys, type_=body.get("type", "novel"))   # one self-contained <skey>.json
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
         return {"ok": True, "key": skey}
@@ -799,18 +800,33 @@ def register(app, ctx):
             return JSONResponse({"error": "model returned nothing"}, status_code=500)
         return {"premise": premise}
 
-    # The premise's core components — what a strong premise must address. Replaces the old scripted
-    # "premise interview"; the overview checks these against the story instead (premise-coverage).
+    # The premise as a CAUSAL ENGINE, not a flat checklist — the Rewrite structure: one root
+    # pressure at the base, everything else DERIVED from it. A dying ecology forces a question
+    # (is humanity worth its cost to the world?), the question splits into competing FAITHS that
+    # each believe they're saving everyone, and the clash is TRAGIC because both are partly right.
+    # Ordered so each component follows from the one above; the drafter builds down the chain.
     _PREMISE_COMPONENTS = [
-        ("philosophy", "Overarching philosophy",
-         "the argument the story interrogates — a real question with two DEFENSIBLE sides, which "
-         "characters embody through their lies and choices (not a moral, an open contest)"),
-        ("protagonist", "Protagonist", "who the story is about — a specific person, not a type"),
-        ("lie", "The lie they live by", "the false belief / self-deception the story will test"),
-        ("inciting", "Inciting incident", "what breaks the calm and sets the story in motion"),
-        ("opposition", "Opposition", "who or what pushes back against the protagonist"),
-        ("stakes", "Stakes", "what is at risk — what is lost if they fail"),
-        ("texture", "Tone & texture", "the mood, genre and sensory feel of the world"),
+        ("root", "The root pressure",
+         "the ONE standing force the whole story grows from — a world-level condition, not an event "
+         "(an ecology at its limit, a faith in decline, a power running out). Everything below derives "
+         "from it. Rewrite's is a planet that can no longer afford humanity; Embergloom's is fading magic."),
+        ("question", "The question it forces",
+         "the unanswerable moral question the root pressure puts to everyone, with two GENUINELY "
+         "defensible answers — a real contest, not a theme-word (is humanity worth its cost to the "
+         "world? is a father's life worth a kingdom's?). Characters embody the sides through their choices."),
+        ("creeds", "The competing creeds",
+         "the organized answers — the factions / faiths / orders that each embody one side of the "
+         "question and believe they are SAVING everyone. This is where religion and ideology enter as "
+         "STRUCTURE, not decoration. Each is internally righteous; there are no villains, only sides."),
+        ("tragedy", "The tragic bind",
+         "why the creeds cannot both win and why each is sympathetic — the reason the conflict destroys "
+         "good people instead of resolving cleanly. Both are partly right; any victory is also a loss."),
+        ("protagonist", "The protagonist in the crossfire",
+         "the specific person caught between the creeds (not a type), and the LIE they live by that the "
+         "conflict will test — where they start, and what belief the story will break in them."),
+        ("stakes", "Stakes",
+         "what is concretely lost if it goes wrong — at the scale of the WORLD and of this one person."),
+        ("texture", "Tone & texture", "the mood, genre and sensory feel through which the system is lived"),
     ]
 
     @app.post("/api/stories/{key}/premise-parts/draft")
@@ -835,18 +851,27 @@ def register(app, ctx):
         cast = ", ".join(getattr(ctx.base_settings.characters.get(m.get("character")), "name", m.get("character"))
                          for m in (sd.get("cast") or []) if m.get("character")) or "(none yet)"
         written = "\n".join(f"- {cid}: {parts[cid]}" for cid, _l, _d in _PREMISE_COMPONENTS if cid in parts)
-        ctx_text = "\n".join([
-            f"Premise: {sd.get('premise') or '(empty)'}",
+        # WORLD-FIRST: premise & theme is DISTILLED from the defined world, not struck before it. The
+        # persisted world is the foundation — root ← its pressure/ache, creeds ← its forces, the rest
+        # earned from the whole world + cast. A thin/empty world means there's little to distil from.
+        from .genesis import world_full_brief
+        world_block = world_full_brief(sd.get("world"))
+        ctx_text = "\n".join(filter(None, [
+            "THE DEFINED WORLD (the foundation — distil every component FROM it):\n" + world_block
+            if world_block else "THE WORLD IS NOT YET DEFINED — say so; premise & theme should be built "
+                                "AFTER the world, not before it.",
+            f"Premise (a working synopsis, if any): {sd.get('premise') or '(empty)'}",
             f"Logline: {(sd.get('storyboard') or {}).get('logline') or ''}",
             f"Tone: {sd.get('tone') or ''}",
             f"Themes: {', '.join(sd.get('themes') or [])}",
             f"Cast: {cast}",
             f"Components already written:\n{written}" if written else "",
-        ])
+        ]))
         comp_lines = "\n".join(f"- {cid} ({label}): {desc}" for cid, label, desc in want)
-        # v4pro with REASONING for construction quality (fallback to non-thinking below if the
-        # reasoning channel breaks structured output).
-        provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "high"})
+        # NON-THINKING writer (the codebase paradigm): the causal structure lives in the architect
+        # system prompt, not in visible CoT. v4pro at high reasoning BLEEDS its chain-of-thought into
+        # the text field ("I notice the request asks…") — the scaffold does the thinking, not the model.
+        provider = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
         if provider is None or not hasattr(provider, "generate_text"):
             return JSONResponse({"error": "no text model available"}, status_code=400)
         schema = {"type": "object", "additionalProperties": False, "required": ["parts"],
@@ -854,9 +879,21 @@ def register(app, ctx):
                       "type": "object", "additionalProperties": False, "required": ["id", "text"],
                       "properties": {"id": {"type": "string", "enum": [c[0] for c in want]},
                                      "text": {"type": "string", "description": "1-2 concrete sentences"}}}}}}
-        system = ("You draft the missing COMPONENTS of a story premise. Write each as 1-2 concrete, "
-                  "specific sentences grounded in the material given — name names, pick particulars, "
-                  "no vague archetypes. Stay consistent with the components already written.")
+        system = ("You are a story's THEMATIC ARCHITECT. Premise & theme is DISTILLED FROM THE DEFINED "
+                  "WORLD above — never invented before it, never striking at the tragedy before the world "
+                  "earns it. Read the whole world (its pressure/ache, its forces, its traditions, people, "
+                  "and lived fragments) and DERIVE the causal engine from it: the `root` IS the world's "
+                  "pressure/ache in one clean line; the `creeds` ARE the world's forces (use their names + "
+                  "stances); the `question` is what that pressure asks of everyone; the `tragedy` is why "
+                  "those forces cannot both win; protagonist/stakes/texture follow from the world + cast. "
+                  "Do not add factions the world doesn't have. Draft each requested component as 1-2 "
+                  "concrete sentences that FOLLOW FROM the world and the components already written — name "
+                  "the world's names, pick its particulars, no vague archetypes. The creeds must each be "
+                  "sympathetic and internally righteous (no villains, only sides); the tragedy must come "
+                  "from both sides being partly right. NAMES: "
+                  "every faction, creed, religion, order or organization is ONE coined word — never two "
+                  "words, never 'The <Adjective> <Noun>' (Crownsworn, Unbound, Emberwake — NOT 'Harvest "
+                  "Binding', NOT 'Severance Witnesses'). Stay consistent with what's written.")
         prompt = f"STORY SO FAR:\n{ctx_text}\n\nDRAFT THESE COMPONENTS:\n{comp_lines}"
         try:
             out = (provider.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
@@ -1244,7 +1281,7 @@ def register(app, ctx):
         rewrite edge ids → character keys, persist the Story. Body: { candidate, harnesses,
         relationships, name?, type? } → { ok, key }."""
         from . import story_db as _SDB
-        from .genesis import name_cast, persona_from_harness
+        from .genesis import name_cast, persona_from_harness, compose_world
 
         body = body or {}
         cand = body.get("candidate") or {}
@@ -1260,8 +1297,8 @@ def register(app, ctx):
         if prot not in anchors:
             anchors = [prot] + anchors
 
-        # New stories are born as ONE self-contained <skey>.db with characters EMBEDDED. Compute the
-        # key FIRST + create the DB so write_npc can embed each anchor into it. See story_db.py.
+        # New stories are born as ONE self-contained <skey>.json with characters EMBEDDED. Compute
+        # the key FIRST + create the file so write_npc can embed each anchor into it. See story_db.py.
         ctx.story_dir().mkdir(parents=True, exist_ok=True)
         name = (body.get("name") or cand.get("title") or "Story").strip()
         existing_names = {st.name for st in ctx.base_settings.stories.values()}
@@ -1270,16 +1307,22 @@ def register(app, ctx):
             name, j = f"{base_name} ({j})", j + 1
         skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
         skey, i = skey_base, 2
-        while (ctx.story_dir() / f"{skey}.yaml").is_file() or (ctx.story_dir() / f"{skey}.db").is_file():
+        while (ctx.story_dir() / f"{skey}.yaml").is_file() or (ctx.story_dir() / f"{skey}.json").is_file():
             skey, i = f"{skey_base}_{i}", i + 1
         stype = body.get("type") if body.get("type") in ("novel", "vn") else "novel"
-        db_path = ctx.story_dir() / f"{skey}.db"
-        _SDB.save_story(db_path, {
+        db_path = ctx.story_dir() / f"{skey}.json"
+        # The DEFINED WORLD survives commit now (it used to be discarded) — the permanent foundation
+        # premise & theme distils from. Composed from the genesis draft: frame + substrate + particulars.
+        world = compose_world(body.get("world"), body.get("substrate"), body.get("particulars"))
+        story_dict = {
             "name": name, "type": stype, "premise": cand.get("premise", ""),
             "tone": cand.get("tone", ""), "themes": cand.get("themes") or [],
-            "storyboard": {"logline": cand.get("logline", "")},
+            "storyboard": {"logline": cand.get("logline", "")}, "world": world,
             "fields": {"source": "genesis", "dramatic_question": cand.get("dramatic_question", "")},
-        }, {})
+        }
+        from ..config.schema import Story
+        Story(**story_dict)   # validate before writing — closes the genesis bypass
+        _SDB.save_story(db_path, story_dict, {})
 
         # Name the anchors (commit is the first time harnesses get names) + embed them into the DB.
         nprov, _systems = ctx.builder_ctx(body, "characters")
@@ -1293,8 +1336,9 @@ def register(app, ctx):
                 "name": nm, "persona": persona_from_harness(h),
                 "appearance": (names.get(hid) or {}).get("appearance", ""), "role": h.get("role", ""),
                 "want": h.get("want", ""), "lie": h.get("lie", ""),
+                "contradiction": h.get("contradiction", ""),
                 "wound": h.get("wound", ""), "secret": h.get("secret", ""),
-            }, story_key=skey)                            # embeds into <skey>.db
+            }, story_key=skey)                            # embeds into <skey>.json
 
         cast = [{"character": id_to_key[hid], "primary": (hid == prot)} for hid in anchors]
         out_rels = []
@@ -1337,6 +1381,7 @@ def register(app, ctx):
                 "name": nm, "persona": persona_from_harness(h),
                 "appearance": (names.get(hid) or {}).get("appearance", ""), "role": h.get("role", ""),
                 "want": h.get("want", ""), "lie": h.get("lie", ""),
+                "contradiction": h.get("contradiction", ""),
                 "wound": h.get("wound", ""), "secret": h.get("secret", ""),
             }, story_key=key)
 
@@ -1825,12 +1870,87 @@ def register(app, ctx):
         from . import agent_config as _AC
         return {"modes": _AC.modes_list(ctx.root)}
 
+    @app.post("/api/stories/agent/dump-prompt")
+    def dump_agent_prompt(body: dict):
+        """DEBUG — render the system prompt the agent WOULD assemble for this request, WITHOUT calling
+        the model. Same body shape as /graph-ops (graph, messages, mode, target, propose, etc.). Returns
+        {system, active_modes, label} so you can inspect exactly what the model would see. No persistence,
+        no model call, no side effects — pure inspection. Use this to verify prompt edits in
+        configs/story_agent.json (edit → reload → dump)."""
+        from . import agent_config as _AC
+        from . import agent as _AG
+        from .pipeline import grounding as _G
+        body = body or {}
+        root = ctx.root
+        cfg = _AC.load_config(root)
+        graph = body.get("graph") if isinstance(body.get("graph"), dict) else {}
+        messages = body.get("messages") or []
+        req_text = next((str(m.get("content", "")) for m in reversed(messages)
+                         if isinstance(m, dict) and m.get("role") == "user"), "")
+        agents = cfg.get("agents") or {}
+        from .agent_modes import translate_key as _translate_key
+        explicit = _translate_key((body.get("mode") or "").strip())
+        active_ids = ([explicit] if (explicit and explicit in agents)
+                      else _AC.match_modes(root, req_text))
+        adopted = "\n\n".join(agents[a]["persona"] for a in active_ids
+                              if agents.get(a, {}).get("persona"))
+        adopted_examples = "\n\n".join(agents[a]["example"] for a in active_ids
+                                       if agents.get(a, {}).get("example"))
+        primary = agents.get(active_ids[0], {}) if active_ids else {}
+        story_ctx = _AG._story_context(ctx, body.get("story"),
+                                       cfg.get("story_context_fields") or [])
+        craft_block = _G.craft_notes(root, req_text or "",
+                                     k=(cfg.get("craft") or {}).get("k", 5),
+                                     section=(primary.get("craft_section") or ""))
+        inject = primary.get("inject") or []
+        ground = []
+        if "concreteness" in inject:
+            ground.append(_G.CONCRETENESS)
+        if "psyche" in inject:
+            ground.append(_G.psyche_notes(root, req_text, k=(cfg.get("psyche") or {}).get("k", 4)))
+        char_ground = "\n\n".join(p for p in ground if p)
+        target = (body.get("target") or "story").strip()
+        draft = (target == "draft") or (body.get("commit", True) is False)
+        label = (body.get("artifact_label") or "DOCUMENT").strip()
+        system = _AG.assemble_system_prompt(
+            cfg=cfg, graph=graph, adopted=adopted, story_ctx=story_ctx,
+            craft_block=craft_block, char_ground=char_ground, label=label,
+            draft=draft, propose=bool(body.get("propose")),
+            adopted_examples=adopted_examples)
+        return {"system": system, "active_modes": active_ids, "label": label,
+                "draft": draft, "propose": bool(body.get("propose")),
+                "length": len(system)}
+
     @app.post("/api/stories/graph-ops")
     def story_graph_ops(body: dict):
-        """Data-driven story chat agent. Function-book TOOLS + a JSON-config persona/grounding
-        (loom/stories/agent.py + configs/story_agent.json). Thin wrapper — the brain lives in agent.py."""
+        """The story chat agent — single-shot tool-calling for general editing. The caller asks in
+        natural language; the agent resolves the right tools + persona and applies them. For
+        structured story work (spine, beats, arc design) use the explicit /task endpoint instead —
+        it's direct dispatch (no keyword inference, canon-grounded, one call)."""
         from . import agent as _AG
         out = _AG.run_turn(ctx, body or {})
+        st = out.pop("_status", None)
+        return JSONResponse(out, status_code=st) if st else out
+
+    @app.post("/api/stories/{key}/task")
+    def story_task(key: str, body: dict):
+        """EXPLICIT task dispatch — the caller names the task and the system runs exactly that,
+        grounded in canon, one model call. No keyword inference, no agent-switching, no drift.
+        Body: {task: 'set_spine'|'add_beat'|..., focus?: 'writer steer', brief?: 'beat context',
+               model?: 'model override'}."""
+        from . import story_tasks as _ST
+        body = body or {}
+        task = (body.get("task") or "").strip()
+        if not task:
+            return JSONResponse({"ok": False, "error": "missing 'task' parameter"}, status_code=400)
+        provider, _ = ctx.builder_ctx(body, body.get("script") or "workshop")
+        if provider is None or not hasattr(provider, "generate_text"):
+            return JSONResponse({"ok": False, "error": "no chat connection — connect a chat model first"}, status_code=400)
+        import asyncio as _aio
+        kwargs = {}
+        if body.get("focus"): kwargs["focus"] = body["focus"]
+        if body.get("brief"): kwargs["brief"] = body["brief"]
+        out = _aio.run(_ST.run_task(ctx, key, task, provider, **kwargs))
         st = out.pop("_status", None)
         return JSONResponse(out, status_code=st) if st else out
 
@@ -1875,10 +1995,10 @@ def register(app, ctx):
                     if b["id"] not in used[str(fn)]:
                         used[str(fn)].append(b["id"])
 
-        # The chat's REAL menu: which story_agent.json mode(s) offer each tool (its `functions` list).
+        # The chat's REAL menu: which story_agent.json agent(s) offer each tool (its `tools` list).
         # This is the source of truth now — grouping by it shows what the agent can actually call.
-        modes = (AC.load_config(ctx.root).get("modes") or {})
-        mode_fns = {mid: set(m.get("functions") or []) for mid, m in modes.items()}
+        modes = (AC.load_config(ctx.root).get("agents") or {})
+        mode_fns = {mid: set(m.get("tools") or []) for mid, m in modes.items()}
         mode_label = {mid: (m.get("label") or mid) for mid, m in modes.items()}
 
         def _agents(fn: str) -> list[dict]:
@@ -2884,13 +3004,13 @@ def register(app, ctx):
         return StreamingResponse(events(), media_type="text/event-stream")
 
     # (The server-side wizard DRAFT store was removed — the genesis cast-queue draft is client-held,
-    # and stories persist as one <key>.db each. See loom/stories/story_db.py + [[per-story-database]].)
+    # and stories persist as one <key>.json each. See loom/stories/story_db.py.)
 
     @app.get("/api/stories")
     def list_stories() -> list:
         out = []
         for k, st in ctx.base_settings.stories.items():
-            f = ctx.story_dir() / f"{k}.db"
+            f = ctx.story_dir() / f"{k}.json"
             mtime = f.stat().st_mtime if f.is_file() else 0.0
             out.append({"key": k, "name": st.name, "premise": st.premise, "tone": st.tone,
                         "themes": st.themes, "locations": len(st.locations), "start": st.start,
@@ -2916,8 +3036,8 @@ def register(app, ctx):
             return JSONResponse({"error": "no such story"}, status_code=404)
         fields = {f: body[f] for f in (
             "name", "type", "premise", "tone", "themes", "art_style", "premise_parts", "conditions",
-            "storyboard", "cast", "lorebook", "locations", "places", "start", "background", "fields",
-            "arcs", "chapters", "scenes", "features", "start_scene",
+            "storyboard", "cast", "lorebook", "locations", "start", "background", "fields",
+            "arcs", "chapters", "scenes", "features", "start_scene", "world",
             "relationships", "connections", "default_personas", "recent_window")
             if f in (body or {})}
         try:
@@ -2948,7 +3068,7 @@ def register(app, ctx):
             f = (getattr(ch, "fields", None) or {}) if ch else {}
             nm = getattr(ch, "name", ck) or ck
             bits = [f"{ck} ({nm})"]
-            for fk in ("role", "want", "lie", "wound", "secret", "temperament"):
+            for fk in ("role", "want", "lie", "contradiction", "wound", "secret", "temperament"):
                 if (f.get(fk) or "").strip():
                     bits.append(f"  {fk}: {str(f[fk]).strip()[:220]}")
             if homes.get(ck):
@@ -3215,37 +3335,16 @@ def register(app, ctx):
         card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
         return next((l for l in card["layers"] if l["id"] == layer), None)
 
-    @app.post("/api/stories/{key}/card/{layer}/ops")
-    def story_card_ops(key: str, layer: str, body: dict):
-        """TARGETED partial edits to ONE layer — apply a list of ops that each touch a single part
-        (set a field, merge one dict key, upsert/remove one list item by id) WITHOUT resending the
-        whole section. Ops naming non-whitelisted fields are dropped. Body {ops:[...]}. Returns
-        {ok, applied, layer}. This is the apply half of the section agent's suggest→approve loop."""
-        from .card import apply_layer_ops, LAYER_FIELDS
-        if ctx.base_settings.stories.get(key) is None:
-            return JSONResponse({"error": "no such story"}, status_code=404)
-        if layer not in LAYER_FIELDS:
-            return JSONResponse({"error": f"layer '{layer}' has no editable fields"}, status_code=400)
-        try:
-            data = ctx._read_story_data(key)
-        except FileNotFoundError:
-            return JSONResponse({"error": "story not committed"}, status_code=400)
-        new_data, applied, stale = apply_layer_ops(data, layer, (body or {}).get("ops") or [])
-        if not applied:
-            # a drifted anchor (someone edited underneath) → tell the caller to re-read, not clobber
-            msg = "the section changed since these edits were proposed — re-open it" if stale else "no applicable ops"
-            return JSONResponse({"error": msg, "stale": stale}, status_code=409 if stale else 400)
-        # persist only the fields the ops touched
-        touched = {op["field"] for op in applied if op.get("field")}
-        try:
-            ctx.update_story_fields(key, {f: new_data.get(f) for f in touched})
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
-        return {"ok": True, "applied": applied, "stale": stale, "layer": _rebuilt_layer(key, layer)}
-
     _SECTION_BRIEF = {
-        "overview": "the PREMISE & THEME — premise, tone, themes, art style, and the premise components "
-                    "(philosophy/protagonist/lie/inciting/opposition/stakes/texture). The controlling idea.",
+        "overview": "the PREMISE & THEME as a CAUSAL SYSTEM — premise, tone, themes, art style, and the "
+                    "premise components, which chain: root (the one standing pressure everything grows from) "
+                    "→ question (the moral contest it forces, two defensible sides) → creeds (the factions/"
+                    "faiths that each answer it and believe they're saving everyone) → tragedy (why their "
+                    "clash destroys good people — both partly right) → protagonist (caught between, plus the "
+                    "lie the conflict tests) → stakes → texture. To edit a component use merge on "
+                    "premise_parts with `key` = the component id (root/question/creeds/tragedy/protagonist/"
+                    "stakes/texture). A strong premise is an ENGINE: help the writer find the root and derive "
+                    "the rest; never a good-vs-evil premise — the sides must both be righteous.",
         "map": "the WORLD — locations (each an item with an id) and the recurring setting conditions/stages.",
         "relationships": "the CAST & fixed BONDS — relationship items (each with source/target/nature and the "
                          "hidden potential/trajectory). Warmth drifts in play; you set the fixed structure.",
@@ -3254,12 +3353,23 @@ def register(app, ctx):
 
     @app.post("/api/stories/{key}/card/{layer}/chat")
     def story_card_chat(key: str, layer: str, body: dict):
-        """The SECTION AGENT — converse about ONE section and propose TARGETED ops (never a whole-doc
-        rewrite). Given the section's current JSON + the writer's message, returns {reply, ops} where
-        each op edits one part (set/merge/upsert/remove). The client shows ops as approve cards and
-        applies the kept ones via /card/{layer}/ops. Body {messages:[{role,text}]}."""
+        """The SECTION COLLABORATOR — a thinking partner AND editor for ONE section, using
+        HASH-ANCHORED (hashline) ops in the OhMyPi style.
+
+        The model is shown an ANCHORED view of the editable nodes (path + #hash + preview).
+        To change something it returns `ops`: each points at a node by slash-path AND cites
+        the #hash it saw there. We re-read the live story, recompute each node's hash, and
+        REJECT the op if the node drifted since the model read it — a stale read can no
+        longer silently clobber a field edited elsewhere. Stale ops come back in
+        `rejected` for the client to surface; the others apply through the existing
+        whole-Story-validated write path.
+
+        Returns {reply, applied:[{path,op}], rejected:[{path,reason, current_hash?}],
+                 before:{top_field:old}, layer?}. `before` holds the pre-edit top-level
+        fields for the client's Undo. Body {messages:[{role,text}]}."""
         from ..server.services import config_files as _cf
-        from .card import LAYER_FIELDS, build_card
+        from .card import LAYER_FIELDS
+        from .anchors import anchored_view, apply_ops, any_stale_rejections, merge_results
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -3268,81 +3378,148 @@ def register(app, ctx):
         messages = [m for m in ((body or {}).get("messages") or []) if isinstance(m, dict) and m.get("text")]
         if not messages:
             return JSONResponse({"error": "say something"}, status_code=400)
-        from ..server.services.prompts import style_anchor
-        manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
-        content = next((l["content"] for l in build_card(st.model_dump(), manifests,
-                        global_style=style_anchor(ctx.root))["layers"] if l["id"] == layer), {})
+        # EFFICIENT ROUTING: hand the editor ONLY this layer's raw editable fields — the actual
+        # arcs/bonds/conditions/premise_parts with their REAL ids/values, each tagged with a
+        # content-hash anchor. The model edits by pointing at these anchors, so it never has to
+        # re-send a whole list to change one item. Nothing else from the story is loaded.
         allowed = list(LAYER_FIELDS[layer])
-        op_item = {"type": "object", "additionalProperties": False, "required": ["op", "field", "summary"],
-                   "properties": {
-                       "op": {"type": "string", "enum": ["set", "merge", "upsert", "remove"]},
-                       "field": {"type": "string", "enum": allowed},
-                       "key": {"type": "string", "description": "for merge: the dict key to set (e.g. a premise-component id)"},
-                       "id": {"type": "string", "description": "for upsert/remove: the item's id"},
-                       "value": {"type": "string", "description": "for set/merge: the new text value"},
-                       "json": {"type": "string", "description": "for upsert: the item's fields as a JSON "
-                                "object string, e.g. {\"source\":\"eli\",\"target\":\"mara\",\"nature\":\"rival\"}"},
-                       "summary": {"type": "string", "description": "one short line describing this edit"}}}
+        try:
+            raw = ctx._read_story_data(key)
+        except FileNotFoundError:
+            raw = st.model_dump()
+        # The anchored view is the model's map of what it may touch. Built from the LIVE
+        # story so the anchors match what `apply_ops` will verify against right after.
+        view = anchored_view(raw, allowed)
+        # Structured `ops` (a real array — not a string-encoded patch). Each op names its
+        # target by slash-path and cites the #hash it saw; merge/set/remove cover every
+        # edit at field, item, and sub-field granularity under one vocabulary.
         schema = {"type": "object", "additionalProperties": False, "required": ["reply", "ops"],
-                  "properties": {"reply": {"type": "string", "description": "your conversational turn "
-                                           "to the writer — brief, one idea at a time"},
-                                 "ops": {"type": "array", "items": op_item}}}
+                  "properties": {
+                      "reply": {"type": "string", "description": "your conversational turn to the writer — "
+                                "an ANSWER if they asked a question, a brief note if you made a change"},
+                      "ops": {"type": "array", "description": "SURGICAL edits — one entry per node you "
+                              "change. EMPTY if you're only discussing. Each entry: "
+                              "{path, anchor, op, value}.",
+                              "items": {"type": "object", "additionalProperties": False,
+                                        "required": ["path", "op"],
+                                        "properties": {
+                                            "path": {"type": "string", "description": "slash-path of the "
+                                                      "node, exactly as shown in the ANCHORED SECTION"},
+                                            "anchor": {"type": "string", "description": "the #hash shown "
+                                                       "beside that path (copy it). OMIT only when CREATING "
+                                                       "a brand-new node that isn't in the view yet."},
+                                            "op": {"type": "string", "enum": ["set", "merge", "remove"],
+                                                   "description": "set=replace the node's value; "
+                                                   "merge=deep-merge an object into a dict node; "
+                                                   "remove=delete the node"},
+                                            "value": {"description": "the new value for set/merge "
+                                                       "(string, object, list…). OMIT for remove."}}}}}}
         system = (
-            "You are the writer's editor for ONE section of their story bible. Discuss it and propose "
-            "TARGETED ops that edit only the affected part — never rewrite the whole section. Ops: set "
-            "(a whole field), merge (one key of a dict like premise_parts — `key` is the component id, "
-            "`value` the text), upsert (add/update one list item — `id` + `json` of the fields to set; "
-            "existing keys are kept), remove (one list item by id). WHEN THE WRITER ASKS FOR A CHANGE "
-            "OR APPROVES ONE, you MUST include the op(s) — do not merely describe them in `reply`. If "
-            "you're only clarifying, return an empty ops list. Only the listed fields are editable. "
-            f"Keep prose concrete and in the story's voice.\nSECTION: {_SECTION_BRIEF.get(layer, layer)}")
+            "You are the writer's COLLABORATOR on ONE section of their story bible — both a thinking "
+            "partner and an editor. Choose your mode from the writer's LATEST message:\n"
+            "• DISCUSSION — they ask a question, want your read, want to brainstorm, or ask you to weigh "
+            "in: ANSWER substantively and specifically in `reply`, like a sharp co-writer who knows this "
+            "story. Set `ops` to []. Do NOT edit just because you're talking. Questions ('what's the "
+            "tension?', 'is this premise strong?', 'who is X?') get an answer, never an edit.\n"
+            "• CHANGE — they explicitly ask you to change / add / remove / rewrite something: emit `ops`, "
+            "one per node you change. Each op POINTS at its target by the slash-path from the ANCHORED "
+            "SECTION and cites the #hash shown beside it. Three ops cover everything:\n"
+            "   - set: replace the node's value (a string, a list, a whole object…).\n"
+            "   - merge: deep-merge a JSON OBJECT into a dict node (use this to update ONE key of "
+            "premise_parts without disturbing the others — value:{root:'…'}).\n"
+            "   - remove: delete the node (a list item by id, a dict key).\n"
+            "ANCHOR RULE: copy the #hash exactly as shown. OMIT `anchor` ONLY when creating a node that "
+            "isn't in the view (a brand-new premise_parts key, a new condition). If your anchor is stale "
+            "the edit is rejected — the writer will be told which paths changed, and can ask you again.\n"
+            "You may edit at ANY granularity: a top-level field (premise), one dict key "
+            "(premise_parts/root), one list item by id (arcs/arc-2), or one sub-field of an item "
+            "(arcs/arc-2/premise). Prefer the SMALLEST change — set the one sub-field, not the whole item.\n"
+            "Only these top-level fields are editable: " + ", ".join(allowed) + ". Keep prose concrete and "
+            "in the story's voice. NAMES: every faction, creed, religion, order or organization is ONE "
+            "coined word — never two words, never 'The <Adjective> <Noun>' (Crownsworn, Unbound, "
+            "Emberwake — NOT 'Harvest Binding').\n"
+            f"SECTION: {_SECTION_BRIEF.get(layer, layer)}")
         convo = "\n".join(f"{'Writer' if m.get('role') == 'user' else 'You'}: {m['text']}" for m in messages)
-        import json as _json
-        prompt = (f"CURRENT SECTION JSON:\n{_json.dumps(content, ensure_ascii=False)[:6000]}\n\n"
-                  f"EDITABLE FIELDS: {', '.join(allowed)}\n\nCONVERSATION:\n{convo}\n\n"
-                  "Reply, and include ops for every change the writer asked for or approved.")
         _roles = _cf.load_text_roles(ctx.root)
+        _PROVIDER_ROLE = _roles.get("director") or _roles.get("narrator")
 
-        def _run(effort):
-            p = ctx.text_provider_for(_roles.get("director") or _roles.get("narrator"),
-                                      {"reasoning_effort": effort})
-            if p is None:
-                return None
-            try:
-                return (p.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
-            except Exception:  # noqa: BLE001 — reasoning channel can break structured output
-                return {}
-        out = _run("medium")
+        def _run(view, note=""):
+            """Run the editor with a given anchored view. Returns (out, prompt_used) so a
+            retry can pass a freshness note. `note` appends an instruction to the prompt."""
+            prompt = (f"ANCHORED SECTION (path  #hash  preview):\n{view}\n\n"
+                      f"EDITABLE FIELDS: {', '.join(allowed)}\n\nCONVERSATION:\n{convo}\n\n"
+                      f"{note}Answer or edit per the writer's LATEST message.")
+            for effort in ("high", "none"):       # reasoning ON, then the structured flake fallback
+                p = ctx.text_provider_for(_PROVIDER_ROLE, {"reasoning_effort": effort})
+                if p is None:
+                    return None
+                try:
+                    out = (p.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
+                except Exception:  # noqa: BLE001 — reasoning channel can break structured output
+                    out = {}
+                if out.get("reply") or out.get("ops"):
+                    return out
+            return {}
+
+        out = _run(view)
         if out is None:
             return JSONResponse({"error": "no editor model configured"}, status_code=400)
-        if not out.get("reply") and not out.get("ops"):
-            out = _run("none") or out          # non-thinking fallback for the empty-structured flake
-
-        from .card import op_base_hash
+        reply = (out.get("reply") or "").strip()
+        ops = out.get("ops") if isinstance(out.get("ops"), list) else []
+        # Re-read the LIVE story right before applying, so anchors are checked against the
+        # freshest state (not the snapshot the model read). apply_ops mutates `live` in place
+        # and returns {applied, rejected, before} — `before` holds the OLD top-level field
+        # values for the client's Undo; `live` now holds the NEW merged values to persist.
         try:
-            raw = ctx._read_story_data(key)      # anchor against the RAW story fields apply edits
+            live = ctx._read_story_data(key)
         except FileNotFoundError:
-            raw = {}
-        ops = []
-        for o in (out.get("ops") or []):
-            if not isinstance(o, dict) or o.get("field") not in allowed:
-                continue
-            if o.get("op") == "upsert" and o.get("json") and "item" not in o:
-                try:
-                    o["item"] = _json.loads(o["json"])   # JSON-string → dict (robust structured output)
-                except Exception:  # noqa: BLE001
-                    continue
-            o.pop("json", None)
-            o["base"] = op_base_hash(raw, o)     # hash-anchor the edit to what it expects to change
-            ops.append(o)
-        return {"reply": (out.get("reply") or "").strip(), "ops": ops}
+            live = raw
+        result = apply_ops(live, ops)
+
+        # ── Stale-anchor recovery (one retry) ─────────────────────────────────
+        # If any op failed PURELY due to staleness (the node drifted since the model read it
+        # — a concurrent edit), re-show the model the FRESH anchored view and ask it to
+        # re-emit just those ops with the updated anchors. Structural failures (a path that's
+        # gone, a merge on a non-object) are NOT retried — they'd loop. We persist once
+        # (after the retry) so the writer sees a single coherent apply. `live` already holds
+        # any first-pass applied mutations in memory (nothing persisted yet) — the retry
+        # applies ON TOP of that state, so nothing is lost.
+        if any_stale_rejections(result["rejected"]):
+            stale_paths = [r["path"] for r in result["rejected"] if any_stale_rejections([r])]
+            fresh_view = anchored_view(live, allowed)
+            note = (f"NOTE: your prior edit(s) to {', '.join(stale_paths)} were STALE — those "
+                    "nodes changed since you read them. The fresh anchored view above has the "
+                    "CURRENT #hashes. Re-emit ONLY the op(s) for those path(s) with the updated "
+                    "anchors, or reply that you can't.\n\n")
+            r2 = _run(fresh_view, note=note)
+            if r2:
+                ops2 = r2.get("ops") if isinstance(r2.get("ops"), list) else []
+                if ops2:
+                    retry_result = apply_ops(live, ops2)   # on the already-mutated state
+                    result = merge_results(result, retry_result)
+                    if r2.get("reply") and not reply:
+                        reply = r2["reply"].strip()
+
+        applied, rejected, before = result["applied"], result["rejected"], result["before"]
+        if not applied:
+            # Nothing landed — reply only. Surface rejections so the client can show why.
+            return {"reply": reply, "applied": [], "rejected": rejected, "before": {}}
+        # Persist the NEW values (live was mutated by apply_ops) through the validated write
+        # path — `before` (the old values) goes back to the client for Undo.
+        try:
+            ctx.update_story_fields(key, {f: live.get(f) for f in before})
+        except Exception as exc:  # noqa: BLE001 — validation rejected the merged story → don't corrupt
+            return {"reply": reply, "applied": [], "rejected": rejected, "before": {},
+                    "error": f"couldn't apply: {exc}"}
+        return {"reply": reply, "applied": applied, "rejected": rejected,
+                "before": before, "layer": _rebuilt_layer(key, layer)}
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
         from .story_db import delete_db
         safe = re.sub(r"[^\w\-]+", "", key)
         yaml_p = ctx.story_dir() / f"{safe}.yaml"
-        db_p = ctx.story_dir() / f"{safe}.db"        # a DB-backed story (embeds its characters)
+        db_p = ctx.story_dir() / f"{safe}.json"      # a JSON-backed story (embeds its characters)
         if not yaml_p.is_file() and not db_p.is_file():
             return JSONResponse({"error": "no such story"}, status_code=404)
         if yaml_p.is_file():
@@ -3979,8 +4156,7 @@ def register(app, ctx):
         applied = False
         if body.get("apply", True):
             fields = {**(st.fields or {}), "travel": out["travel"]}
-            ctx.update_story_fields(key, {"locations": out["locations"],
-                                          "places": out["places"], "fields": fields})
+            ctx.update_story_fields(key, {"locations": out["locations"], "fields": fields})
             applied = True
         return {"geography": geo, "applied": applied, **out}
 
@@ -4249,13 +4425,13 @@ def register(app, ctx):
 
     @app.post("/api/stories/{key}/scene/{sid}/background/candidate")
     async def scene_background_candidate(key: str, sid: str, body: dict):
-        """Render ONE background candidate for a Place's Scene (fresh seed each call).
+        """Render ONE background candidate for a location's Scene (fresh seed each call).
         Returns a data URI — not saved. Mirrors the location background flow but the
         prompt comes from the scene's own background_prompt (the spot's empty plate)."""
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        scene = next((s for p in st.places for s in p.scenes if s.id == sid), None)
+        scene = next((s for l in st.locations for s in (l.scenes or []) if s.id == sid), None)
         if scene is None:
             return JSONResponse({"error": "no such scene"}, status_code=404)
         prompt = (scene.background_prompt or scene.name or "").strip()
@@ -4278,9 +4454,9 @@ def register(app, ctx):
     @app.post("/api/stories/{key}/scene/{sid}/background/select")
     def select_scene_background(key: str, sid: str, body: dict):
         """Save a chosen candidate (base64 data URI) as the scene's background, writing
-        it back into the right scene inside the story's places."""
+        it back into the right scene inside the story's locations."""
         st = ctx.base_settings.stories.get(key)
-        if st is None or not any(s.id == sid for p in st.places for s in p.scenes):
+        if st is None or not any(s.id == sid for l in st.locations for s in (l.scenes or [])):
             return JSONResponse({"error": "no such story/scene"}, status_code=404)
         uri = (body or {}).get("data", "")
         b64 = uri.split(",", 1)[1] if "," in uri else uri
@@ -4293,8 +4469,8 @@ def register(app, ctx):
         (d / fname).write_bytes(png)
         url = f"/api/stories/{key}/bg/{fname}"
         data = ctx._read_story_data(key)
-        for p in data.get("places", []):
-            for s in p.get("scenes", []):
+        for l in data.get("locations", []):
+            for s in (l.get("scenes") or []):
                 if s.get("id") == sid:
                     s["background"] = url
         ctx._write_story_data(key, data)

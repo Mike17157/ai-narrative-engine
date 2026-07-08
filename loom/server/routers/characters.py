@@ -1298,7 +1298,7 @@ def register(app, ctx):
             kept = [m for m in st.cast if m.character != key]
             if len(kept) != len(st.cast):
                 ctx.update_story_fields(skey, {"cast": [m.model_dump() for m in kept]})
-            db = ctx._story_db(skey)
+            db = ctx._story_file(skey)
             if db is not None and key in _SDB.character_keys(db):
                 _SDB.delete_character(db, key)
         # global library YAML (if any) + the on-disk binaries

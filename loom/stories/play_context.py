@@ -68,12 +68,12 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         home = " [HOME slot]" if s.role == "persona_home" else ""
         return f"    · {s.name or s.id} [{who}]{home}{tail}"
 
-    def _place_block(p) -> str:
-        lines = [f"- {p.name}" + (f": {p.description}" if p.description else "")]
-        lines += [_scene_line(s) for s in p.scenes]
+    def _place_block(l) -> str:
+        lines = [f"- {l.name}" + (f": {l.description}" if l.description else "")]
+        lines += [_scene_line(s) for s in (l.scenes or [])]
         return "\n".join(lines)
 
-    places = "\n".join(_place_block(p) for p in st.places)
+    places = "\n".join(_place_block(l) for l in st.locations if l.scenes)
     cur = body.get("location") or st.start or (st.locations[0].id if st.locations else "")
 
     # The protagonist. The frontend passes who *you* are this playthrough. Two shapes:
@@ -127,10 +127,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     directive = ""
     if moved:
         _sc = _pl = None
-        for _p in st.places:
-            for _s in _p.scenes:
+        for _l in st.locations:
+            for _s in (_l.scenes or []):
                 if _s.id == moved:
-                    _sc, _pl = _s, _p
+                    _sc, _pl = _s, _l
                     break
             if _sc:
                 break
@@ -287,7 +287,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         + f"{player_line}\n"
         f"CAST (use these names):\n{cast}\n"
         f"LOCATIONS (the scene is in exactly one):\n{locs}\n"
-        + (f"PLACES (containers holding character 'spots' — honor who is usually where; a "
+        + (f"PLACES (locations holding character 'spots' — honor who is usually where; a "
            f"character at home is in their spot unless the scene says otherwise):\n{places}\n" if places else "")
         + "\n" + PLAY_CRAFT + "\n\n"
         "Narrate the next moment in-world, responding to the player: second person to the player, "
@@ -495,11 +495,11 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         system = system + "\n\n" + _cont_block.rstrip()
 
     # RELATIONSHIP PROJECTION: inject ONLY the web edges among the on-stage/referenced set — never
-    # the whole web every turn. DB-backed stories PULL the relevant edges via an indexed query.
+    # the whole web every turn. JSON-backed stories PULL the relevant edges via an indexed scan.
     from . import story_db as _SDB
     from .genesis import project_web
     _focus = set(immediate)
-    _db = ctx._story_db(key)
+    _db = ctx._story_file(key)
     _relset = (_SDB.relationships_for(_db, _focus) if _db is not None
                else [r.model_dump() for r in st.relationships])
     _rel_block = ""

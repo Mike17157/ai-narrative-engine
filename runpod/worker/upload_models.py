@@ -138,8 +138,12 @@ def _single_file_op(args: argparse.Namespace, models_dir: Path) -> None:
         region_name=datacenter,
         config=Config(signature_version="s3v4", retries={"max_attempts": 5, "mode": "standard"}),
     )
-    xfer = TransferConfig(multipart_threshold=128 * 1024**2, multipart_chunksize=128 * 1024**2,
-                          max_concurrency=2, use_threads=True)
+    # ponytail: 128MB parts started hitting consistent 504 Gateway Timeouts on the
+    # RunPod S3 endpoint (every part, every retry). Smaller parts at concurrency=1
+    # finish faster per-request and stop competing for bandwidth; bump if the
+    # gateway timeout tightens further, shrink if "too many parts" issues return.
+    xfer = TransferConfig(multipart_threshold=32 * 1024**2, multipart_chunksize=32 * 1024**2,
+                          max_concurrency=1, use_threads=True)
 
     rows = _read_manifest()
 
@@ -236,10 +240,11 @@ def main() -> None:
     # RunPod's S3 has TWO multipart constraints we have to thread:
     #   - parts must be <= ~128 MB (200 MB returns 413 Content Too Large)
     #   - too many tiny parts get dropped on CompleteMultipartUpload
-    # 128 MB parts is the sweet spot (a 7 GB file is ~55 parts), files under that go
-    # as a single PUT, low concurrency so the endpoint keeps up.
-    xfer = TransferConfig(multipart_threshold=128 * 1024**2, multipart_chunksize=128 * 1024**2,
-                          max_concurrency=2, use_threads=True)
+    # ponytail: 128MB parts started hitting consistent 504 Gateway Timeouts (every
+    # part, every retry) — dropped to 32MB @ concurrency=1 so each part finishes
+    # faster and doesn't compete for bandwidth; bump back up if that was a one-off.
+    xfer = TransferConfig(multipart_threshold=32 * 1024**2, multipart_chunksize=32 * 1024**2,
+                          max_concurrency=1, use_threads=True)
 
     print(f"S3 endpoint: {endpoint}   bucket(volume): {volume_id}\n")
 

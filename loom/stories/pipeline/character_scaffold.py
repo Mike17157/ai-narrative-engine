@@ -267,7 +267,7 @@ PORTRAIT_SYSTEM = (
 def portrait_prompt(name: str, persona: str, harness: dict, world: str = "",
                     philosophy: str = "") -> str:
     h = {k: (harness.get(k) or "").strip() for k in
-         ("role", "temperament", "want", "lie", "wound", "secret", "good_memory")}
+         ("role", "temperament", "want", "lie", "contradiction", "wound", "secret", "good_memory")}
     hl = "\n".join(f"  {k}: {v}" for k, v in h.items() if v) or "(thin)"
     return "\n\n".join(filter(None, [
         f"CHARACTER: {name}",

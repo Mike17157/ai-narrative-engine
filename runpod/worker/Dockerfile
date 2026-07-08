@@ -62,7 +62,7 @@ RUN pip install --no-cache-dir sageattention==1.0.6
 
 # Placeholder LoadImage inputs (see scan): keep modern ComfyUI from 400-ing on a
 # baked reference filename that isn't present in a fresh worker's empty input/ dir.
-RUN python -c "from PIL import Image; from pathlib import Path; p=Path('/comfyui/input/OIP.webp'); p.parent.mkdir(parents=True, exist_ok=True); Image.new('RGB',(64,64)).save(p); p=Path('/comfyui/input/loom_init.png'); p.parent.mkdir(parents=True, exist_ok=True); Image.new('RGB',(64,64)).save(p)"
+RUN python -c "from PIL import Image; from pathlib import Path; p=Path('/comfyui/input/OIP.webp'); p.parent.mkdir(parents=True, exist_ok=True); Image.new('RGB',(64,64)).save(p); p=Path('/comfyui/input/example.png'); p.parent.mkdir(parents=True, exist_ok=True); Image.new('RGB',(64,64)).save(p); p=Path('/comfyui/input/loom_init.png'); p.parent.mkdir(parents=True, exist_ok=True); Image.new('RGB',(64,64)).save(p)"
 
 COPY extra_model_paths.yaml /comfyui/extra_model_paths.yaml
 

@@ -52,6 +52,51 @@ def _story_context(ctx, skey: str, fields: list) -> str:
     return block
 
 
+def assemble_system_prompt(*, cfg: dict, graph: dict, adopted: str, story_ctx: str,
+                          craft_block: str, char_ground: str, label: str,
+                          draft: bool = False, propose: bool = False,
+                          adopted_examples: str = "") -> str:
+    """The fully-assembled system prompt — base + adopted mode (+ its worked example) + story context +
+    craft + grounding + graph + tool rules, then the conditional WORLD / DRAFT / PROPOSE directives.
+    Extracted from run_turn so it's inspectable WITHOUT running the model (the dump endpoint calls
+    this). All static prose comes from `cfg` (story_agent.json); only the dynamic bits (story_ctx,
+    craft_block, char_ground, graph prose, the world BRIEF) are passed in. Pure: no provider, no IO.
+    """
+    system = "\n".join(p for p in [
+        cfg.get("system", ""),
+        (f"\nADOPT THIS BEHAVIOUR for the current request:\n{adopted}" if adopted else ""),
+        (f"\nWORKED EXAMPLE (the quality bar — match the SPECIFICITY, not the content):\n{adopted_examples}"
+         if adopted_examples else ""),
+        (f"\nSTORY CONTEXT:\n{story_ctx}" if story_ctx else ""),
+        (f"\n{craft_block}" if craft_block else ""),
+        (f"\n{char_ground}" if char_ground else ""),
+        f"\nCURRENT {label} (the editable document — reference entries by their [id]):\n" + _graph_prose(graph),
+        (f"\n{cfg.get('tool_rules', '')}" if cfg.get("tool_rules") else ""),
+    ] if p)
+
+    # ESTABLISHED WORLD directive — the framing prose is config; the world BRIEF is rendered live.
+    from .genesis import world_brief as _world_brief
+    _wbrief = _world_brief(graph.get("world")) if isinstance(graph, dict) else ""
+    if _wbrief:
+        system += "\n\n" + (cfg.get("directives") or {}).get("world", "") + "\n" + _wbrief
+
+    # DRAFT directive (cast-queue mode) — config prose. The draft guidance is split into
+    # independently-editable keys (framing, persona quality, cast cohesion, tone, anti-archetype,
+    # relationships); they're joined here in reading order. Edit any one without touching the others.
+    if draft:
+        _draft = (cfg.get("directives") or {}).get("draft") or {}
+        _draft_parts = [_draft.get(k, "") for k in (
+            "framing", "persona_quality", "cast_cohesion",
+            "tone_compliance", "anti_archetype", "relationships")]
+        system += "\n\n" + "\n\n".join(p for p in _draft_parts if p)
+
+    # PROPOSE directive (Structure creation, suggest→approve) — config prose.
+    if propose:
+        system += "\n\n" + (cfg.get("directives") or {}).get("propose", "")
+
+    return system
+
+
 def _graph_prose(graph: dict) -> str:
     """The editable doc rendered as labeled PROSE, never raw JSON — models read information
     context far better as an outline. Ids stay inline ([c3]) so the model's ops can still
@@ -157,12 +202,15 @@ def run_turn(ctx, body: dict) -> dict:
                      if isinstance(m, dict) and m.get("role") == "user"), "")
     transcript = "\n".join(str(m.get("content", "")) for m in messages if isinstance(m, dict))
 
-    # ── Mode / persona — resolve FIRST (triggers or explicit mode) so the tool menu can be scoped
-    # to the active persona. From the JSON config, not _behavior rows. ──
-    modes = cfg.get("modes") or {}
-    explicit = (body.get("mode") or "").strip()
+    # ── Agent / persona — resolve FIRST (triggers or explicit agent) so the tool menu can be scoped
+    # to the active persona. The full agent definition (persona + tools + triggers) comes from the
+    # JSON config. An explicit `mode` from the client may use the OLD internal key — translate it. ──
+    from .agent_modes import translate_key as _translate_key
+    modes = cfg.get("agents") or {}
+    explicit = _translate_key((body.get("mode") or "").strip())
     active_ids = [explicit] if (explicit and explicit in modes) else _AC.match_modes(root, req_text)
     adopted = "\n\n".join(modes[m]["persona"] for m in active_ids if modes.get(m, {}).get("persona"))
+    adopted_examples = "\n\n".join(modes[m]["example"] for m in active_ids if modes.get(m, {}).get("example"))
     behavior_sig = explicit if (explicit and explicit in modes) else ",".join(sorted(set(active_ids)))
     primary = modes.get(active_ids[0], {}) if active_ids else {}
 
@@ -181,9 +229,9 @@ def run_turn(ctx, body: dict) -> dict:
     # No confident mode → the union of every mode's functions, so the model can still route. The
     # attached-books path (non-unified pipeline) still goes through books. ──
     if body.get("all_tools"):
-        names = list(dict.fromkeys(n for mid in active_ids for n in (modes.get(mid, {}).get("functions") or [])))
-        if not names:                         # general chat: offer every function any mode declares
-            names = list(dict.fromkeys(n for m in modes.values() for n in (m.get("functions") or [])))
+        names = list(dict.fromkeys(n for mid in active_ids for n in (modes.get(mid, {}).get("tools") or [])))
+        if not names:                         # general chat: offer every tool any agent declares
+            names = list(dict.fromkeys(n for m in modes.values() for n in (m.get("tools") or [])))
         fns = GO.resolve_functions(names)
         preset_books = []   # the unified chat's model is the builder/workshop model — NOT resolved
                             # from function-book bindings (the chat no longer routes through books).
@@ -238,122 +286,12 @@ def run_turn(ctx, body: dict) -> dict:
         ground.append(_G.psyche_notes(root, _q, k=(cfg.get("psyche") or {}).get("k", 4)))
     char_ground = "\n\n".join(p for p in ground if p)
 
-    system = "\n".join(p for p in [
-        cfg.get("system", ""),
-        (f"\nADOPT THIS BEHAVIOUR for the current request:\n{adopted}" if adopted else ""),
-        (f"\nSTORY CONTEXT:\n{story_ctx}" if story_ctx else ""),
-        (f"\n{craft_block}" if craft_block else ""),
-        (f"\n{char_ground}" if char_ground else ""),
-        f"\nCURRENT {label} (the editable document — reference entries by their [id]):\n" + _graph_prose(graph),
-        (f"\n{cfg.get('tool_rules', '')}" if cfg.get("tool_rules") else ""),
-    ] if p)
-
-    # If a WORLD frame is set (genesis authored the stage), make it AUTHORITATIVE — every character the
-    # chat proposes or edits must belong to it; the writer can also reshape it via set_world_field.
-    from .genesis import world_brief as _world_brief
-    _wbrief = _world_brief(graph.get("world")) if isinstance(graph, dict) else ""
-    if _wbrief:
-        system += ("\n\nESTABLISHED WORLD — the stage is ALREADY set. Every character you propose or edit MUST "
-                   "plausibly belong to THIS world (its genre, era, setting, situation); do NOT invent a "
-                   "different setting. Use it as the cast's common world. To change the world itself, call "
-                   "set_world_field.\n" + _wbrief)
-
-    # DRAFT mode: a pre-commit, client-held artifact (the cast queue) — only the pure doc-tools are
-    # offered (create_character/image-gen are filtered out), so override the mode persona's "prefer the
-    # rich create_character" steer toward the draft tool, and ask for the full psychology.
-    if draft:
-        system += (
-            "\n\nDRAFT CAST QUEUE — propose characters the writer ratifies then refines; names are "
-            "assigned at commit. EVERY add_character call MUST carry a vivid PROSE `persona` of 3-4 full "
-            "sentences — NEVER propose a bare role with a thin or empty persona. GROUND each character in "
-            "REAL psychology — privately decide their disposition, how they attach to people, and the "
-            "defense they hit under stress to keep them coherent, but that is your INTERNAL scaffold ONLY. "
-            "Write the persona as NATURAL PROSE that reveals them ENTIRELY through concrete, specific, "
-            "idiosyncratic behaviour: a real habit, the exact thing they're into, how they actually talk, "
-            "what they avoid. LEAD the persona with its single most DISTINCTIVE, story-relevant image — the "
-            "first sentence alone must tell the reader who this is and what tension they bring, because the "
-            "writer skims it as a card before reading the rest. NEVER name a personality trait, facet, or "
-            "framework in the prose — no 'extraversion', 'gregariousness', 'neuroticism', "
-            "'conscientiousness', 'openness', 'agreeableness', 'attachment', 'high/low ___'. SHOW the "
-            "person; never diagnose them. Weave in, in the same prose, how they relate to EACH OTHER and to "
-            "the established main characters. Set `role` to a SPECIFIC, DISTINGUISHING relational tag that "
-            "names their function AND a defining detail (e.g. 'the popstar's ledger-keeping fixer', 'the "
-            "lute-dragging hype man', 'the apprentice gardener who mends things') — never a bare, generic "
-            "tag like 'her friend', 'blunt friend', or 'protective friend' that could fit three different "
-            "people; the role is the card's HEADLINE, so it must set this person apart at a glance. Leave "
-            "`name` blank unless the writer gave one. Do NOT call set_relationship or fill the structured "
-            "want/lie/wound/secret/temperament params — the system formalizes those AFTER each character is "
-            "ratified. (create_character is unavailable here.) Revise an existing entry with "
-            "set_character_field. Propose 2-5 characters that are DISTINCT FROM ONE ANOTHER — different "
-            "function, different relationship, different hook; NEVER offer two variations on the same "
-            "archetype (e.g. two 'blunt protective friends'). When the writer's prompt is terse, INVENT the "
-            "depth — never echo a generic stub like 'the boy'; give a real, particular person."
-            "\n\nONE CONNECTED CAST — they share a story. Give the cast a COMMON WORLD (the same school, "
-            "town, band, workplace, neighbourhood) and make sure they plausibly belong together with REAL "
-            "reasons to cross paths. Weave a concrete CONNECTION into each persona — how they know each "
-            "other, what throws them together, who they orbit. NEVER hand back isolated sketches that don't "
-            "reference one another (a boy who only games + an idol who only rehearses, with nothing between "
-            "them, is a non-starter). Even a two-person prompt needs the link spelled out: he's a fan, "
-            "they're lab partners, she keeps catching him watching. Compatibility isn't optional — design "
-            "them to fit ONE web, and lean toward a shared setting that makes the connection inevitable."
-            "\n\nWRITE TO THE BRIEF, FAITHFULLY. Match the exact register and tone the writer asked for. If "
-            "they want crude, horny, silly, low-brow, or trashy kids, give them good-natured kids with bad "
-            "TASTE — not cautionary figures who 'cross the line', 'cause harm', or 'don't realize the harm'. "
-            "Bad taste is not bad character. Never sanitize, moralize, soften, or elevate the request into "
-            "something more respectable or more dramatic than what was asked."
-            "\n\nORDINARY, NOT ARCHETYPES — BUT NEVER BLAND. Make specific, real, mostly-unremarkable "
-            "people, not TV stock types ('class clown', 'gossip queen', 'brooding loner artist', 'dumb "
-            "jock', 'shy nerd', 'mean girl' are ARCHETYPES — do not produce them). But 'ordinary' means "
-            "GROUNDED, not thin: an ordinary person is RICH in concrete idiosyncratic detail (the exact "
-            "dumb thing they're into, what they actually joke about, a small telling habit). The depth "
-            "lives in that specificity, not in a dramatic wound or one grand defining trait — so make them "
-            "specific and textured, never a generic label."
-            "\n\nA GROUP IS A GROUP. When the writer asks for a friend group / class / crew / clique, the "
-            "members SHARE the requested sensibility and obviously belong together — distinguished by small "
-            "real differences, not by being contrasting archetypes. Build the group, not a type parade. And "
-            "do NOT slot them by their FUNCTION in the group either ('the ringleader', 'the loud one', 'the "
-            "deadpan one', 'the wild card', 'the chaos gremlin') — that's the same archetype trap in a "
-            "different outfit. Each is a whole ordinary kid FIRST — their own specific interests, home life, "
-            "and habits — who happens to share the crew's humor. Two of them can even be alike, like real "
-            "friends are."
-            "\n\nRELATE THEM, WITH VARIED STANCES. Wire each new character both to EACH OTHER and to the "
-            "established main characters — a real social world has an opinion about its notable people. But "
-            "VARY that opinion hard: do NOT make everyone admire, fancy, or fixate on the same lead — a "
-            "uniform reaction is the tell of a fake world. Spread the feelings across the full range: warm/"
-            "friendly with some, plainly INDIFFERENT (neutral) to others, and some who look DOWN on, resent, "
-            "envy, or are wary of a lead. A popstar should have admirers AND people who think she's overrated "
-            "AND people who just don't care; a quiet kid should have a friend AND someone who ignores him. "
-            "Give each new character a DIFFERENT mix of stances — not the same feeling toward the same person."
-            "\n\nSOCIAL GROUPS — assign them PROACTIVELY. Whenever 2+ characters form a genuine social "
-            "cluster (a friend group, a clique, a band, a family, a regular lunch table), set the SAME "
-            "`group` name on every member (e.g. group='the crew') WITHOUT waiting to be asked — never leave "
-            "a natural clique ungrouped. Members of one group are FRIENDS by default (the system auto-links "
-            "them), so don't narrate every intra-group friendship; spend the prose on each kid's individual "
-            "texture and their VARIED feelings about people OUTSIDE the group. Use distinct group names for "
-            "distinct cliques. (Only a loose pairing or a deliberately-fractured cast needs no group — but "
-            "they still need the CONNECTION above.)")
-
-    # PROPOSE mode (the Structure creation step): nothing applies until the writer approves, so be
-    # generous — when they wonder/explore/ask for options, offer a SERIES of distinct options as cards.
-    if body.get("propose"):
-        system += ("\n\nPROPOSE MODE — you are the writer's CO-AUTHOR, not a vending machine. The writer is "
-                   "BUILDING; every tool call surfaces as a card they APPROVE before it takes effect, and "
-                   "your PROSE reply is shown ABOVE the cards. The UI already shows the writer a computed "
-                   "'Next' step, so your job is to ACT, not to guide with questions:"
-                   "\n• KEEP PROSE TO ONE SHORT SENTENCE — a quick reaction, nothing more. NEVER ask a "
-                   "question, NEVER end with a question mark, NEVER prompt the writer for a tone/name/"
-                   "direction (invent it and act). Do NOT restate, list, or summarize the cards (they're "
-                   "shown separately), do NOT narrate what you're about to do ('Proceeding to add…'). Never "
-                   "answer with bare cards and no words, but never more than a sentence either."
-                   "\n• When the DIRECTION is clear enough to act, propose 2-4 DISTINCT, story-grounded "
-                   "options by calling the richest matching tool ONCE PER OPTION (e.g. several "
-                   "create_character calls) — they surface as cards to react to. For a specific single "
-                   "change, propose just that one."
-                   "\n• When the brief is thin, DON'T stall for clarification — INVENT the shape (genre, "
-                   "stakes, who-pulls-against-whom) yourself, commit to it, and propose cards for it. A "
-                   "concrete guess the writer can reject beats a question that costs a turn."
-                   "\n• Be OPINIONATED and proactive: make the next move. Every option must be specific to "
-                   "THIS story, distinct from the others, and not already present.")
+    # ── System prompt — assembled by assemble_system_prompt (also used by the dump endpoint).
+    # All static prose lives in cfg (story_agent.json); only dynamic bits are passed in. ──
+    system = assemble_system_prompt(cfg=cfg, graph=graph, adopted=adopted, story_ctx=story_ctx,
+                                    craft_block=craft_block, char_ground=char_ground, label=label,
+                                    draft=draft, propose=bool(body.get("propose")),
+                                    adopted_examples=adopted_examples)
     prompt = transcript or f"Apply the appropriate tools to the {label.lower()}."
 
     # Two opt-in flows gate tool application for a suggest→approve UX (the client sets the flag):
@@ -442,7 +380,7 @@ def run_turn(ctx, body: dict) -> dict:
         # Story-field-shaped doc keys straight to the story YAML (same as the frontend PUT).
         skey = (body.get("story") or "").strip()
         if skey and ctx.base_settings.stories.get(skey) is not None:
-            _PERSIST = ("locations", "places", "start", "relationships", "connections")
+            _PERSIST = ("locations", "start", "relationships", "connections")
             fields = {k: new_graph[k] for k in _PERSIST if k in new_graph}
             if isinstance(new_graph.get("cast"), list):
                 fields["cast"] = ctx.cast_doc_to_members(new_graph["cast"])
@@ -460,3 +398,24 @@ def run_turn(ctx, body: dict) -> dict:
         out["warning"] = ("the model returned neither a reply nor a tool call — it may not support "
                           "tool-calling; bind a tool-capable model to this preset")
     return out
+
+
+if __name__ == "__main__":   # CLI dump — print the assembled system prompt without a model call.
+    import sys, json
+    from pathlib import Path
+    # Minimal standalone ctx: assemble_system_prompt only needs root + base_settings.stories/.characters
+    # (for _story_context). For a quick dump we pass a bare body and let story_ctx be empty.
+    msg = " ".join(sys.argv[1:]) or "add a rival for the protagonist"
+    root = Path(__file__).resolve().parents[2]
+    cfg = _AC.load_config(root, fresh=True)
+    agents = cfg.get("agents") or {}
+    active_ids = _AC.match_modes(root, msg)
+    adopted = "\n\n".join(agents[a]["persona"] for a in active_ids if agents.get(a, {}).get("persona"))
+    adopted_examples = "\n\n".join(agents[a]["example"] for a in active_ids if agents.get(a, {}).get("example"))
+    graph = {"title": "(sample)", "premise": "(sample premise)", "cast": [], "relationships": []}
+    system = assemble_system_prompt(cfg=cfg, graph=graph, adopted=adopted, story_ctx="",
+                                    craft_block="", char_ground="", label="DOCUMENT",
+                                    adopted_examples=adopted_examples)
+    print(f"=== ACTIVE MODES: {active_ids or ['(none — general chat)']} ===\n")
+    print(system)
+    print(f"\n=== {len(system)} chars ===")

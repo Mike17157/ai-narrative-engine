@@ -72,7 +72,7 @@
   function graphNow() {
     if (artifact != null) return stripDataURIs($state.snapshot(artifact));
     const cur = stories.current || {};
-    return stripDataURIs({ relationships: cur.relationships || [], locations: cur.locations || [], places: cur.places || [] });
+    return stripDataURIs({ relationships: cur.relationships || [], locations: cur.locations || [] });
   }
 
   let modes = $state([]);

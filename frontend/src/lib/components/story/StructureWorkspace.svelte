@@ -34,7 +34,7 @@
   let castN = $state(4);
   // The WORLD frame (the stage) — authored first so the cast's backgrounds belong to one place, not an
   // improvised vacuum. Premise stays emergent. Threaded into BOTH harness design and voice formalize.
-  let world = $state({ genre: '', tone: '', setting: '', situation: '' });
+  let world = $state({ genre: '', tone: '', setting: '', situation: '', pressure: '', forces: [] });
   let worldBusy = $state(false);
   let fieldBusy = $state({});            // world field -> regenerating
   let focusField = $state('');           // world field the agent just touched — flashes briefly
@@ -72,7 +72,8 @@
     worldBusy = true; err = null;
     const r = await post('/stories/genesis/world', { seed: s, model: genModel });
     worldBusy = false;
-    if (r.ok) world = { genre: r.data.genre || '', tone: r.data.tone || '', setting: r.data.setting || '', situation: r.data.situation || '' };
+    if (r.ok) world = { genre: r.data.genre || '', tone: r.data.tone || '', setting: r.data.setting || '', situation: r.data.situation || '',
+                        pressure: r.data.pressure || '', forces: r.data.forces || [] };
     else err = r.data?.error || 'world failed';
   }
   async function regenField(field) {
@@ -130,7 +131,10 @@
     if (busy) return;
     busy = 'commit'; err = null;
     const r = await post('/stories/genesis/commit',
-      { candidate: cand, harnesses: $state.snapshot(activeHarnesses), relationships: $state.snapshot(webRels), name: newName || cand.title, type: newType });
+      { candidate: cand, harnesses: $state.snapshot(activeHarnesses), relationships: $state.snapshot(webRels),
+        name: newName || cand.title, type: newType,
+        // the DEFINED WORLD travels with the commit so it SURVIVES (compose_world folds these into Story.world)
+        world: $state.snapshot(world), substrate: $state.snapshot(substrate), particulars: $state.snapshot(particulars) });
     busy = '';
     if (r.ok && r.data?.key) { clearDraft(); goto(`/stories/${r.data.key}/structure`); return; }
     err = r.data?.error || 'could not build story';
@@ -178,8 +182,10 @@
     wgBusy = '';
     if (r.ok && r.data?.substrate) {
       substrate = r.data.substrate;
-      // bridge into the Cast pipeline so design_by_role still has a world frame
-      world = { ...world, setting: substrate.place || world.setting, situation: substrate.preoccupation || world.situation };
+      // bridge into the Cast pipeline so design_by_role grows the cast from the world's ROOT + FORCES:
+      // the ache becomes the standing pressure, the camps become the forces the contradictions grow from.
+      world = { ...world, setting: substrate.place || world.setting, situation: substrate.preoccupation || world.situation,
+                pressure: substrate.preoccupation || world.pressure, forces: substrate.forces || world.forces || [] };
     } else err = r.data?.error || 'substrate failed';
   }
   async function genParticulars() {
@@ -517,6 +523,15 @@
           <div class="wstep">
             <div class="stepno">2 · The world’s soul <span class="stephint">the hidden skeleton — a reader never sees this, it just makes the world cohere</span></div>
             <div class="ache"><span class="achek">The ache</span> {substrate.preoccupation}</div>
+            {#if substrate.forces?.length}
+              <div class="forces">
+                <span class="achek">Forces</span>
+                <span class="fhint">the camps formed around the ache — the cast's contradictions grow from these</span>
+                {#each substrate.forces as f (f.name)}
+                  <div class="forcecard"><b>{f.name}</b> — {f.stance}</div>
+                {/each}
+              </div>
+            {/if}
             <div class="subgrid">
               <div class="subcol">
                 <div class="subh">Traditions <span class="stephint">real folk-logic, quietly interfering</span></div>
@@ -778,6 +793,11 @@
   .ache { font-size: 14px; line-height: 1.55; color: var(--text); padding: 10px 12px; border-radius: 10px;
     background: color-mix(in srgb, var(--accent) 9%, transparent); border-left: 2px solid var(--accent); }
   .achek { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--accent); margin-right: 8px; }
+  .forces { display: flex; flex-direction: column; gap: 6px; }
+  .fhint { font-size: 11px; color: var(--faint); font-style: italic; }
+  .forcecard { padding: 7px 10px; border-radius: 9px; background: var(--panel); border: 1px solid var(--border-soft);
+    border-left: 2px solid color-mix(in srgb, var(--accent) 55%, transparent); font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .forcecard b { color: var(--text); font-size: 12.5px; }
   .subgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .subcol { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
   .subh { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); margin-top: 4px; }

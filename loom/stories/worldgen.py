@@ -158,6 +158,10 @@ PARTICULARS_SYS = (
     "IRON RULES (this is the whole point — break them and it becomes AI slop):\n"
     "• SHOW, never explain. IMPLY how the world works; NEVER state a rule as a rule. The reader should "
     "infer there's a system and never be handed one. Withhold the mechanism — the gap is the magic.\n"
+    "• PLAIN AND EXACT: a reader knows precisely what happened in the fragment — who did what, and to "
+    "what — even though the rule behind it stays unstated. Withholding the SYSTEM is NOT the same as "
+    "vague writing: no ornate, flowery, or riddling phrasing; state the concrete fact cleanly, in plain "
+    "words.\n"
     "• A real VOICE and specific PARTICULARITY: one concrete person/thing, one weird exact detail, plain "
     "words. Not neutral-omniscient. Not exhaustive — one telling detail stands for the whole, never a "
     "balanced survey.\n"
@@ -195,9 +199,9 @@ def gen_particulars(provider, seed: str = "", n: int = 6, substrate: dict | None
 # shared human ache the whole world circles, the place, and recurring people the fragments orbit. ──
 SUBSTRATE_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["preoccupation", "place", "traditions", "people"],
+    "required": ["preoccupation", "place", "traditions", "people", "forces"],
     "properties": {
-        "preoccupation": {"type": "string"},   # the ONE ache the whole world circles (its soul)
+        "preoccupation": {"type": "string"},   # the ONE ache the whole world circles (its soul) = the ROOT
         "place": {"type": "string"},
         "traditions": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["name", "logic"],
@@ -205,6 +209,9 @@ SUBSTRATE_SCHEMA = {
         "people": {"type": "array", "items": {
             "type": "object", "additionalProperties": False, "required": ["name", "life"],
             "properties": {"name": {"type": "string"}, "life": {"type": "string"}}}},
+        "forces": {"type": "array", "items": {   # camps that have formed around the ache (the proto-creeds); [] if none
+            "type": "object", "additionalProperties": False, "required": ["name", "stance"],
+            "properties": {"name": {"type": "string"}, "stance": {"type": "string"}}}},
     },
 }
 
@@ -217,6 +224,12 @@ SUBSTRATE_SYS = (
     "dead…); the `place` (one specific region/town, concrete — and STATE THE ERA/technology plainly in it, "
     "e.g. 'contemporary', '1890s', so every later layer matches); and 2-3 recurring ordinary `people` "
     "(name + their small hard life) whom fragments and scenes will orbit.\n"
+    "FORCES — the camps that have quietly formed around the ache: 2-3 factions/faiths/orders that each "
+    "answer it differently and each believe they are right (this is where a thematic conflict is SEEDED, so "
+    "the story's tensions grow from the world, not from nowhere). Each: a `name` (ONE coined word — never "
+    "two words, never 'The Adjective Noun') and a `stance` (their answer to the ache, and why a decent "
+    "person would hold it — none is a villain). Keep them grounded and half-buried in ordinary life, NOT "
+    "epic armies. Return `forces`: [] only if the ache genuinely divides no one.\n"
     "RESTRAINT: the world is otherwise plainly REAL — work, weather, money, family. The traditions are "
     "quiet, marginal, half-doubted; most people are too busy to think about them. ONE strangeness, rationed, "
     "in an ordinary world beats a world where every noun is enchanted (that reads as twee). This substrate "
@@ -231,6 +244,9 @@ def _substrate_brief(s: dict | None) -> str:
     lines = [f"ACHE (the world's soul): {s.get('preoccupation', '')}", f"PLACE: {s.get('place', '')}"]
     for t in (s.get("traditions") or []):
         lines.append(f"TRADITION — {t.get('name', '')}: {t.get('logic', '')}")
+    for fo in (s.get("forces") or []):
+        if (fo.get("name") or "").strip():
+            lines.append(f"FORCE — {fo.get('name', '')}: {fo.get('stance', '')}")
     for p in (s.get("people") or []):
         lines.append(f"PERSON — {p.get('name', '')}: {p.get('life', '')}")
     return "\n".join(lines)

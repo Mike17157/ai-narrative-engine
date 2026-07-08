@@ -7,8 +7,8 @@ refs. Run: `python -m loom.stories.test_genesis` (or pytest). Stub provider, no 
 from __future__ import annotations
 
 from loom.stories.genesis import (
-    derive_stories, design_harnesses, name_cast, persona_from_harness,
-    project_web, scene_cast, weave_relationships,
+    compose_world, derive_stories, design_harnesses, name_cast, persona_from_harness,
+    project_web, scene_cast, weave_relationships, world_full_brief,
 )
 
 
@@ -113,6 +113,20 @@ def main() -> None:
     assert project_web(web, {"z"}) == {}                    # nobody in focus → nothing leaks
     p2 = project_web([{"source": "a", "target": "b", "stance": "warm"}], {"a", "b"})
     assert "a" in p2 and "b" in p2 and p2["b"][0]["outward"] is False   # both perspectives
+
+    # 7) compose_world — fold the genesis draft into the ONE persisted world; premise distils from it
+    w = compose_world(
+        {"genre": "low fantasy", "pressure": "the wood is dying", "forces": [{"name": "Rootward", "stance": "let it die"}]},
+        {"place": "Thornwick", "preoccupation": "inherited debt",
+         "traditions": [{"name": "Red-Ledger", "logic": "blood pays"}], "people": [{"name": "Maris", "life": "reads the rain-pan"}]},
+        [{"kind": "object", "text": "a root-chain in the undercroft"}])
+    assert w["pressure"] == "the wood is dying" and w["place"] == "Thornwick", w
+    assert w["forces"][0]["name"] == "Rootward" and w["traditions"][0]["name"] == "Red-Ledger", w
+    assert w["fragments"][0]["text"].startswith("a root-chain") and "situation" not in w, w   # empties dropped
+    assert compose_world({}, {}, []) == {}                       # a thin world stays thin
+    fb = world_full_brief(w)
+    assert "PRESSURE" in fb and "Rootward" in fb and "Red-Ledger" in fb and "root-chain" in fb, fb
+    assert world_full_brief({}) == ""                            # empty world → nothing to distil from
 
     print("ok — genesis integrity asserts passed")
 

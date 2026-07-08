@@ -5,8 +5,9 @@
   // save (the candidate/select flow that used to live in SceneModal). Replaces the map flow-graph.
   import { post } from '$lib/api.js';
 
-  let { storyKey, locations = [], start = '', onChange = () => {},
-        onAdd = () => {}, onRemove = () => {}, onSetStart = () => {} } = $props();
+  // Text fields + scene-image (production) edit here; adding/removing/nesting/setting-start are
+  // structural narrative ops → the section editor. (onAdd/onRemove/onSetStart props retired.)
+  let { storyKey, locations = [], start = '', onChange = () => {} } = $props();
 
   let locIds = $derived(new Set(locations.map((l) => l.id)));
   let roots = $derived(locations.filter((l) => !l.parent || !locIds.has(l.parent)));
@@ -57,8 +58,9 @@
 </script>
 
 <div class="locs">
-  <p class="hint">Every place in the world, grouped under its area. Each location edits in place and
-    carries its own <b>scene image</b> — generate options and pick one. Mark one the story <b>start</b>.</p>
+  <p class="hint">Every place in the world, grouped under its area. Text edits in place and each
+    carries its own <b>scene image</b> (generate options and pick one). Add, remove, nest, or set the
+    story <b>start</b> in the editor.</p>
 
   {#each roots as root, i (root.id)}
     <section class="root" style={`--rc: hsl(${rootHue(i)} 60% 60%)`}>
@@ -69,10 +71,8 @@
     </section>
   {/each}
 
-  <button class="addtop" onclick={() => onAdd('')}>＋ Add a location</button>
-
   {#if !locations.length}
-    <div class="none">No locations yet — add one to start building the world.</div>
+    <div class="none">No locations yet — ask the editor to add one.</div>
   {/if}
 </div>
 
@@ -81,16 +81,7 @@
     <div class="ltop">
       <span class="marker">{isRoot ? '📍' : '↳'}</span>
       <input class="lname" bind:value={loc.name} oninput={onChange} placeholder="location name" />
-      <label class="startsel" title="The place the story opens in">
-        <input type="radio" name="story-start" checked={start === loc.id} onchange={() => onSetStart(loc.id)} /> start
-      </label>
-      <select class="area" value={loc.parent || ''} onchange={(e) => { loc.parent = e.currentTarget.value; onChange(); }}
-              title="Nest under an area">
-        <option value="">— top level —</option>
-        {#each locations.filter((o) => o.id !== loc.id) as o (o.id)}<option value={o.id}>in {o.name || o.id}</option>{/each}
-      </select>
-      {#if isRoot}<button class="mini" onclick={() => onAdd(loc.id)} title="Add a place inside this area">＋ child</button>{/if}
-      <button class="mini del" onclick={() => onRemove(loc.id)} title="Delete location">×</button>
+      {#if start === loc.id}<span class="startbadge" title="The place the story opens in">◆ start</span>{/if}
     </div>
 
     <div class="lbody">
@@ -156,9 +147,8 @@
            background: transparent; border: 1px solid transparent; border-radius: 7px; padding: 4px 7px; }
   .lname:hover { border-color: var(--border-soft); }
   .lname:focus { outline: none; border-color: var(--rc); background: var(--elev); }
-  .startsel { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: var(--muted); white-space: nowrap; }
-  .area { font-size: 11px; color: var(--muted); background: var(--bg); border: 1px solid var(--border-soft);
-          border-radius: 6px; padding: 4px 6px; max-width: 160px; }
+  .startbadge { flex: none; font-size: 10.5px; color: var(--accent); background: color-mix(in srgb, var(--accent) 14%, transparent);
+                padding: 2px 9px; border-radius: 999px; white-space: nowrap; }
 
   .lbody { display: flex; gap: 12px; align-items: flex-start; }
   .fields { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
@@ -193,10 +183,6 @@
   .mini { flex: none; padding: 4px 8px; border-radius: 7px; font-size: 11.5px; background: var(--elev);
           border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; }
   .mini:hover:not(:disabled) { border-color: var(--rc); color: var(--text); }
-  .del:hover { color: var(--bad, #ff7a7a); border-color: var(--bad, #ff7a7a); }
-  .addtop { align-self: flex-start; font-size: 12.5px; padding: 7px 13px; border-radius: 8px;
-            background: var(--elev); border: 1px dashed var(--border); color: var(--muted); cursor: pointer; }
-  .addtop:hover { border-color: var(--accent); color: var(--accent); }
   .err { font-size: 11px; color: var(--bad, #ff7a7a); }
   .spin { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25);
           border-top-color: var(--rc); animation: sp .7s linear infinite; }

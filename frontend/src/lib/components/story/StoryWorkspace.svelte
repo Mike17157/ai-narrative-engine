@@ -20,12 +20,10 @@
   import LocationsPanel from '$lib/components/story/LocationsPanel.svelte';
   import QueueButton from '$lib/components/story/QueueButton.svelte';
   import WorkflowModal from '$lib/components/story/WorkflowModal.svelte';
-  import SectionChat from '$lib/components/story/SectionChat.svelte';
+  import StoryOverview from '$lib/components/story/StoryOverview.svelte';
+  import StoryWorldMap from '$lib/components/story/StoryWorldMap.svelte';
   import { workflow, closeWorkflow } from '$lib/workflow.svelte.js';
 
-  // The active tab IS the editable section (overview/map/relationships/plot all map to a card layer).
-  const SECTION_LABEL = { overview: 'Premise & theme', map: 'World', relationships: 'Cast & bonds', plot: 'Arc & scenes' };
-  let editable = $derived(['overview', 'map', 'relationships', 'plot'].includes(tab));
   import ConditionsPanel from '$lib/components/story/ConditionsPanel.svelte';
 
   let st = $derived(stories.current);
@@ -60,9 +58,9 @@
   }
   let placesTimer = null;
   function savePlaces(next) {
-    stories.current.places = next;
+    stories.current.locations = next;
     clearTimeout(placesTimer);
-    placesTimer = setTimeout(() => put(`/stories/${st.key}`, { places: next }), 600);
+    placesTimer = setTimeout(() => put(`/stories/${st.key}`, { locations: next }), 600);
   }
 
   // ── Inline editing: the description fields edit in place. Every change mutates
@@ -72,10 +70,8 @@
   let saveTimer = null;
   function saveSoon() { clearTimeout(saveTimer); saveTimer = setTimeout(persistCurrent, 600); }
 
-  // Themes ↔ comma-string mirror (re-seed when the story changes; avoids array churn per keystroke).
-  let themesStr = $state(''); let themesSeed = null;
-  $effect(() => { if (st && themesSeed !== st.key) { themesStr = (st.themes || []).join(', '); themesSeed = st.key; } });
-  function commitThemes() { stories.current.themes = themesStr.split(',').map((t) => t.trim()).filter(Boolean); saveSoon(); }
+  // Premise & theme (the causal-engine form) + the world foundation now live in StoryOverview
+  // (the world document). This page keeps plot/relationships/map + the config sections.
 
   // Cast roster (story-level): add/remove existing character cards.
   let addPick = $state('');
@@ -279,11 +275,7 @@
   }
 </script>
 
-{#if editable}
-  <SectionChat storyKey={st.key} layer={tab} layerLabel={SECTION_LABEL[tab] || tab} />
-{/if}
-
-<div class="page" class:withchat={editable}><div class="col">
+<div class="page"><div class="col">
 
   <!-- Header row: title (edit in place) + format badge + actions, one line -->
   <div class="title-row">
@@ -299,28 +291,15 @@
   {/if}
 
   {#if tab === 'overview'}
-  <!-- Overview = basic configuration + structure. The premise COMPONENTS (philosophy, lie,
-       inciting…) and other AI-drafted work live in the To-do queue, not on this page. -->
-  <!-- Heart callout (read-only — the storyboard's emotional core) -->
-  {#if st.storyboard?.heart}
-    <div class="heart-callout">
-      <span class="heart-icon">♡</span>
-      <span class="heart-text">{st.storyboard.heart}</span>
-    </div>
-  {/if}
+  <!-- Overview = the WORLD DOCUMENT (world-first). The old premise causal-engine form (root →
+       question → creeds → …) was retired in favour of authoring the world itself; premise distils
+       from it. See StoryOverview. Config (art/cast/memory) stays below. -->
+  <StoryOverview />
 
-  <!-- Logline + premise (edit in place) -->
-  {#if st.storyboard}
-    <input class="ip ip-logline" bind:value={st.storyboard.logline} oninput={saveSoon} placeholder="One-line logline…" />
-  {/if}
-  <textarea class="ip ip-prem" use:autosize={st.premise} bind:value={st.premise} oninput={saveSoon}
-            placeholder="Premise — what is this story about?"></textarea>
-
-  <!-- Tone + themes (edit in place) -->
-  <div class="ip-meta">
-    <input class="ip ip-tone" bind:value={st.tone} oninput={saveSoon} placeholder="tone (e.g. melancholy, hopeful)" />
-    <input class="ip ip-themes" bind:value={themesStr} oninput={commitThemes} placeholder="themes, comma separated" />
-  </div>
+  <!-- Config (art style, cast membership, personas, memory) is NOT the story bible — grouped into a
+       collapsed Settings area so the Overview is the world document. -->
+  <details class="settings">
+    <summary>⚙ Story settings <span class="sslo">— configuration, not the world bible</span></summary>
 
   <!-- Art style — LAYER 0 of the image card: every image this story renders (sprites AND
        location scenes) opens with this line. Decided here; stacked visibly in Cast ≣ Layers. -->
@@ -363,6 +342,7 @@
       <span class="win-unit">turns</span>
     </div>
   </Section>
+  </details>
 
   {:else if tab === 'plot'}
   <!-- The ARC — the planned progression play steers through (view + plan) -->
@@ -525,18 +505,21 @@
                       onSelect={openCharModal} onSaveBonds={saveBonds} onSetHome={setCharHome} />
 
   {:else if tab === 'map'}
+    <!-- The world IS a map: locations placed relatively (drag to build). The list editors below stay
+         for detailed editing (descriptions, scene images, conditions). -->
+    <StoryWorldMap />
+
     <!-- Setting stages: the recurring conditions the world moves through (situational content keys to these) -->
     <Section icon="🌐" title="Setting stages" count={(st.conditions || []).length || ''}>
       <ConditionsPanel storyKey={st.key} conditions={st.conditions || []} onChange={setConditions} />
     </Section>
 
     <!-- The world's locations, grouped by area — each edits in place + carries its scene image. -->
-    <LocationsPanel storyKey={st.key} locations={st.locations || []} start={st.start || ''}
-                    onChange={saveSoon} onAdd={addLocation} onRemove={removeLocationById} onSetStart={setStart} />
+    <LocationsPanel storyKey={st.key} locations={st.locations || []} start={st.start || ''} onChange={saveSoon} />
 
-    <Section icon="🗺" title="Places & scenes" count={(st.places || []).length || ''}>
-      <p class="hint">The world’s spots — a <b>place</b> (the house) holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
-      <PlacesEditor storyKey={st.key} places={st.places || []} cast={castOptions} onChange={savePlaces} />
+    <Section icon="🗺" title="Scenes" count={(st.locations || []).filter((l) => (l.scenes || []).length).length || ''}>
+      <p class="hint">The world’s spots — a <b>location</b> holds character <b>scenes</b> (mom in the kitchen, sister’s room). The director places characters in their spots automatically. Mark one a <b>🏠 home slot</b> and an embodied persona’s home stands in for it.</p>
+      <PlacesEditor storyKey={st.key} locations={st.locations || []} cast={castOptions} onChange={savePlaces} />
     </Section>
   {/if}
 
@@ -578,9 +561,18 @@
 <style>
   /* ── Layout ───────────────────────────────────────────────────────────────── */
   .page { padding: 0; }
-  .page.withchat { padding-left: 336px; }   /* room for the fixed left section editor (320px) */
-  @media (max-width: 1100px) { .page.withchat { padding-left: 0; } }
+  /* the section editor + its offset now live in the story shell layout (persistent across views) */
   .col  { display: flex; flex-direction: column; gap: 14px; }
+
+  /* Story settings — config grouped off the world document, collapsed by default */
+  .settings { margin-top: 22px; border-top: 1px solid var(--border-soft); padding-top: 6px; }
+  .settings > summary { cursor: pointer; list-style: none; font-size: 12px; font-weight: 700;
+    color: var(--muted); padding: 8px 2px; user-select: none; }
+  .settings > summary::-webkit-details-marker { display: none; }
+  .settings > summary::before { content: '▸'; display: inline-block; margin-right: 7px; color: var(--faint); transition: transform .12s; }
+  .settings[open] > summary::before { transform: rotate(90deg); }
+  .settings .sslo { font-weight: 500; color: var(--faint); font-size: 11px; }
+  .settings[open] { padding-bottom: 10px; }
 
   /* ── Actions ──────────────────────────────────────────────────────────────── */
   .del:hover { color: var(--bad, #ff7a7a); border-color: var(--bad, #ff7a7a); }
@@ -616,7 +608,22 @@
   .ip-logline { font-size: 14.5px; font-style: italic; margin-left: -8px; }
   .ip-prem    { font-size: 13.5px; color: var(--muted); line-height: 1.6; resize: none; margin-left: -8px; }
   .ip-style   { font-size: 12.5px; color: var(--muted); line-height: 1.55; resize: none; }
-  /* ── premise components — editable, AI-draftable ── */
+  /* ── world foundation — premise & theme distils FROM this ── */
+  .worldfound { margin: 10px 0 6px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border-soft);
+                background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  .worldfound.empty { background: none; border-style: dashed; }
+  .wf-top { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+  .wf-k { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--accent); }
+  .wf-link { font-size: 11px; color: var(--muted); text-decoration: none; }
+  .wf-link:hover { color: var(--accent); }
+  .wf-pressure { margin: 6px 0 0; font-size: 13px; line-height: 1.5; color: var(--text); }
+  .wf-pressure b { color: var(--accent); font-size: 10px; text-transform: uppercase; letter-spacing: .3px; margin-right: 6px; }
+  .wf-forces { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
+  .wf-force { font-size: 11.5px; padding: 2px 9px; border-radius: 999px; background: var(--elev);
+              border: 1px solid var(--border-soft); color: var(--text); cursor: default; }
+  .wf-none { margin: 5px 0 0; font-size: 12.5px; color: var(--faint); line-height: 1.55; }
+  .wf-none a { color: var(--accent); text-decoration: none; }
+  /* ── premise components — editable, distilled from the world ── */
   .cov { margin: 4px 0 14px; }
   .cov-head { display: flex; align-items: center; gap: 10px; }
   .cov-t { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--muted); }
@@ -626,6 +633,12 @@
            border: 1px dashed var(--accent); color: var(--accent); cursor: pointer; }
   .pfill:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 12%, transparent); }
   .cov-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 8px; margin-top: 8px; }
+  /* causal engine — a vertical CHAIN (order carries meaning: each derives from the one above) */
+  .cov-chain { display: flex; flex-direction: column; gap: 6px; margin-top: 8px;
+               border-left: 2px solid var(--border-soft); padding-left: 12px; }
+  .cov-n { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%;
+           background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent);
+           font-size: 9.5px; font-weight: 700; margin-right: 6px; }
   .cov-item { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; border-radius: 9px;
               border: 1px solid var(--border-soft); background: var(--elev); transition: border-color .15s; }
   .cov-item.gap { border-style: dashed; }

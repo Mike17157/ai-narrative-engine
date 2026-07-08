@@ -39,12 +39,13 @@ HARNESS_SCHEMA = {
     "type": "object", "additionalProperties": False, "required": ["harnesses"],
     "properties": {"harnesses": {"type": "array", "items": {
         "type": "object", "additionalProperties": False,
-        "required": ["role", "temperament", "want", "lie", "wound", "secret", "good_memory"],
+        "required": ["role", "temperament", "want", "lie", "contradiction", "wound", "secret", "good_memory"],
         "properties": {
             "role": {"type": "string"},
             "temperament": {"type": "string"},
             "want": {"type": "string"},
             "lie": {"type": "string"},
+            "contradiction": {"type": "string"},
             "wound": {"type": "string"},
             "secret": {"type": "string"},
             "good_memory": {"type": "string"},
@@ -94,18 +95,31 @@ DESIGN_SYS = (
     "decorate it with an invented signature quirk, habit, or twee detail — that reads as artificial. "
     "The surface stays MUNDANE; whatever distinguishes them comes from ordinary life (their work, "
     "family, money troubles, obligations) — the way real people differ. Underneath, make them a REAL "
-    "HUMAN the stereotype merely simplifies: the psych interior does the work. Give each ONE hidden "
-    "dimension — an ability, a history, or a knowledge the stereotype hides — carried in the `secret`, "
-    "grounded in this world's central pressure (never a random gift), so that once known it RE-READS "
-    "the familiar type entirely. Make `want`, `lie`, `wound`, `secret` FLOW from the makeup: the wound shapes "
-    "the defense, the defense hardens into the lie, the lie bends the want. For each: a `role` "
+    "HUMAN the stereotype merely simplifies: the psych interior does the work. The `secret` is a real "
+    "thing they keep hidden — and USUALLY ORDINARY (a debt, a shame, a quiet longing, something done or "
+    "lost), grounded in this world. It is NOT an ability, a power, or a hidden specialness, and it need "
+    "not re-read the whole person — most people's secrets are small and human. Do NOT make every character "
+    "secretly remarkable; that is whimsy. Make `want`, `lie`, `wound`, `secret` FLOW from the makeup: the wound shapes "
+    "the defense, the defense hardens into the lie, the lie bends the want. A `contradiction` is made ONLY "
+    "WHEN the world's GREATER STRUGGLE earns it — never forced onto everyone. When the world's PRESSURE and "
+    "FORCES are well-defined AND this person is genuinely caught in them, the strongest characters carry "
+    "one: a SELF-DEFEAT that relates that greater struggle back to this one person — their deepest want "
+    "expressing as its OPPOSITE in what they DO (the act that pushes away the very thing they most want), "
+    "for a reason that reads as love or duty, not fear (she pushes him away BECAUSE the force hunting her "
+    "would use him — nearness is what endangers what she loves). Surface behaviour and true want point "
+    "OPPOSITE ways and both are real: a sympathetic, self-inflicted knot, not indecision. But do NOT invent "
+    "one when the struggle is thin or the person isn't caught in it — a clear, simple motive beats a forced "
+    "contradiction; leave `contradiction` empty. For each: a `role` "
     "(the plain stereotype, adapted to this world's words; not a name, no added quirks); a `temperament` (ONE plain line on how they "
     "COME ACROSS in everyday life — manner, how they treat people, the way you'd describe a "
     "neighbour. NO psychology terms: never 'Big Five', 'openness', 'high/low ___', 'attachment', "
     "'defense' — show the person, never the profile); a `want` (concrete external goal); a `lie` (the "
-    "false self-belief the story will test — their personal DISTORTION of the story's central question); a `wound` (a CONCRETE past event that hurt them — the trauma "
+    "false self-belief the story will test — their personal DISTORTION of the story's central question); a "
+    "`contradiction` (the self-defeat that ties the world's greater struggle to this person — how the want "
+    "turns into its OPPOSITE in action, reading as love/duty not fear; ONLY when the struggle earns it, "
+    "else empty); a `wound` (a CONCRETE past event that hurt them — the trauma "
     "the defense guards, a real scene, not an abstraction; ordinary human material — a divorce, a debt, "
-    "a death, a failure — beats exotic trauma); a `secret` (the one hidden dimension); and a `good_memory` (a CONCRETE "
+    "a death, a failure — beats exotic trauma); a `secret` (a real hidden thing, usually ordinary — not an ability or specialness); and a `good_memory` (a CONCRETE "
     "cherished moment from their past — the warmth they quietly hold onto). The wound and the good memory "
     "are the biographical anchors their VOICE will later be drawn from, so make them specific and real. "
     "Make them contrast as real people do, and keep every one human and grounded. No names, no appearances. "
@@ -140,6 +154,7 @@ def design_harnesses(provider, seed: str = "", n: int = 4, grounding: str = "", 
             "temperament": (h.get("temperament") or "").strip(),
             "want": (h.get("want") or "").strip(),
             "lie": (h.get("lie") or "").strip(),
+            "contradiction": (h.get("contradiction") or "").strip(),
             "wound": (h.get("wound") or "").strip(),
             "secret": (h.get("secret") or "").strip(),
             "good_memory": (h.get("good_memory") or "").strip(),
@@ -188,12 +203,13 @@ FUNCTION_ROLES = [
 
 ONE_HARNESS_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["role", "temperament", "want", "lie", "wound", "secret", "good_memory"],
+    "required": ["role", "temperament", "want", "lie", "contradiction", "wound", "secret", "good_memory"],
     "properties": {
         "role": {"type": "string"},
         "temperament": {"type": "string"},
         "want": {"type": "string"},
         "lie": {"type": "string"},
+        "contradiction": {"type": "string"},
         "wound": {"type": "string"},
         "secret": {"type": "string"},
         "good_memory": {"type": "string"},
@@ -210,14 +226,22 @@ DESIGN_ONE_SYS = (
     "and a couple that CONTRADICT each other — the way real people want incompatible things. They should "
     "feel like they existed before this story found them and would go on if it left. ONLY THEN wire in "
     "their dramatic function underneath. In DAYLIGHT they read as a recognizable stereotype — the label "
-    "their world casually files them under, legible and even funny; underneath they carry ONE exceptional "
-    "dimension (an ability, a history, a way of seeing) hidden in the `secret`, grounded in this world's "
-    "central pressure — never a random gift — so that once known it RE-READS the familiar face entirely. "
+    "their world casually files them under, legible and even funny; underneath, in the `secret`, is a real "
+    "thing they keep hidden — USUALLY ORDINARY (a debt, a shame, a longing, something done or lost), "
+    "grounded in this world, NOT an ability, a power, or a hidden specialness. Most people's secrets are "
+    "small and human; do NOT make every character secretly remarkable — that is whimsy. "
     "Ground the interior in real psychology (a coherent Big Five lean, "
     "an attachment style, the DEFENSE they hit under stress) but SHOW it as behavior, never diagnose it. "
     "Make `want`, `lie`, `wound`, `secret` FLOW from the makeup. The `lie` is their particular "
     "DISTORTION of the story's central value — but it is ONE thread of them, not the whole cloth; do NOT "
     "let two characters have the same shape (e.g. all 'someone who doesn't know if their debt is paid'). "
+    "A `contradiction` is made ONLY WHEN the world's GREATER STRUGGLE earns it — never forced. When the "
+    "world's PRESSURE and FORCES are well-defined AND this person is genuinely caught in them, give one: a "
+    "SELF-DEFEAT that relates that struggle back to them — their deepest want turning into its OPPOSITE in "
+    "what they DO, sabotaging the very thing they most want, for a reason that reads as love or duty, not "
+    "fear (she pushes him away BECAUSE the force hunting her would use him). Surface and true want point "
+    "OPPOSITE ways, both real — a sympathetic knot, not indecision. But if the struggle is thin or they "
+    "aren't caught in it, do NOT invent one; a clear, simple motive is better — leave `contradiction` empty. "
     "Fields: a `role` (the PLAIN familiar type, adapted to this world's words — 'the class clown', "
     "'the strict landlady'; NOT a name, and NO invented quirk or twee detail bolted onto the label — "
     "what distinguishes them lives in their ordinary life and interior, not the tag); "
@@ -225,8 +249,10 @@ DESIGN_ONE_SYS = (
     "concrete manner, how they treat people — the way you'd describe a real neighbour. ABSOLUTELY "
     "NO psychology terms or trait names: never write 'adventurousness', 'dutifulness', 'intellect', "
     "'openness', 'high/low ___', 'attachment', 'defense'. Show the person, never the profile); "
-    "`want` (concrete external goal); `lie`; `wound` (a CONCRETE past "
-    "event, a real scene); `secret` (the ONE exceptional hidden dimension); `good_memory` (a CONCRETE "
+    "`want` (concrete external goal); `lie`; `contradiction` (the self-defeat tying the world's struggle "
+    "to them — want turning into its OPPOSITE in action, love/duty not fear; ONLY when earned, else empty); "
+    "`wound` (a CONCRETE past "
+    "event, a real scene); `secret` (a real hidden thing, usually ordinary — not an ability or specialness); `good_memory` (a CONCRETE "
     "cherished moment). Make them DISTINCT from "
     "any characters already in the cast. Give this person their OWN independent standing and stakes in the "
     "world — do NOT default them to being another lead's manager, fixer, handler, assistant, agent, "
@@ -292,6 +318,7 @@ def design_by_role(provider, seed: str = "", grounding: str = "", world="", role
             "temperament": (h.get("temperament") or "").strip(),
             "want": (h.get("want") or "").strip(),
             "lie": (h.get("lie") or "").strip(),
+            "contradiction": (h.get("contradiction") or "").strip(),
             "wound": (h.get("wound") or "").strip(),
             "secret": (h.get("secret") or "").strip(),
             "good_memory": (h.get("good_memory") or "").strip(),
@@ -307,12 +334,17 @@ def design_by_role(provider, seed: str = "", grounding: str = "", world="", role
 
 WORLD_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["genre", "tone", "setting", "situation"],
+    "required": ["genre", "tone", "setting", "situation", "pressure", "forces"],
     "properties": {
         "genre": {"type": "string"},
         "tone": {"type": "string"},
         "setting": {"type": "string"},
         "situation": {"type": "string"},
+        "pressure": {"type": "string"},   # the ROOT — the one standing world-level force everything grows from
+        "forces": {"type": "array", "items": {   # the proto-creeds: powers/factions contending over the pressure
+            "type": "object", "additionalProperties": False, "required": ["name", "stance"],
+            "properties": {"name": {"type": "string"},      # ONE coined word (never two words)
+                           "stance": {"type": "string"}}}},  # their answer to the pressure, and why it's defensible
     },
 }
 
@@ -328,16 +360,27 @@ WORLD_SYS = (
     "with invented gimmicks;\n"
     "• `situation` — 1-2 sentences: the circumstance that gathers THIS cast and keeps them in each "
     "other's orbit (the same school, the touring band, the dying town).\n"
-    "This WORLD is the HEART of the story — the most important prose you'll write here — so make it "
-    "EVOCATIVE and atmospheric: concrete sensory texture, mood, the real feel of the place. A measure of "
-    "lyricism is welcome and wanted. What you must AVOID is WHIMSY — the twee, precious, fanciful register: "
-    "invented cutesy mechanics, magical-realist gimmicks, metaphors treated as literal facts. FANTASY AND "
-    "SCI-FI ARE WELCOME: if the world has magic or its own tech, give it REAL, grounded rules (what's "
-    "possible, normal, forbidden, who controls it) — 'unlicensed transmutation is a crime', NOT 'essences "
-    "that sing to the worthy'. So: vivid and grounded, yes; fanciful and gimmicky, no. The bait shop can be "
-    "described beautifully — it still just sells bait.\n"
-    "Do NOT decide the premise, the central conflict, or the ending — those EMERGE from the characters. "
-    "Author only the stage. JSON only."
+    "• `pressure` — the ROOT: the ONE standing world-level force everything grows from — a CONDITION, "
+    "not an event (an ecology at its limit, a faith in decline, a resource running out, a power that "
+    "must be fed a life). This is the engine the story's central conflict AND its people's inner "
+    "contradictions will grow out of. State it as a standing pressure the world already lives under, "
+    "never as a plot that has started. (Rewrite's is a planet that can no longer afford humanity.)\n"
+    "• `forces` — 2-4 competing FORCES that have organized around the pressure: the factions, faiths, "
+    "orders or powers that each ANSWER it differently and each believe they are RIGHT. This is where the "
+    "central conflict is SEEDED — none is a villain, each is defensible. Each: a `name` (ONE coined word "
+    "— never two words, never 'The Adjective Noun': Crownsworn, Unbound, Gaia — NOT 'Harvest Binding') "
+    "and a `stance` (their answer to the pressure and why a good person would hold it).\n"
+    "This WORLD is the foundation of the story, so write it PLAINLY and CONCRETELY: a specific place, era, "
+    "and the social/economic texture, the real feel of it rendered in ordinary detail. Do NOT reach for "
+    "EVOCATIVE or LYRICAL prose — specificity carries a world; lyricism is what tips it into WHIMSY, the "
+    "twee, precious, fanciful register you must avoid (invented cutesy mechanics, magical-realist gimmicks, "
+    "metaphors treated as literal facts). FANTASY AND SCI-FI ARE WELCOME: if the world has magic or its own "
+    "tech, give it REAL, grounded rules (what's possible, normal, forbidden, who controls it) — 'unlicensed "
+    "transmutation is a crime', NOT 'essences that sing to the worthy'. So: specific and grounded, yes; "
+    "fanciful, lyrical, or gimmicky, no. The bait shop is described precisely — it still just sells bait.\n"
+    "Do NOT decide the plot or the ending — those EMERGE from the characters. But DO set the `pressure` "
+    "and the `forces` contending over it: that is the engine the premise and the cast's contradictions "
+    "grow from — a stage with a standing pressure, not an inert backdrop. JSON only."
 )
 
 
@@ -350,16 +393,21 @@ def design_world(provider, seed: str = "") -> dict:
     prompt = (f"STORY IDEA:\n{seed}\n\n" if seed else "") + "Establish the world (the stage, not the plot)."
     res = provider.generate_text(system=WORLD_SYS, prompt=prompt, emits=WORLD_SCHEMA)
     d = _data(res)
+    forces = [{"name": (f.get("name") or "").strip(), "stance": (f.get("stance") or "").strip()}
+              for f in (d.get("forces") or []) if isinstance(f, dict) and (f.get("name") or "").strip()]
     return {"genre": (d.get("genre") or "").strip(), "tone": (d.get("tone") or "").strip(),
-            "setting": (d.get("setting") or "").strip(), "situation": (d.get("situation") or "").strip()}
+            "setting": (d.get("setting") or "").strip(), "situation": (d.get("situation") or "").strip(),
+            "pressure": (d.get("pressure") or "").strip(), "forces": forces}
 
 
-_WORLD_FIELDS = ("genre", "tone", "setting", "situation")
+_WORLD_FIELDS = ("genre", "tone", "setting", "situation", "pressure")
 _FIELD_GUIDE = {
     "genre": "a couple words (e.g. contemporary realist drama, low fantasy, near-future sci-fi)",
     "tone": "the emotional register, a few words",
     "setting": "2-3 SPECIFIC sentences — place, era, social texture, and any non-realist rules of this world",
     "situation": "1-2 sentences — the circumstance that gathers THIS cast and keeps them in each other's orbit",
+    "pressure": "the ROOT — the ONE standing world-level force everything grows from (a condition, not an "
+                "event): an ecology at its limit, a faith in decline, a power that must be fed a life",
 }
 
 
@@ -370,11 +418,11 @@ def regen_world_field(provider, world, field: str, seed: str = "") -> str:
     rest = world_brief({k: v for k, v in (world or {}).items() if k != field})
     system = (f"You revise ONE field of a story's WORLD frame: the `{field}` — {_FIELD_GUIDE[field]}. Keep it "
               f"consistent with the rest of the world, but give a FRESH, genuinely DIFFERENT take (not a "
-              f"paraphrase of what's there). This world is the HEART of the story, so be EVOCATIVE and "
-              f"atmospheric — a measure of lyricism is welcome — but AVOID WHIMSY: no twee/precious conceits, "
+              f"paraphrase of what's there). Write it PLAINLY and CONCRETELY — specificity carries a world; "
+              f"do NOT reach for evocative or lyrical prose, which tips into WHIMSY: no twee/precious conceits, "
               f"no invented cutesy mechanics, no metaphors-as-fact. Fantasy/sci-fi rules are welcome but "
-              f"GROUNDED and real ('unlicensed transmutation is a crime', not 'essences that sing'). Vivid and "
-              f"grounded, yes; fanciful, no. Output ONLY the new {field} text — no label, no quotes, nothing else.")
+              f"GROUNDED and real ('unlicensed transmutation is a crime', not 'essences that sing'). Specific and "
+              f"grounded, yes; fanciful or lyrical, no. Output ONLY the new {field} text — no label, no quotes, nothing else.")
     prompt = ((f"STORY IDEA: {seed.strip()}\n\n" if (seed or '').strip() else "")
               + (f"THE REST OF THE WORLD:\n{rest}\n\n" if rest else "")
               + f"Write a fresh {field}.")
@@ -386,6 +434,61 @@ def regen_world_field(provider, world, field: str, seed: str = "") -> str:
     return txt.strip('"').strip()
 
 
+def compose_world(frame: dict | None = None, substrate: dict | None = None,
+                  particulars: list | None = None) -> dict:
+    """Fold the genesis draft (the design_world FRAME + the SUBSTRATE soul + the lived PARTICULARS)
+    into the ONE persisted `Story.world` — the permanent foundation premise & theme distils from.
+    The ache/preoccupation IS the pressure; forces come from either layer. Empty keys are dropped so
+    a thin world stays thin. Pure — self-checks in __main__."""
+    frame = frame if isinstance(frame, dict) else {}
+    sub = substrate if isinstance(substrate, dict) else {}
+    parts = particulars if isinstance(particulars, list) else []
+    forces = frame.get("forces") or sub.get("forces") or []
+    out = {
+        "genre": (frame.get("genre") or "").strip(), "tone": (frame.get("tone") or "").strip(),
+        "setting": (frame.get("setting") or "").strip(), "situation": (frame.get("situation") or "").strip(),
+        "place": (sub.get("place") or "").strip(),
+        "pressure": (frame.get("pressure") or sub.get("preoccupation") or "").strip(),
+        "forces": [{"name": (f.get("name") or "").strip(), "stance": (f.get("stance") or "").strip()}
+                   for f in forces if isinstance(f, dict) and (f.get("name") or "").strip()],
+        "traditions": [{"name": (t.get("name") or "").strip(), "logic": (t.get("logic") or "").strip()}
+                       for t in (sub.get("traditions") or []) if isinstance(t, dict) and (t.get("name") or "").strip()],
+        "people": [{"name": (p.get("name") or "").strip(), "life": (p.get("life") or "").strip()}
+                   for p in (sub.get("people") or []) if isinstance(p, dict) and (p.get("name") or "").strip()],
+        "fragments": [{"kind": (q.get("kind") or "").strip(), "text": (q.get("text") or "").strip()}
+                      for q in parts if isinstance(q, dict) and (q.get("text") or "").strip()],
+    }
+    return {k: v for k, v in out.items() if v}
+
+
+def world_full_brief(world: dict | None) -> str:
+    """The FULL persisted world as a foundation block — pressure/ache, forces, traditions, people, and
+    lived fragments — for the premise & theme DISTILLATION (which must read the whole world, not a thin
+    logline). '' when the world is empty (then premise-gen has nothing to distil from). See compose_world."""
+    if not isinstance(world, dict) or not world:
+        return ""
+    lines = []
+    for k in ("genre", "tone", "setting", "situation", "place"):
+        if (world.get(k) or "").strip():
+            lines.append(f"{k.capitalize()}: {world[k].strip()}")
+    if (world.get("pressure") or "").strip():
+        lines.append(f"PRESSURE (the ache — the one standing force everything grows from): {world['pressure'].strip()}")
+    for f in (world.get("forces") or []):
+        if (f.get("name") or "").strip():
+            lines.append(f"FORCE — {f['name']}: {(f.get('stance') or '').strip()}")
+    for t in (world.get("traditions") or []):
+        if (t.get("name") or "").strip():
+            lines.append(f"TRADITION — {t['name']}: {(t.get('logic') or '').strip()}")
+    for p in (world.get("people") or []):
+        if (p.get("name") or "").strip():
+            lines.append(f"PERSON — {p['name']}: {(p.get('life') or '').strip()}")
+    frags = [q for q in (world.get("fragments") or []) if (q.get("text") or "").strip()]
+    if frags:
+        lines.append("LIVED FRAGMENTS (the world shown; the rule withheld):")
+        lines += [f"  · [{(q.get('kind') or '').strip()}] {q['text'].strip()}" for q in frags]
+    return "\n".join(lines)
+
+
 def world_brief(world) -> str:
     """Compose a WORLD frame (dict of genre/tone/setting/situation, or a plain string) into a grounding
     block for the cast-generation prompts. Empty when there's no world."""
@@ -395,6 +498,12 @@ def world_brief(world) -> str:
         return ""
     lines = [f"{k.capitalize()}: {world[k].strip()}" for k in ("genre", "tone", "setting", "situation")
              if (world.get(k) or "").strip()]
+    if (world.get("pressure") or "").strip():
+        lines.append(f"Pressure (the standing force everything grows from): {world['pressure'].strip()}")
+    forces = [f for f in (world.get("forces") or []) if isinstance(f, dict) and (f.get("name") or "").strip()]
+    if forces:
+        lines.append("Forces contending over it (each defensible, none a villain): "
+                     + "; ".join(f"{f['name']} — {(f.get('stance') or '').strip()}" for f in forces))
     return "\n".join(lines)
 
 
@@ -430,7 +539,8 @@ WEAVE_SYS = (
 def _harness_brief(harnesses: list[dict]) -> str:
     return "\n".join(
         f"- {h.get('id')} [{h.get('role', '')}] {h.get('temperament', '')} | "
-        f"want: {h.get('want', '')}; lie: {h.get('lie', '')}; secret: {h.get('secret', '')}"
+        f"want: {h.get('want', '')}; lie: {h.get('lie', '')}; "
+        f"contradiction: {h.get('contradiction', '')}; secret: {h.get('secret', '')}"
         for h in harnesses)
 
 
@@ -536,13 +646,14 @@ _STR_LIST = {"type": "array", "items": {"type": "string"}}
 
 FORMALIZE_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["name", "temperament", "want", "lie", "wound", "secret",
+    "required": ["name", "temperament", "want", "lie", "contradiction", "wound", "secret",
                  "good_memory", "background", "hobbies", "sayings", "relationships"],
     "properties": {
         "name": {"type": "string"},
         "temperament": {"type": "string"},
         "want": {"type": "string"},
         "lie": {"type": "string"},
+        "contradiction": {"type": "string"},
         "wound": {"type": "string"},
         "secret": {"type": "string"},
         "good_memory": {"type": "string"},
@@ -564,9 +675,11 @@ FORMALIZE_SCHEMA = {
 
 FORMALIZE_SYS = (
     "You are given a character's PSYCHOLOGY and biography — a Big Five-grounded `temperament`, their "
-    "`want` / `lie` / `wound` (a real past trauma) / `secret`, and a `good_memory` (a cherished moment) — "
-    "plus the roles of the OTHERS in the cast. Turn it into a legible person whose VOICE is GROUNDED in "
-    "that psychology. Invent nothing the harness contradicts.\n"
+    "`want` / `lie` / `contradiction` / `wound` (a real past trauma) / `secret`, and a `good_memory` (a "
+    "cherished moment) — plus the roles of the OTHERS in the cast. Turn it into a legible person whose "
+    "VOICE is GROUNDED in that psychology. Invent nothing the harness contradicts. The `contradiction` is "
+    "the character's engine — the self-defeat where their want expresses as its OPPOSITE in action (they "
+    "push away the thing they most want, and it reads as love/duty not fear); their VOICE must carry it.\n"
     "VOICE (the point — this is what makes them real): `sayings`, 6-8 lines of REAL speech that reveal "
     "this person IN MOTION. Do NOT write one tidy line per trait — a line-per-label is a worksheet, not a "
     "person. Each line is a SITUATED moment — someone pushed a button, asked a question, got too close, "
@@ -585,14 +698,14 @@ FORMALIZE_SYS = (
     "in one line (he doesn't recite facts in a vacuum — he grabs for facts the instant an emotion threatens, "
     "so write the trigger AND the dodge, not just the dodge);\n"
     "  • the warmth of the GOOD MEMORY; the WANT pulling at them; the LIE they don't know they're saying;\n"
-    "  • at least ONE line that COMPLICATES the obvious read of them — a contradiction, an exception, a "
-    "moment they surprise you.\n"
+    "  • the CONTRADICTION made audible — at least one line where they push away the very thing they want "
+    "(a refusal that is really a plea, warmth delivered as a shove, 'go' meaning 'stay'); this one must land.\n"
     "Each must sound like THIS specific person. FIGHT the smooth, witty, emotionally-articulate default "
     "voice — let them be flat, blunt, awkward, repetitive, or guarded if that's who the harness says they "
     "are.\n"
     "PERSON: a fitting `name`; a `background` (2-3 sentences — where they come from, their situation now); "
-    "`hobbies` (2-4 concrete things they actually do). Echo back `temperament`, `want`, `lie`, `wound`, "
-    "`secret`, `good_memory` consistent with the input.\n"
+    "`hobbies` (2-4 concrete things they actually do). Echo back `temperament`, `want`, `lie`, "
+    "`contradiction`, `wound`, `secret`, `good_memory` consistent with the input.\n"
     "Then `relationships` to the others — `target` (their role/name EXACTLY as listed), `nature`, "
     "`dynamic` (2-3 words for how they feel now), `stance` (devoted/warm/neutral/strained/hostile), `note` "
     "(the asymmetry or secret). Only to characters in the cast list. Keep every list ITEM short. JSON only."
@@ -636,7 +749,8 @@ def formalize_harness(provider, blurb: str, role: str = "", others=None, world="
                      "note": (r.get("note") or "").strip()})
     return {"name": (d.get("name") or "").strip(),
             "temperament": (d.get("temperament") or "").strip(), "want": (d.get("want") or "").strip(),
-            "lie": (d.get("lie") or "").strip(), "wound": (d.get("wound") or "").strip(),
+            "lie": (d.get("lie") or "").strip(), "contradiction": (d.get("contradiction") or "").strip(),
+            "wound": (d.get("wound") or "").strip(),
             "secret": (d.get("secret") or "").strip(), "good_memory": (d.get("good_memory") or "").strip(),
             "background": (d.get("background") or "").strip(),
             "hobbies": _strs(d.get("hobbies")), "sayings": _strs(d.get("sayings"), 8),
@@ -857,6 +971,8 @@ def persona_from_harness(h: dict) -> str:
         bits.append(f"They want {h['want']}.")
     if h.get("lie"):
         bits.append(f"They believe, falsely, that {h['lie']}.")
+    if h.get("contradiction"):
+        bits.append(f"Their self-defeat: {h['contradiction']}.")
     if h.get("wound"):
         bits.append(f"Beneath it is an old wound: {h['wound']}.")
     if h.get("good_memory"):

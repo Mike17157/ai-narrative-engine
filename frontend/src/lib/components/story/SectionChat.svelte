@@ -1,14 +1,16 @@
 <script>
-  // The SECTION EDITOR — a left-docked agent scoped to ONE section (the active tab's layer). You
-  // talk; it proposes TARGETED ops (set a field, merge one key, upsert/remove one item) that each
-  // touch a single part of the section's JSON — never a whole-doc rewrite. Ops show as approve
-  // cards; approving applies via /card/{layer}/ops and reloads the story so the tab reflects it.
-  import { post } from '$lib/api.js';
+  // The SECTION EDITOR — a story-level agent (mounted in the story shell) scoped to the CURRENT view's
+  // layer. You talk; it emits HASH-ANCHORED ops (set a field, merge one key, remove one item) that each
+  // point at a node by path + the #hash it saw. Edits APPLY AUTOMATICALLY and each shows an Undo — no
+  // approve step. A stale anchor (the node changed elsewhere since) is REJECTED, never silently over-
+  // written; the writer is told which paths drifted and can ask again. Undo restores the exact field
+  // values snapshotted before the edit. Apply failures surface as a clear error, never a silent break.
+  import { post, put } from '$lib/api.js';
   import { loadStory } from '$lib/stories.svelte.js';
 
-  let { storyKey, layer, layerLabel = '' } = $props();
+  let { storyKey, layer, layerLabel = '', onCollapse = null } = $props();
 
-  let convo = $state([]);      // [{role, content, ops?}]
+  let convo = $state([]);      // [{role, content, applied?, rejected?, before?, undone?, failed?}]
   let typed = $state('');
   let busy = $state(false);
   let err = $state('');
@@ -19,57 +21,72 @@
   let seen = layer;
   $effect(() => { if (layer !== seen) { seen = layer; convo = []; err = ''; } });
 
+  // ONE call: the agent answers (question) OR emits anchored ops. The backend verifies each anchor
+  // against the live story, applies the non-stale ones, and returns the pre-edit values for undo.
   async function send() {
     const t = typed.trim(); if (!t || busy) return;
     typed = ''; busy = true; err = '';
     convo = [...convo, { role: 'user', content: t }]; scroll();
-    const messages = convo.filter((m) => m.role).map((m) => ({ role: m.role, text: m.content }));
+    const messages = convo.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.content }));
     const r = await post(`/stories/${storyKey}/card/${layer}/chat`, { messages });
     busy = false;
-    if (r.ok) {
-      convo = [...convo, { role: 'assistant', content: r.data.reply || 'Okay.',
-                           ops: (r.data.ops || []).map((o) => ({ ...o })) }];
-      scroll();
-    } else err = r.data?.error || 'editor failed';
-  }
-  async function apply(op) {
-    if (op.done || busy) return;
-    busy = true;
-    const r = await post(`/stories/${storyKey}/card/${layer}/ops`, { ops: [op] });
-    busy = false;
-    if (r.ok && r.data.applied?.length) {
-      op.done = true; convo = [...convo];
+    if (!r.ok) { err = r.data?.error || 'editor failed'; return; }
+    const d = r.data || {};
+    const reply = d.reply || 'Okay.';
+    if (d.error) { convo = [...convo, { role: 'assistant', content: reply, failed: d.error }]; scroll(); return; }
+    if (d.applied?.length) {
       await loadStory(storyKey);
       window.dispatchEvent(new CustomEvent('queue:refresh'));
-    } else err = r.data?.error || 'could not apply';
+      convo = [...convo, { role: 'assistant', content: reply,
+                           applied: d.applied, rejected: d.rejected || [], before: d.before }];
+    } else if (d.rejected?.length) {
+      // All ops were stale/invalid — nothing applied, but tell the writer why.
+      convo = [...convo, { role: 'assistant', content: reply, rejected: d.rejected, before: d.before }];
+    } else {
+      convo = [...convo, { role: 'assistant', content: reply }];   // a question / discussion — no edit
+    }
+    scroll();
   }
-  const dismiss = (op) => { op.gone = true; convo = [...convo]; };
-  const opText = (o) => o.summary
-    || `${o.op} ${o.field}${o.key ? '.' + o.key : ''}${o.id ? ' · ' + o.id : ''}`;
+
+  async function undo(m) {
+    if (!m.before || m.undone || busy) return;
+    busy = true;
+    const r = await put(`/stories/${storyKey}`, m.before);   // restore the exact pre-edit field values
+    busy = false;
+    if (r.ok) { m.undone = true; convo = [...convo]; await loadStory(storyKey); window.dispatchEvent(new CustomEvent('queue:refresh')); }
+    else err = r.data?.error || 'could not undo';
+  }
 </script>
 
 <aside class="schat">
-  <div class="sh"><span class="dot"></span>Editing <b>{layerLabel || layer}</b></div>
+  <div class="sh"><span class="dot"></span>Editing <b>{layerLabel || layer}</b>
+    {#if onCollapse}<button class="collapse" onclick={onCollapse} title="Hide editor" aria-label="Hide editor">⟨</button>{/if}</div>
   <div class="log" bind:this={scroller}>
     {#if !convo.length}
       <div class="hint">Tell the editor what to change in this section — “make the tone wryer”,
-        “rename the arc to Paper Lanterns”, “give Mara a rival named Toll”. It proposes small,
-        targeted edits you approve one by one.</div>
+        “rename the arc to Paper Lanterns”, “give Mara a rival named Toll”. Edits apply right away;
+        each one has an <b>Undo</b>. If a node changed since the editor last saw it, that edit is
+        flagged <b>stale</b> — ask again and it’ll re-read.</div>
     {/if}
     {#each convo as m, i (i)}
       <div class="msg {m.role}">{m.content}</div>
-      {#each (m.ops || []) as op, j (j)}
-        {#if !op.gone}
-          <div class="op" class:done={op.done}>
-            <span class="opl">{opText(op)}</span>
-            {#if op.done}<span class="ok">✓ applied</span>
-            {:else}
-              <button class="app" onclick={() => apply(op)}>Apply</button>
-              <button class="dis" onclick={() => dismiss(op)} aria-label="Dismiss">✕</button>
-            {/if}
+      {#if m.applied?.length}
+        <div class="applied">
+          <div class="al">
+            <span class="tick">✓</span>
+            <span class="ax">{m.applied.map((o) => o.path).join(', ')}</span>
           </div>
-        {/if}
-      {/each}
+          {#if m.undone}<span class="undone">↩ undone</span>
+          {:else}<button class="undo" onclick={() => undo(m)} disabled={busy}>Undo</button>{/if}
+        </div>
+      {/if}
+      {#if m.rejected?.length}
+        <div class="stale">
+          ⚠ {m.rejected.length} edit(s) not applied —
+          {m.rejected.map((r) => r.path).join(', ')} {m.rejected[0]?.reason || 'stale'}
+        </div>
+      {/if}
+      {#if m.failed}<div class="failed">⚠ couldn’t apply — {m.failed}</div>{/if}
     {/each}
     {#if busy}<div class="msg assistant pending"><span class="dots"><i></i><i></i><i></i></span></div>{/if}
     {#if err}<div class="err">⚠ {err}</div>{/if}
@@ -82,26 +99,34 @@
 </aside>
 
 <style>
-  .schat { position: fixed; left: 0; top: var(--chrome-top, 86px); bottom: 0; width: 320px; z-index: 40;
+  .schat { position: fixed; left: var(--storynav-w, 0); top: var(--chrome-top, 86px); bottom: 0; width: 320px; z-index: 40;
            display: flex; flex-direction: column; background: var(--panel, #14161f);
            border-right: 1px solid var(--border, #2a2f44); }
   .sh { display: flex; align-items: center; gap: 7px; padding: 11px 13px; flex: none;
         border-bottom: 1px solid var(--border-soft); font-size: 12.5px; color: var(--muted); }
   .sh b { color: var(--text); text-transform: capitalize; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); flex: none; }
+  .collapse { margin-left: auto; width: 22px; height: 22px; display: grid; place-items: center; padding: 0;
+              background: none; border: 1px solid transparent; border-radius: 6px; color: var(--faint); font-size: 12px; cursor: pointer; }
+  .collapse:hover { color: var(--text); background: var(--elev); }
   .log { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
   .hint { color: var(--faint); line-height: 1.6; font-style: italic; font-size: 12.5px; }
+  .hint b { color: var(--muted); font-style: normal; }
   .msg { max-width: 90%; font-size: 13px; line-height: 1.45; padding: 8px 11px; border-radius: 12px; white-space: pre-wrap; word-break: break-word; }
   .msg.user { align-self: flex-end; background: var(--accent, #6d8cff); color: #0b0e14; border-bottom-right-radius: 4px; }
   .msg.assistant { align-self: flex-start; background: var(--elev, #1b1e2b); color: var(--text); border: 1px solid var(--border-soft); border-bottom-left-radius: 4px; }
-  .op { align-self: flex-start; max-width: 92%; display: flex; align-items: center; gap: 7px;
-        padding: 6px 9px; border-radius: 9px; background: var(--elev); border: 1px solid var(--border-soft);
-        border-left: 2px solid var(--accent); }
-  .op.done { border-left-color: var(--good, #6ec77f); opacity: .8; }
-  .opl { flex: 1; min-width: 0; font-size: 11.5px; color: var(--text); }
-  .app { font-size: 11px; padding: 3px 10px; border-radius: 7px; border: none; background: var(--accent); color: #0b0e14; cursor: pointer; }
-  .dis { width: 22px; height: 22px; padding: 0; border-radius: 6px; background: var(--elev-2, var(--bg)); border: 1px solid var(--border-soft); color: var(--muted); cursor: pointer; }
-  .ok { font-size: 11px; color: var(--good, #6ec77f); }
+  .applied { align-self: stretch; display: flex; align-items: center; gap: 8px; padding: 6px 9px; border-radius: 9px;
+             background: color-mix(in srgb, var(--good, #6ec77f) 10%, transparent); border: 1px solid color-mix(in srgb, var(--good, #6ec77f) 30%, transparent); }
+  .al { flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px; }
+  .tick { color: var(--good, #6ec77f); font-size: 12px; flex: none; }
+  .ax { font-size: 11.5px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .undo { flex: none; font-size: 11px; padding: 3px 11px; border-radius: 7px; border: 1px solid var(--border-soft);
+          background: var(--elev); color: var(--muted); cursor: pointer; }
+  .undo:hover:not(:disabled) { color: var(--text); border-color: var(--muted); }
+  .undone { flex: none; font-size: 11px; color: var(--faint); }
+  .stale { align-self: stretch; font-size: 11.5px; color: var(--warn, #d8b35a); padding: 6px 9px; border-radius: 9px;
+           background: color-mix(in srgb, var(--warn, #d8b35a) 9%, transparent); border: 1px solid color-mix(in srgb, var(--warn, #d8b35a) 28%, transparent); }
+  .failed { align-self: stretch; font-size: 11.5px; color: var(--bad, #d0655a); padding: 6px 9px; border-radius: 9px;
+            background: color-mix(in srgb, var(--bad, #d0655a) 8%, transparent); border: 1px solid color-mix(in srgb, var(--bad, #d0655a) 25%, transparent); }
   .err { font-size: 12px; color: var(--bad, #d0655a); }
   .dots { display: inline-flex; gap: 4px; } .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
   .dots i:nth-child(2){animation-delay:.2s;} .dots i:nth-child(3){animation-delay:.4s;}

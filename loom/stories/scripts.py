@@ -465,8 +465,10 @@ def remove_relationship(doc, *, _id, source, target):
 # locations/places/scenes when present (validated then); otherwise recorded as given.
 
 def _place_ids(doc) -> set:
+    """Every location/scene id in the story (for connect_scenes validation). Scenes live on
+    locations now (the old `places` collection is gone)."""
     ids = set()
-    for key in ("locations", "places", "scenes"):
+    for key in ("locations", "scenes"):
         for it in doc.get(key) or []:
             if isinstance(it, dict) and it.get("id"):
                 ids.add(str(it["id"]))
