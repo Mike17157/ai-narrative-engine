@@ -131,6 +131,47 @@ def test_self_heal_leaves_valid_refs_alone():
     assert d == before   # nothing touched
 
 
+def test_story_reference_errors_flags_unknown_cast():
+    from loom.config.schema import story_reference_errors
+    story = {"cast": [{"character": "eli"}, {"character": "bram"}]}
+    assert story_reference_errors(story, {"eli"}) == ["casts unknown character 'bram'"]
+    assert story_reference_errors(story, {"eli", "bram"}) == []   # both known → clean
+
+
+def test_self_heal_drops_phantom_cast_and_cascades():
+    # A section edit invented a cast member ('bram') with no character record, and bonded it. The
+    # heal must drop the phantom AND its bond, while a valid co-edit (the eli↔mara bond) survives —
+    # so one bad op no longer nukes the whole turn, and the result stays Story-valid.
+    from loom.server.context import _self_heal_refs
+    from loom.config.schema import Story
+    d = {
+        "name": "T", "type": "novel",
+        "cast": [{"character": "eli"}, {"character": "mara"}, {"character": "bram"}],
+        "relationships": [{"id": "r1", "source": "eli", "target": "mara"},
+                          {"id": "r2", "source": "eli", "target": "bram"}],
+        "arcs": [{"id": "a1", "name": "A", "owner": "bram", "cast": ["eli", "bram"]}],
+        "locations": [{"id": "home", "name": "Home",
+                       "scenes": [{"id": "s1", "character": "bram", "characters": ["eli", "bram"]}]}],
+        "scenes": [],
+    }
+    repairs = _self_heal_refs(d, {"eli", "mara"})
+    assert repairs and "bram" in repairs[0]
+    assert [m["character"] for m in d["cast"]] == ["eli", "mara"]          # phantom dropped
+    assert [r["id"] for r in d["relationships"]] == ["r1"]                 # bad bond gone, good survives
+    assert d["arcs"][0]["cast"] == ["eli"] and d["arcs"][0]["owner"] == ""  # arc refs cascaded
+    assert d["locations"][0]["scenes"][0]["character"] is None
+    assert d["locations"][0]["scenes"][0]["characters"] == ["eli"]
+    Story(**d)   # the healed story is valid — no raise
+
+
+def test_self_heal_without_known_chars_leaves_cast_alone():
+    # Omitting known_chars keeps the old location-only behaviour (never touches cast).
+    from loom.server.context import _self_heal_refs
+    d = {"cast": [{"character": "whoever"}], "locations": [], "scenes": []}
+    assert _self_heal_refs(d) == []
+    assert [m["character"] for m in d["cast"]] == ["whoever"]
+
+
 def test_scene_on_location_anchored_to_cast_key():
     # A scene's character must be a cast key
     d = copy.deepcopy(_story())

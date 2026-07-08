@@ -536,6 +536,21 @@ class Story(BaseModel):
         return self
 
 
+def story_reference_errors(story: dict, known_chars) -> list[str]:
+    """Cross-aggregate integrity: a story may only cast characters that actually EXIST in the
+    registry. Returns one message per cast member whose `character` key isn't in `known_chars`
+    (empty list = clean). Pure + dict-based so the write chokepoint can run it BEFORE persisting —
+    the invariant Settings._validate_references enforces store-wide, checkable one story at a time
+    without building a whole Settings. See context.update_story_fields / _write_story_data."""
+    known = set(known_chars or ())
+    errs: list[str] = []
+    for m in (story.get("cast") or []):
+        ck = m.get("character") if isinstance(m, dict) else getattr(m, "character", None)
+        if ck and ck not in known:
+            errs.append(f"casts unknown character '{ck}'")
+    return errs
+
+
 # --------------------------------------------------------------------------- #
 # LoRA subsystem (self-contained: a typed library + named, routable stacks)
 # --------------------------------------------------------------------------- #
@@ -722,9 +737,11 @@ class Settings(BaseModel):
                         f"'{step.model}' is kind '{model.kind}' (expected '{expected}')"
                     )
         # The story cast roster must be real characters (presence is dynamic at
-        # run time, so there's no per-location cast to check).
+        # run time, so there's no per-location cast to check). Shared with the write
+        # chokepoint via story_reference_errors so both gate on the same rule.
+        known = set(self.characters)
         for tname, story in self.stories.items():
-            for member in story.cast:
-                if member.character not in self.characters:
-                    raise ValueError(f"story '{tname}' casts unknown character '{member.character}'")
+            errs = story_reference_errors({"cast": [{"character": m.character} for m in story.cast]}, known)
+            if errs:
+                raise ValueError(f"story '{tname}' {errs[0]}")
         return self

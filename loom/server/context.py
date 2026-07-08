@@ -53,12 +53,19 @@ _ROLE_LABELS = {
 _IMG_URL_RE = re.compile(r"https?://[^\s\"'<>)]+?\.(?:png|jpe?g|webp|gif)", re.IGNORECASE)
 
 
-def _self_heal_refs(data: dict) -> None:
-    """Drop the REPAIRABLE dangling references in a raw story dict, in place. These are the ones
-    where "the target was deleted, so forget the pointer" is always the right move — clearing them
-    lets an unrelated edit succeed instead of being blocked by Story._check_references. References
-    we do NOT auto-repair (a relationship pointing at a deleted character — ambiguous, not a simple
-    drop) are left for the validator to raise on. Mirrors the old `start`-only self-heal."""
+def _self_heal_refs(data: dict, known_chars=None) -> list[str]:
+    """Drop the REPAIRABLE dangling references in a raw story dict, in place, and return a list of
+    human-readable notes on what was healed (empty = nothing). These are the refs where "the target
+    was deleted/never existed, so forget the pointer" is always the right move — clearing them lets
+    an unrelated edit succeed instead of being blocked by the validators.
+
+    When `known_chars` is given, ALSO heals the cross-aggregate case: a cast member whose `character`
+    isn't a real character record (what Settings._validate_references rejects) is dropped, and every
+    intra-story ref to that key is CASCADE-dropped (bonds, scene anchors, arc cast/owner) so the
+    story stays valid for Story._check_references. This is the guard that stops a section-edit from
+    inventing a cast member with no character behind it (create_character is the integrity-preserving
+    path for new people). Omit `known_chars` to keep the location-only heal (unchanged behaviour)."""
+    repairs: list[str] = []
     loc_ids = {l.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)}
     scene_ids = {s.get("id") for l in (data.get("locations") or []) if isinstance(l, dict)
                  for s in (l.get("scenes") or []) if isinstance(s, dict)}
@@ -83,6 +90,39 @@ def _self_heal_refs(data: dict) -> None:
     if data.get("start_scene") and not any(s.get("id") == data["start_scene"]
                                            for s in (data.get("scenes") or []) if isinstance(s, dict)):
         data["start_scene"] = ""
+
+    # cast.character → real character record (cross-aggregate). Only when we know the registry.
+    # Drop the phantom member AND cascade every intra-story ref to its key, or Story._check_references
+    # would raise on the now-orphaned bonds/scenes/arcs.
+    if known_chars is not None:
+        known = set(known_chars or ())
+        cast = [m for m in (data.get("cast") or []) if isinstance(m, dict)]
+        phantom = {m.get("character") for m in cast if m.get("character") and m.get("character") not in known}
+        if phantom:
+            data["cast"] = [m for m in cast if m.get("character") not in phantom]
+            # bonds touching a phantom
+            data["relationships"] = [r for r in (data.get("relationships") or [])
+                                     if isinstance(r, dict) and r.get("source") not in phantom
+                                     and r.get("target") not in phantom]
+            # scene anchors on locations
+            for l in (data.get("locations") or []):
+                for s in (l.get("scenes") or []) if isinstance(l, dict) else []:
+                    if isinstance(s, dict):
+                        if s.get("character") in phantom:
+                            s["character"] = None
+                        if isinstance(s.get("characters"), list):
+                            s["characters"] = [c for c in s["characters"] if c not in phantom]
+            # arc cast / owner
+            for a in (data.get("arcs") or []):
+                if not isinstance(a, dict):
+                    continue
+                if isinstance(a.get("cast"), list):
+                    a["cast"] = [c for c in a["cast"] if c not in phantom]
+                if a.get("owner") in phantom:
+                    a["owner"] = ""
+            repairs.append("dropped cast member(s) with no character record: "
+                           + ", ".join(sorted(str(p) for p in phantom)))
+    return repairs
 
 
 class AppContext:
@@ -930,14 +970,24 @@ class AppContext:
         return story
 
     def _write_story_data(self, key: str, data: dict) -> None:
-        """Validate + persist a whole story dict to its JSON file, keeping the embedded characters."""
-        from ..config.schema import Story
+        """Validate + persist a whole story dict to its JSON file, keeping the embedded characters.
+
+        Validates BEFORE the disk write — both the intra-story shape (Story) AND the cross-aggregate
+        cast→character invariant (story_reference_errors). The latter used to be caught only at the
+        post-write reload_settings(), so a bad cast member was persisted to disk before the error
+        fired (corrupting the file, breaking the next load). Checking it here means a broken write
+        NEVER touches disk."""
+        from ..config.schema import Story, story_reference_errors
         from ..stories import story_db as SDB
-        Story(**data)   # validate FIRST — never persist a corrupt story
+        Story(**data)   # intra-story refs (Story._check_references)
         db = self._story_file(key)
         if db is None:
             raise FileNotFoundError(key)
         _story, chars = SDB.load_story(db)
+        known = set(chars) | set(self.base_settings.characters)
+        errs = story_reference_errors(data, known)
+        if errs:
+            raise ValueError(f"story '{key}' {errs[0]}")
         SDB.save_story(db, data, chars)
         self.reload_settings()
 
@@ -1012,15 +1062,20 @@ class AppContext:
                 yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
         self.reload_settings()
 
-    def update_story_fields(self, key: str, fields: dict) -> None:
-        """Patch top-level fields onto a saved story + reload. VALIDATES the merged story BEFORE
-        writing, after SELF-HEALING the repairable dangling references — so a pre-existing stale
-        ref (e.g. a location was deleted) doesn't block every unrelated edit. Genuinely unrepairable
-        refs (a relationship pointing at a deleted character) still raise. See Story._check_references."""
+    def update_story_fields(self, key: str, fields: dict) -> list[str]:
+        """Patch top-level fields onto a saved story + reload. SELF-HEALS repairable dangling refs
+        BEFORE writing — including cast members with no character record (dropped + cascaded) — so a
+        bad op can't corrupt the file or block valid co-edits in the same turn. Returns the list of
+        repairs made (empty = none) so the caller can surface them to the writer. See _self_heal_refs
+        + _write_story_data (which validates cross-refs before the disk write)."""
+        from ..stories import story_db as SDB
         data = self._read_story_data(key)
         data.update(fields)
-        _self_heal_refs(data)
+        db = self._story_file(key)
+        known = (set(SDB.character_keys(db)) if db else set()) | set(self.base_settings.characters)
+        repairs = _self_heal_refs(data, known)
         self._write_story_data(key, data)
+        return repairs
 
     def persist_character_entry(self, key: str, doc: dict) -> None:
         """Persist one character's conversational field edits (the agent's `character:<key>` target).
