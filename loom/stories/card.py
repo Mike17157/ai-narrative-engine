@@ -79,7 +79,10 @@ def build_card(story: dict, manifests: dict[str, dict] | None = None,
     # overview — the frame + L0 style + the premise's structured components
     style = (story.get("art_style") or "").strip()
     parts = {k: v for k, v in (story.get("premise_parts") or {}).items() if (v or "").strip()}
-    part_ids = ("root", "question", "creeds", "tragedy", "protagonist", "stakes", "texture")
+    # Top-down world design: only the two HIGH-LEVEL parts are tracked — the principle (root) and the
+    # conflict (question). The old granular decomposition (creeds/tragedy/protagonist/stakes/texture)
+    # was dropped; enumerating it made the system fill a form instead of think.
+    part_ids = ("root", "question")
     overview = {
         "art_style": style or global_style,
         "art_style_source": "story" if style else "global",
@@ -179,7 +182,7 @@ if __name__ == "__main__":   # ponytail: one runnable check — build + todo + p
     assert ls["overview"]["content"]["art_style"] == "G." and ls["overview"]["content"]["art_style_source"] == "global"
     assert any("art style" in t for t in ls["overview"]["todo"])
     assert ls["overview"]["content"]["premise_parts"] == {"protagonist": "a woodcutter"}
-    assert any(t.startswith("components to write: root, question, creeds, tragedy,") for t in ls["overview"]["todo"]), ls["overview"]["todo"]
+    assert any(t.startswith("components to write: root, question") for t in ls["overview"]["todo"]), ls["overview"]["todo"]
     assert ls["plot"]["todo"], "empty plot must todo"
     assert any("place b" in t for t in ls["relationships"]["todo"]), ls["relationships"]["todo"]
     assert any("scene image missing: Home" in t for t in ls["map"]["todo"])

@@ -36,10 +36,14 @@
     return { layer: M[tab] ? tab : 'overview', label: M[tab] || 'Overview' };
   }
   let editor = $derived(editorFor(path, search));
-  let chatCollapsed = $state(ls(() => localStorage.getItem('loom.storychat.collapsed') === '1', false));
-  function toggleChat() { chatCollapsed = !chatCollapsed; ls(() => localStorage.setItem('loom.storychat.collapsed', chatCollapsed ? '1' : '0')); }
-  let showChat = $derived(!!editor && !chatCollapsed);
-  let chatW = $derived(showChat ? '336px' : '0px');
+  // Chat presentation: 'docked' (fixed left window) | 'modal' (centered overlay) | 'hidden'. Persisted.
+  const CHAT_LS = 'loom.storychat.mode';
+  let chatMode = $state(ls(() => localStorage.getItem(CHAT_LS) || 'docked', 'docked'));
+  function setChatMode(m) { chatMode = m; ls(() => localStorage.setItem(CHAT_LS, m)); }
+  const toggleCenter = () => setChatMode(chatMode === 'modal' ? 'docked' : 'modal');
+  const hideChat = () => setChatMode('hidden');
+  const showChatPanel = () => setChatMode('docked');
+  let chatW = $derived(!!editor && chatMode === 'docked' ? '336px' : '0px');   // modal/hidden don't offset the body
 </script>
 
 {#await storyPromise}
@@ -48,10 +52,16 @@
   {#if story && story.key === key}
     <div class="storyshell" style:--storynav-w={navW} style:--storychat-w={chatW}>
       <StoryNavigator collapsed={navCollapsed} onToggle={toggleNav} />
-      {#if showChat}
-        <SectionChat storyKey={key} layer={editor.layer} layerLabel={editor.label} onCollapse={toggleChat} />
-      {:else if editor}
-        <button class="chatreopen" onclick={toggleChat} title="Show editor" aria-label="Show editor">✎</button>
+      {#if editor}
+        <!-- Mounted whenever there's an editor (even when hidden) so the CONVERSATION survives
+             hide/show — SectionChat renders nothing while presentation==='hidden'. -->
+        <SectionChat storyKey={key} layer={editor.layer} layerLabel={editor.label}
+                     presentation={chatMode} onCenter={toggleCenter} onCollapse={hideChat}
+                     interview={!story.premise && !(story.premise_parts?.question)
+                                && (editor.layer === 'overview' || editor.layer === 'map')} />
+      {/if}
+      {#if chatMode === 'hidden' && editor}
+        <button class="chatreopen" onclick={showChatPanel} title="Show editor" aria-label="Show editor">✎</button>
       {/if}
       <div class="storybody">{@render children()}</div>
     </div>

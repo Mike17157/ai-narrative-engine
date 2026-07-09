@@ -18,10 +18,12 @@ import typer
 from .comfy.server import ComfyServer, LaunchConfig, detect_desktop_install, get_server, register_server
 from .config import load_settings, load_user
 from .engine import Runner
+from . import cli_story
 
 app = typer.Typer(add_completion=False, help="Declarative chat + image pipelines.")
 comfy_app = typer.Typer(help="Manage the ComfyUI image backend (connect or launch headless).")
 app.add_typer(comfy_app, name="comfy")
+app.add_typer(cli_story.app, name="story", help="Inspect/edit story data directly (no server).")
 
 
 def _load(root: Path):

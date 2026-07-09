@@ -303,12 +303,21 @@ def run_turn(ctx, body: dict) -> dict:
     if approved is not None:
         calls = [c for c in approved if isinstance(c, dict)]
     else:
+        # CLI-string tool protocol: the model emits `tool <name> <flags>` lines instead of native
+        # function-calling. The reference block (in the system prompt) shows the exact flag spelling;
+        # parse_cli_calls turns the reply back into {fn, params} dicts dispatched to the same canonical
+        # scripts.invoke. See graph_ops.cli_reference / parse_cli_calls. No subprocess, no shell.
+        system_with_tools = system + "\n\n" + GO.cli_reference(off) if off else system
         try:
-            res = provider.generate_text(system=system, prompt=prompt, tools=GO.tools_spec(off))
+            res = provider.generate_text(system=system_with_tools, prompt=prompt)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"graph-ops failed: {exc}", "_status": 500}
-        calls = res.tool_calls or []
-        reply_text = (getattr(res, "text", "") or "").strip()
+        raw_reply = (getattr(res, "text", "") or (res.data or {}).get("reply", "")
+                     if hasattr(res, "data") else "")
+        calls = GO.parse_cli_calls(raw_reply, off)
+        # The model's PROSE reply is the non-tool lines (anything not a `tool ` command).
+        reply_text = "\n".join(ln for ln in (raw_reply or "").splitlines()
+                               if not ln.strip().lower().startswith("tool ")).strip()
         if body.get("propose"):
             specs = {f.name for f in off}
             # In a DRAFT the relationships are described IN PROSE and formalized on ratify — never

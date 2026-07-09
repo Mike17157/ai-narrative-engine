@@ -1292,7 +1292,7 @@ def register(app, ctx):
         owning story DB (+ any global YAML), and remove its avatar/ref/portraits."""
         import shutil
 
-        from ...stories import story_db as _SDB
+        from ..services import story_store as _SS
         if key not in ctx.base_settings.characters:
             return JSONResponse({"error": "no such character"}, status_code=404)
         safe = re.sub(r"[^\w\-]+", "", key)
@@ -1300,14 +1300,13 @@ def register(app, ctx):
         # char_asset_dir/portrait_dir would otherwise point at the global pool, not the story folder.
         adir = ctx.char_asset_dir(key)
         pdir = ctx.portrait_dir(key)
-        # strip cast references across stories (routed: DB or YAML) + drop the embedded record
+        # strip cast references across stories + drop the embedded record from the relational store
         for skey, st in list(ctx.base_settings.stories.items()):
             kept = [m for m in st.cast if m.character != key]
             if len(kept) != len(st.cast):
                 ctx.update_story_fields(skey, {"cast": [m.model_dump() for m in kept]})
-            db = ctx._story_file(skey)
-            if db is not None and key in _SDB.character_keys(db):
-                _SDB.delete_character(db, key)
+            if key in _SS.character_keys(ctx.root, skey):
+                _SS.delete_character(ctx.root, skey, key)
         # on-disk binaries (in the story folder for owned chars, else the global library) + any YAML
         for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
             f = adir / fn

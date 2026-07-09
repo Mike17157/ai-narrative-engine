@@ -495,13 +495,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         system = system + "\n\n" + _cont_block.rstrip()
 
     # RELATIONSHIP PROJECTION: inject ONLY the web edges among the on-stage/referenced set — never
-    # the whole web every turn. JSON-backed stories PULL the relevant edges via an indexed scan.
-    from . import story_db as _SDB
+    # the whole web every turn. project_web filters the loaded story's edges to the focus set.
     from .genesis import project_web
     _focus = set(immediate)
-    _db = ctx._story_file(key)
-    _relset = (_SDB.relationships_for(_db, _focus) if _db is not None
-               else [r.model_dump() for r in st.relationships])
+    _relset = [r.model_dump() for r in st.relationships]
     _rel_block = ""
     if _relset:
         _proj = project_web(_relset, _focus)

@@ -853,18 +853,17 @@ class AppContext:
 
     def write_npc(self, npc: dict, story_key: str = "", ref_from: str | None = None,
                   base_prompt: str = "") -> str:
-        """Create a story-bound Character file (a generated NPC, or the duplicated
-        protagonist); returns its key. Tagged with its owning `story` so it's scoped /
-        grouped and hidden from global pickers. If `ref_from` is given, that character's
-        reference image is copied across. `base_prompt` (from the shared ✨ composer) is stored
-        as fields.base_prompt so the base image renders richly without a manual ✨ pass."""
-        from ..stories import story_db as SDB
+        """Create a story-bound Character (a generated NPC, or the duplicated protagonist);
+        returns its key. Tagged with its owning `story` so it's scoped / grouped and hidden from
+        global pickers. If `ref_from` is given, that character's reference image is copied across.
+        `base_prompt` (from the shared ✨ composer) is stored as fields.base_prompt so the base
+        image renders richly without a manual ✨ pass."""
+        from ..server.services import story_store as SS
         char_dir = self.char_dir()
         char_dir.mkdir(parents=True, exist_ok=True)
-        db = self._story_file(story_key) if story_key else None   # embed into the story's JSON
         taken = {p.stem for p in char_dir.glob("*.yaml")}
-        if db is not None:
-            taken |= set(SDB.character_keys(db))
+        if story_key:
+            taken |= set(SS.character_keys(self.root, story_key))
         base = re.sub(r"[^a-z0-9]+", "_", (npc.get("name") or "npc").lower()).strip("_") or "npc"
         key, i = base, 2
         while key in taken:
@@ -889,8 +888,8 @@ class AppContext:
             "_migrated_split": True,
         }
         Character(**cdata)  # validate (extra top-level keys ignored)
-        if db is not None:
-            SDB.upsert_character(db, key, cdata)   # embedded in the story DB (authoritative)
+        if story_key:
+            SS.upsert_character(self.root, story_key, key, cdata)   # embedded (authoritative)
         else:
             (char_dir / f"{key}.yaml").write_text(
                 yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
@@ -971,56 +970,54 @@ class AppContext:
     # global YAML card. These helpers hide the split so read/write paths are store-agnostic.
     # See loom/stories/story_db.py.
     def _story_file(self, key: str):
+        # Kept for callers that still resolve a path (mostly the asset dirs + the migrator). The
+        # store is the source of truth now; this returns the JSON path if one lingers on disk.
         from ..stories import story_db as SDB
         p = SDB.story_json_path(self.story_dir(), key)   # folder form, legacy flat as fallback
         return p if p.is_file() else None
 
     def _read_story_data(self, key: str) -> dict:
-        from ..stories import story_db as SDB
-        db = self._story_file(key)
-        if db is None:
+        from ..server.services import story_store as SS
+        loaded = SS.load_story(self.root, key)
+        if loaded is None:
             raise FileNotFoundError(key)
-        story, _chars = SDB.load_story(db)
-        return story
+        return loaded[0]   # the story dict (chars fetched separately via _read_character_data)
 
     def _write_story_data(self, key: str, data: dict) -> None:
-        """Validate + persist a whole story dict to its JSON file, keeping the embedded characters.
+        """Validate + persist a whole story dict to the relational store, keeping the embedded
+        characters.
 
-        Validates BEFORE the disk write — both the intra-story shape (Story) AND the cross-aggregate
-        cast→character invariant (story_reference_errors). The latter used to be caught only at the
-        post-write reload_settings(), so a bad cast member was persisted to disk before the error
-        fired (corrupting the file, breaking the next load). Checking it here means a broken write
-        NEVER touches disk."""
+        Validates BEFORE the write — both the intra-story shape (Story) AND the cross-aggregate
+        cast→character invariant (story_reference_errors). Checking it here means a broken write
+        NEVER touches the DB (the store's save_story runs in one transaction, so a validation
+        raise happens before any row is written)."""
         from ..config.schema import Story, story_reference_errors
-        from ..stories import story_db as SDB
+        from ..server.services import story_store as SS
         Story(**data)   # intra-story refs (Story._check_references)
-        db = self._story_file(key)
-        if db is None:
+        loaded = SS.load_story(self.root, key)   # recover embedded chars to preserve them
+        if loaded is None:
             raise FileNotFoundError(key)
-        _story, chars = SDB.load_story(db)
+        _story, chars = loaded
         known = set(chars) | set(self.base_settings.characters)
         errs = story_reference_errors(data, known)
         if errs:
             raise ValueError(f"story '{key}' {errs[0]}")
-        SDB.save_story(db, data, chars)
+        SS.save_story(self.root, key, data, chars)
         self.reload_settings()
 
     def create_story(self, name: str, fields: dict, character_keys=None, type_: str = "novel") -> str:
-        """Mint a NEW story as its own ``<skey>.json``, EMBEDDING the records of any referenced
-        characters (the file is the whole self-contained story). Derives a unique key from `name`,
-        validates, reloads. Returns the key. The single creation chokepoint (genesis_commit + the
-        cast/wizard saves route here). See stories/story_db.py."""
+        """Mint a NEW story in the relational store, EMBEDDING the records of any referenced
+        characters. Derives a unique key from `name`, validates, reloads. Returns the key.
+        The single creation chokepoint (genesis_commit + the cast/wizard saves route here)."""
         from ..config.schema import Story
-        from ..stories import story_db as SDB
+        from ..server.services import story_store as SS
         existing = {st.name for st in self.base_settings.stories.values()}
         nm, j = name.strip() or "Story", 2
         while nm in existing:
             nm, j = f"{(name.strip() or 'Story')} ({j})", j + 1
         base = re.sub(r"[^\w\-]+", "_", nm.lower()).strip("_") or "story"
-        sdir = self.story_dir(); sdir.mkdir(parents=True, exist_ok=True)
         skey, i = base, 2
-        while ((sdir / f"{skey}.yaml").is_file() or (sdir / f"{skey}.json").is_file()
-               or (sdir / skey / "story.json").is_file()):
+        while SS.story_exists(self.root, skey):
             skey, i = f"{base}_{i}", i + 1
         chars: dict = {}
         for ck in (character_keys or []):
@@ -1029,18 +1026,16 @@ class AppContext:
                 chars[ck] = rec                       # embed the referenced character's record
         story = {"name": nm, "type": type_ if type_ in ("novel", "vn") else "novel", **(fields or {})}
         Story(**story)                                # validate before writing
-        SDB.save_story(SDB.story_json_path(sdir, skey), story, chars)   # folder form: <skey>/story.json
+        self.story_dir().mkdir(parents=True, exist_ok=True)   # keep the folder for assets
+        SS.save_story(self.root, skey, story, chars)
         self.reload_settings()
         return skey
 
     def _char_owner(self, char_key: str) -> str | None:
-        """The story key that OWNS this character (embeds it), or None for a global library card."""
-        from ..stories import story_db as SDB
-        for skey in self.base_settings.stories:
-            db = self._story_file(skey)
-            if db is not None and char_key in SDB.character_keys(db):
-                return skey
-        return None
+        """The story key that OWNS this character (embeds it), or None for a global library card.
+        Indexed lookup on the relational store (was an O(stories) JSON scan)."""
+        from ..server.services import story_store as SS
+        return SS.story_owner(self.root, char_key)
 
     def art_style(self, story_key: str | None = None, char_key: str | None = None) -> str:
         """Layer 0 of the image card: the art style every render in a story opens with.
@@ -1055,22 +1050,23 @@ class AppContext:
         return style_anchor(self.root)
 
     def _read_character_data(self, key: str) -> dict | None:
-        from ..stories import story_db as SDB
+        from ..server.services import story_store as SS
         owner = self._char_owner(key)
         if owner is not None:
-            return SDB.get_character(self._story_file(owner), key)
+            return SS.get_character(self.root, owner, key)
         safe = re.sub(r"[^\w\-]+", "", key)
         path = self.char_dir() / f"{safe}.yaml"
         return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
 
     def _write_character_data(self, key: str, cdata: dict) -> None:
-        """Persist a character to its OWNING story DB (embedded) or the global YAML library."""
+        """Persist a character to its OWNING story (embedded in the relational store) or the
+        global YAML library."""
         from ..config.schema import Character
-        from ..stories import story_db as SDB
+        from ..server.services import story_store as SS
         Character(**cdata)   # validate FIRST
         owner = self._char_owner(key)
         if owner is not None:
-            SDB.upsert_character(self._story_file(owner), key, cdata)
+            SS.upsert_character(self.root, owner, key, cdata)
         else:
             safe = re.sub(r"[^\w\-]+", "", key)
             (self.char_dir() / f"{safe}.yaml").write_text(
@@ -1080,14 +1076,13 @@ class AppContext:
     def update_story_fields(self, key: str, fields: dict) -> list[str]:
         """Patch top-level fields onto a saved story + reload. SELF-HEALS repairable dangling refs
         BEFORE writing — including cast members with no character record (dropped + cascaded) — so a
-        bad op can't corrupt the file or block valid co-edits in the same turn. Returns the list of
+        bad op can't corrupt the store or block valid co-edits in the same turn. Returns the list of
         repairs made (empty = none) so the caller can surface them to the writer. See _self_heal_refs
-        + _write_story_data (which validates cross-refs before the disk write)."""
-        from ..stories import story_db as SDB
+        + _write_story_data (which validates cross-refs before the write)."""
+        from ..server.services import story_store as SS
         data = self._read_story_data(key)
         data.update(fields)
-        db = self._story_file(key)
-        known = (set(SDB.character_keys(db)) if db else set()) | set(self.base_settings.characters)
+        known = set(SS.character_keys(self.root, key)) | set(self.base_settings.characters)
         repairs = _self_heal_refs(data, known)
         self._write_story_data(key, data)
         return repairs

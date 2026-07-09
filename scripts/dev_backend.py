@@ -39,10 +39,13 @@ os.environ["LOOM_DEV"] = "1"
 
 import uvicorn  # noqa: E402
 
-from loom.server.app import create_app  # noqa: E402
-
 if __name__ == "__main__":
-    print(f"[dev_backend] LOOM_DEV=1 - serving API on :{PORT}; UI at http://localhost:5173",
+    print(f"[dev_backend] LOOM_DEV=1 - serving API on :{PORT} (reload); UI at http://localhost:5173",
           flush=True)
-    uvicorn.run(create_app(os.environ["LOOM_ROOT"]),
-                host="127.0.0.1", port=PORT, log_level="warning")
+    # Reload mode: pass the factory import string (not a built app) so each code change re-imports
+    # `loom.server.app:dev_app` and re-runs create_app -> mod.register, picking up new routes +
+    # prompt edits without a manual restart. Matches `loom serve` dev behavior. Watch the package
+    # source only (not the whole repo) to avoid reload storms on unrelated file writes.
+    uvicorn.run("loom.server.app:dev_app", factory=True,
+                host="127.0.0.1", port=PORT, log_level="warning",
+                reload=True, reload_dirs=[str(ROOT / "loom")])

@@ -8,7 +8,12 @@
   import { post, put } from '$lib/api.js';
   import { loadStory } from '$lib/stories.svelte.js';
 
-  let { storyKey, layer, layerLabel = '', onCollapse = null } = $props();
+  // presentation: 'docked' (fixed left window) | 'modal' (centered overlay). 'hidden' is handled by
+  // the parent (it stops rendering us and shows a launcher chip). onCenter toggles docked↔modal.
+  // interview=true (a blank story on the world/premise layer) → the editor OPENS the conversation
+  // itself: it greets and puts a few core-question springboards on the table (see openInterview).
+  let { storyKey, layer, layerLabel = '', onCollapse = null, presentation = 'docked', onCenter = null,
+        interview = false } = $props();
 
   let convo = $state([]);      // [{role, content, applied?, rejected?, before?, undone?, failed?}]
   let typed = $state('');
@@ -19,7 +24,22 @@
 
   // Switching sections starts a fresh conversation (the editor is scoped to one layer).
   let seen = layer;
-  $effect(() => { if (layer !== seen) { seen = layer; convo = []; err = ''; } });
+  $effect(() => { if (layer !== seen) { seen = layer; convo = []; err = ''; opened = false; } });
+
+  // Blank story on the world/premise layer → OPEN the interview ourselves: the editor greets and
+  // offers a few core-question springboards, so the writer arrives to a conversation, not a blank box.
+  let opened = $state(false);
+  $effect(() => {
+    if (interview && !opened && !convo.length && !busy) { opened = true; openInterview(); }
+  });
+  async function openInterview() {
+    busy = true; err = '';
+    const r = await post(`/stories/${storyKey}/card/${layer}/chat`, { messages: [{ role: 'user',
+      text: "I'm starting a brand-new story from nothing. Before anything else, put a few big core questions or themes on the table for me to react to." }] });
+    busy = false;
+    if (r.ok && r.data?.reply) convo = [...convo, { role: 'assistant', content: r.data.reply }];
+    scroll();
+  }
 
   // ONE call: the agent answers (question) OR emits anchored ops. The backend verifies each anchor
   // against the live story, applies the non-stale ones, and returns the pre-edit values for undo.
@@ -58,9 +78,19 @@
   }
 </script>
 
-<aside class="schat">
+<!-- Rendered only when not hidden. When hidden the component stays MOUNTED (template empty) so the
+     conversation state (`convo`) survives hide/show instead of resetting. -->
+{#if presentation !== 'hidden'}
+{#if presentation === 'modal' && onCenter}
+  <button class="backdrop" onclick={onCenter} aria-label="Dock editor to the side"></button>
+{/if}
+<aside class="schat" class:modal={presentation === 'modal'}>
   <div class="sh"><span class="dot"></span>Editing <b>{layerLabel || layer}</b>
-    {#if onCollapse}<button class="collapse" onclick={onCollapse} title="Hide editor" aria-label="Hide editor">⟨</button>{/if}</div>
+    <span class="winctl">
+      {#if onCenter}<button class="collapse" onclick={onCenter}
+        title={presentation === 'modal' ? 'Dock to side' : 'Center'} aria-label="Toggle centered">{presentation === 'modal' ? '▣' : '⤢'}</button>{/if}
+      {#if onCollapse}<button class="collapse" onclick={onCollapse} title="Hide editor" aria-label="Hide editor">⟨</button>{/if}
+    </span></div>
   <div class="log" bind:this={scroller}>
     {#if !convo.length}
       <div class="hint">Tell the editor what to change in this section — “make the tone wryer”,
@@ -97,15 +127,24 @@
     <button class="send" onclick={send} disabled={busy || !typed.trim()} aria-label="Send">↳</button>
   </div>
 </aside>
+{/if}
 
 <style>
   .schat { position: fixed; left: var(--storynav-w, 0); top: var(--chrome-top, 86px); bottom: 0; width: 320px; z-index: 40;
            display: flex; flex-direction: column; background: var(--panel, #14161f);
            border-right: 1px solid var(--border, #2a2f44); }
+  /* Centered overlay: a floating window instead of the side dock. */
+  .schat.modal { left: 50%; top: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%);
+                 width: min(600px, 94vw); height: min(78vh, 760px); z-index: 60;
+                 border: 1px solid var(--border, #2a2f44); border-radius: 14px; overflow: hidden;
+                 box-shadow: 0 24px 70px rgba(0, 0, 0, .55); }
+  .backdrop { position: fixed; inset: 0; z-index: 55; padding: 0; border: none;
+              background: rgba(4, 6, 12, .5); cursor: default; }
   .sh { display: flex; align-items: center; gap: 7px; padding: 11px 13px; flex: none;
         border-bottom: 1px solid var(--border-soft); font-size: 12.5px; color: var(--muted); }
   .sh b { color: var(--text); text-transform: capitalize; }
-  .collapse { margin-left: auto; width: 22px; height: 22px; display: grid; place-items: center; padding: 0;
+  .winctl { margin-left: auto; display: flex; gap: 2px; }
+  .collapse { width: 22px; height: 22px; display: grid; place-items: center; padding: 0;
               background: none; border: 1px solid transparent; border-radius: 6px; color: var(--faint); font-size: 12px; cursor: pointer; }
   .collapse:hover { color: var(--text); background: var(--elev); }
   .log { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }

@@ -286,6 +286,7 @@ def register(app, ctx):
         commits any newly-agreed exemplars to the character lorebook.
         Body: { messages: [{role, content}], model?: str }"""
         from ..server.services import lorebook_store as LS
+        from ..server.services import config_files as _cf
         from .pipeline.character_scaffold import (
             INTERVIEW_SCHEMA, INTERVIEW_SYSTEM, facet_to_entry, interview_prompt)
 
@@ -293,19 +294,35 @@ def register(app, ctx):
         ch = ctx.base_settings.characters.get(key)
         if ch is None:
             return JSONResponse({"error": "no such character"}, status_code=404)
-        provider, _systems = ctx.builder_ctx(body, "character")
-        if provider is None:
-            return JSONResponse({"error": _systems}, status_code=400)
+        # The character interview is the harder creative task (a real person through conversation),
+        # so we run it with REASONING ON, then fall back to the structured channel if the reasoning
+        # model flakes on structured output — the same pattern story_card_chat uses for its interview.
+        # An explicit body.model still wins; otherwise the director/narrator role resolves the model.
+        _roles = _cf.load_text_roles(ctx.root)
+        _PROVIDER_ROLE = body.get("model") or _roles.get("director") or _roles.get("narrator")
+        if not _PROVIDER_ROLE:
+            return JSONResponse({"error": "no chat model configured"}, status_code=400)
 
         scope = _char_scope(key)
         entries = LS.load_lorebook(ctx.root, scope)
         prompt = interview_prompt(ch.name, ch.system, entries, body.get("messages") or [])
+        data: dict = {}
         try:
-            res = provider.generate_text(system=INTERVIEW_SYSTEM, prompt=prompt, emits=INTERVIEW_SCHEMA)
+            for effort in ("high", "none"):       # reasoning ON, then the structured flake fallback
+                p = ctx.text_provider_for(_PROVIDER_ROLE, {"reasoning_effort": effort})
+                if p is None:
+                    break
+                try:
+                    out = (p.generate_text(system=INTERVIEW_SYSTEM, prompt=prompt,
+                                           emits=INTERVIEW_SCHEMA).data) or {}
+                except Exception:  # noqa: BLE001 — reasoning channel can break structured output
+                    out = {}
+                if out.get("reply") or out.get("facets"):
+                    data = out
+                    break
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"interview failed: {exc}"}, status_code=500)
 
-        data = res.data or {}
         saved = []
         for f in (data.get("facets") or []):
             e = facet_to_entry(f)
@@ -314,6 +331,59 @@ def register(app, ctx):
                 saved.append(e.id)
         return {"ok": True, "reply": (data.get("reply") or "").strip(),
                 "saved": saved, "facets": _facet_cards(scope)}
+
+    @app.post("/api/stories/character/{key}/interview/seal")
+    def character_interview_seal(key: str, body: dict):
+        """SEAL the interview conversation: distil the FULL transcript into exemplars in one
+        explicitly-triggered pass and commit them to the character's lorebook. The interview
+        itself (POST .../interview) is pure conversation and commits nothing per turn; sealing is
+        the separate process the writer invokes when they judge enough has been established — the
+        same two-phase shape as harvest (scene) and deepen (portrait→bank). Conversation first,
+        extraction second, never both in one call.
+        Body: { messages: [{role, content|text}], model?: str }. Returns {ok, saved, facets}."""
+        from ..server.services import lorebook_store as LS
+        from ..server.services import config_files as _cf
+        from .pipeline.character_scaffold import (
+            FACETS_SCHEMA, SEAL_SYSTEM, facet_to_entry, interview_seal_prompt)
+
+        body = body or {}
+        ch = ctx.base_settings.characters.get(key)
+        if ch is None:
+            return JSONResponse({"error": "no such character"}, status_code=404)
+        messages = body.get("messages") or []
+        if not messages:
+            return JSONResponse({"error": "no interview transcript to seal"}, status_code=400)
+        _roles = _cf.load_text_roles(ctx.root)
+        _PROVIDER_ROLE = body.get("model") or _roles.get("director") or _roles.get("narrator")
+        if not _PROVIDER_ROLE:
+            return JSONResponse({"error": "no chat model configured"}, status_code=400)
+
+        scope = _char_scope(key)
+        entries = LS.load_lorebook(ctx.root, scope)
+        prompt = interview_seal_prompt(ch.name, ch.system, messages, entries)
+        data: dict = {}
+        try:
+            for effort in ("high", "none"):       # reasoning ON, then the structured flake fallback
+                p = ctx.text_provider_for(_PROVIDER_ROLE, {"reasoning_effort": effort})
+                if p is None:
+                    break
+                try:
+                    data = (p.generate_text(system=SEAL_SYSTEM, prompt=prompt,
+                                            emits=FACETS_SCHEMA).data) or {}
+                except Exception:  # noqa: BLE001
+                    data = {}
+                if data.get("facets"):
+                    break
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"seal failed: {exc}"}, status_code=500)
+
+        saved = []
+        for f in (data.get("facets") or []):
+            e = facet_to_entry(f, source="interview-seal")
+            if e is not None:
+                LS.upsert_entry(ctx.root, scope, e)
+                saved.append(e.id)
+        return {"ok": True, "saved": saved, "facets": _facet_cards(scope)}
 
     @app.post("/api/stories/character/{key}/deepen")
     def character_deepen(key: str, body: dict):
@@ -1292,7 +1362,7 @@ def register(app, ctx):
         """Step 4 — commit a chosen candidate: name the anchor harnesses into real characters,
         rewrite edge ids → character keys, persist the Story. Body: { candidate, harnesses,
         relationships, name?, type? } → { ok, key }."""
-        from . import story_db as _SDB
+        from ..server.services import story_store as _SS
         from .genesis import name_cast, persona_from_harness, compose_world
 
         body = body or {}
@@ -1319,11 +1389,9 @@ def register(app, ctx):
             name, j = f"{base_name} ({j})", j + 1
         skey_base = re.sub(r"[^\w\-]+", "_", name.lower()).strip("_") or "story"
         skey, i = skey_base, 2
-        while ((ctx.story_dir() / f"{skey}.yaml").is_file() or (ctx.story_dir() / f"{skey}.json").is_file()
-               or (ctx.story_dir() / skey / "story.json").is_file()):
+        while _SS.story_exists(ctx.root, skey):
             skey, i = f"{skey_base}_{i}", i + 1
         stype = body.get("type") if body.get("type") in ("novel", "vn") else "novel"
-        db_path = _SDB.story_json_path(ctx.story_dir(), skey)   # folder form: <skey>/story.json
         # The DEFINED WORLD survives commit now (it used to be discarded) — the permanent foundation
         # premise & theme distils from. Composed from the genesis draft: frame + substrate + particulars.
         world = compose_world(body.get("world"), body.get("substrate"), body.get("particulars"))
@@ -1335,7 +1403,8 @@ def register(app, ctx):
         }
         from ..config.schema import Story
         Story(**story_dict)   # validate before writing — closes the genesis bypass
-        _SDB.save_story(db_path, story_dict, {})
+        ctx.story_dir().mkdir(parents=True, exist_ok=True)   # keep the folder for assets
+        _SS.save_story(ctx.root, skey, story_dict, {})
 
         # Name the anchors (commit is the first time harnesses get names) + embed them into the DB.
         nprov, _systems = ctx.builder_ctx(body, "characters")
@@ -1365,8 +1434,7 @@ def register(app, ctx):
         try:
             ctx.update_story_fields(skey, {"cast": cast, "relationships": out_rels})
         except Exception as exc:  # noqa: BLE001
-            import shutil
-            shutil.rmtree(db_path.parent, ignore_errors=True)   # rollback: drop the whole story folder
+            _SS.delete_story(ctx.root, skey)   # rollback: drop the half-written story from the store
             return JSONResponse({"error": f"could not save story: {exc}"}, status_code=400)
         return {"ok": True, "key": skey}
 
@@ -3350,15 +3418,15 @@ def register(app, ctx):
         return next((l for l in card["layers"] if l["id"] == layer), None)
 
     _SECTION_BRIEF = {
-        "overview": "the PREMISE & THEME as a CAUSAL SYSTEM — premise, tone, themes, art style, and the "
-                    "premise components, which chain: root (the one standing pressure everything grows from) "
-                    "→ question (the moral contest it forces, two defensible sides) → creeds (the factions/"
-                    "faiths that each answer it and believe they're saving everyone) → tragedy (why their "
-                    "clash destroys good people — both partly right) → protagonist (caught between, plus the "
-                    "lie the conflict tests) → stakes → texture. To edit a component use merge on "
-                    "premise_parts with `key` = the component id (root/question/creeds/tragedy/protagonist/"
-                    "stakes/texture). A strong premise is an ENGINE: help the writer find the root and derive "
-                    "the rest; never a good-vs-evil premise — the sides must both be righteous.",
+        "overview": "the WORLD at its highest level — designed top-down, not enumerated. Two things carry "
+                    "it: the PRINCIPLE (premise_parts/root — the one law this world runs on, its defining "
+                    "trait: 'reality runs on a spendable life-energy', 'the gods are dead and magic answers "
+                    "to whoever takes it') and the CONFLICT (premise_parts/question — the unresolvable "
+                    "dilemma that principle forces, with two defensible sides). The premise/tone/themes "
+                    "follow from those. Edit with merge on premise_parts (key = root or question). Do NOT "
+                    "enumerate factions, traditions, or populations here — those particulars belong to the "
+                    "cast, locations, and scenes, made when the story needs them. Never good-vs-evil; both "
+                    "sides of the conflict must be righteous.",
         "map": "the WORLD — locations (each an item with an id) and the recurring setting conditions/stages.",
         "relationships": "the CAST & fixed BONDS — relationship items (each with source/target/nature and the "
                          "hidden potential/trajectory). Warmth drifts in play; you set the fixed structure.",
@@ -3428,6 +3496,10 @@ def register(app, ctx):
                                                    "remove=delete the node"},
                                             "value": {"description": "the new value for set/merge "
                                                        "(string, object, list…). OMIT for remove."}}}}}}
+        # A blank story hasn't found its core question yet — the chat runs an INTERVIEW (below)
+        # instead of waiting for edit commands. "Thin" = no premise and no premise_parts.question.
+        _pp = (raw.get("premise_parts") or {}) if isinstance(raw, dict) else {}
+        _thin = not (raw.get("premise") or "").strip() and not (_pp.get("question") or "").strip()
         system = (
             "You are the writer's COLLABORATOR on ONE section of their story bible — both a thinking "
             "partner and an editor. Choose your mode from the writer's LATEST message:\n"
@@ -3453,6 +3525,90 @@ def register(app, ctx):
             "coined word — never two words, never 'The <Adjective> <Noun>' (Crownsworn, Unbound, "
             "Emberwake — NOT 'Harvest Binding').\n"
             f"SECTION: {_SECTION_BRIEF.get(layer, layer)}")
+        if _thin and layer in ("overview", "map"):
+            system += (
+                "\n\nINTERVIEW MODE — the story has no core question yet. The objective is to derive, "
+                "through conversation, the world's ROOT — its single defining trait — and the core "
+                "question that trait forces. Lead; do not wait for edit commands.\n\n"
+                "DEFINITIONS\n"
+                "World root: the single defining trait of the world from which everything grows — a "
+                "generative property of how this world works, stated as a standing fact about the world, "
+                "not an event. It is what makes this world unlike ours and what makes the dilemma exist at "
+                "all. Rewrite: reality runs on a finite life-energy that can be spent and stolen. The "
+                "Wandering Inn: the gods are dead and magic is raw and unowned, answering to whoever levels "
+                "into it. Alien Stage: human voices are farmed as entertainment by an alien overclass. A "
+                "mere circumstance ('a failing harvest') is an event IN a world; a root is the property of "
+                "the world that generates such events. In grounded fiction the root is a systemic condition "
+                "(a company town, an occupation), not a metaphysics — but still a standing trait, not an "
+                "incident.\n"
+                "Core question: the unresolvable dilemma the world root forces a specific person to answer "
+                "under pressure. It is not a theme. A theme ('forgiveness', 'freedom') is a category; a "
+                "core question is a forced choice between two defensible but incompatible answers.\n"
+                "Concrete situation: a specific circumstance — particular place, time, and people — where "
+                "the root makes the choice unavoidable. An abstract formulation ('freedom vs. security') "
+                "is never a situation; it is a seminar topic.\n\n"
+                "AXIOMS — what the evidence shows produces profundity. These constrain every question you "
+                "ask.\n"
+                "1. SYMMETRY OF SIDES. A core question must have two defensible sides. A decent person "
+                "could choose either, and suffer for it. If one side is obviously correct, the question "
+                "is under-derived: continue until you can name the person who would take the losing side "
+                "and construct the argument for why they are not wrong to. Operation: when the writer "
+                "states a one-sided position, ask who is destroyed by it and who would oppose them on "
+                "defensible grounds.\n"
+                "2. THE ANSWER COSTS THE WINNER. The choice must cost the person who makes it — not in "
+                "what they lose, but in what they become by making it. A costless resolution is excluded. "
+                "Operation: for any position the writer commits to, ask what the protagonist becomes by "
+                "holding it, and what that transformation costs over time.\n"
+                "3. ACCRUAL OVER DETONATION. Profundity compounds through sustained pressure, not a "
+                "single crisis. Operation: ask what carrying the question for years does to a person; "
+                "prefer slow erosion over a detonating event.\n"
+                "4. CONDITIONAL ANTAGONISM. Where the genre permits, the opposing force is an indifferent "
+                "condition (a process, an ecology, a law), not an agent with intent. An antagonist that "
+                "can be bargained with or defeated is weaker than one that cannot, because indifference "
+                "resists no argument. Operation: when the writer proposes a villain, test whether the "
+                "same pressure could be exerted by a non-agentive condition, and prefer it where it can.\n"
+                "5. THE DIGNITY GAP. The most load-bearing character is often the one the diegetic world "
+                "has devalued or misclassified — and whose actual interiority contradicts that "
+                "classification. The gap between assigned status and real personhood is the structural "
+                "source of the reader's re-evaluation. Operation: identify which character the writer's "
+                "world underestimates, and ask what it would take for them to be correctly seen.\n"
+                "6. THE LIE OVER THE WOUND. A character's false belief (the adaptive distortion produced "
+                "by past harm) is structurally more useful than the harm itself, because the belief "
+                "generates daily behavior whereas the wound is inert backstory. Operation: given a "
+                "character's wound, derive the false belief it installed, the behavior it dictates, and "
+                "the event that would falsify it.\n\n"
+                "HARD CONSTRAINTS\n"
+                "C1. Never present a question in abstract form. Always instantiate it: specific world, "
+                "specific circumstance, specific person facing the choice. 'Freedom vs. security' is "
+                "non-compliant; 'the last free city falls unless it adopts the methods it is fighting' is "
+                "compliant.\n"
+                "C2. Never use capitalized abstract-noun oppositions, 'X versus Y' framings, or "
+                "theme-word labels. These are the exact failure signature of unoriginal output.\n"
+                "C3. One question per turn. Then stop and wait.\n"
+                "C4. Do not answer your own question. The writer answers; you interrogate the answer.\n"
+                "C5. Keep `ops` empty during the interview phase. Commit only after the question is "
+                "agreed.\n\n"
+                "OPENING MOVE — if the writer has provided no material yet: greet in one sentence, then "
+                "offer three to four options, each ANCHORED IN A DISTINCT WORLD ROOT (a defining trait, "
+                "per the definition above) and the concrete dilemma that trait forces. Range widely — some "
+                "speculative, some grounded. Invite the writer to select, modify, or replace one. Do not "
+                "offer themes, abstract oppositions, or bare situations with no world trait behind them "
+                "(C1, C2).\n\n"
+                "PROCEDURE\n"
+                "When the writer supplies material, do not accept it at face value. FIRST locate the root: "
+                "what standing trait of this world generates the tension? Then apply the axioms — who is "
+                "destroyed by it (A1), what the choice costs the chooser (A2), is the antagonist "
+                "conditional (A4), what false belief it implies (A6). State the result in one line, then "
+                "ask ONE next question.\n"
+                "AGREEMENT SIGNAL: when the writer accepts a formulation, says it's right, picks an option, "
+                "or stops opening new angles, treat the question as AGREED and go straight to COMMIT. "
+                "Continuing to interrogate past agreement is itself a failure mode — the interview must "
+                "produce a committed root, not talk indefinitely.\n\n"
+                "COMMIT — on agreement, write to premise_parts via merge, TWO keys only: root = the world's "
+                "defining trait (the principle, per the definition — NOT a one-off circumstance); question = "
+                "the dilemma that trait forces. Nothing else — no factions, no cast, no stakes; those are "
+                "derived later, by the cast/locations/plot editors, when the story needs them. Do not commit "
+                "on the first message; interview first, then commit as soon as the writer agrees.")
         convo = "\n".join(f"{'Writer' if m.get('role') == 'user' else 'You'}: {m['text']}" for m in messages)
         _roles = _cf.load_text_roles(ctx.root)
         _PROVIDER_ROLE = _roles.get("director") or _roles.get("narrator")
@@ -3531,17 +3687,26 @@ def register(app, ctx):
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
         import shutil
+        from ..server.services import story_store as _SS
         from .story_db import delete_db
         safe = re.sub(r"[^\w\-]+", "", key)
+        if not _SS.story_exists(ctx.root, safe):
+            # fall back to legacy on-disk forms (pre-migration yaml/json/folder)
+            yaml_p = ctx.story_dir() / f"{safe}.yaml"
+            legacy_json = ctx.story_dir() / f"{safe}.json"
+            folder = ctx.story_dir() / safe
+            if not yaml_p.is_file() and not legacy_json.is_file() and not (folder / "story.json").is_file():
+                return JSONResponse({"error": "no such story"}, status_code=404)
+        # delete from the relational store (the source of truth)
+        _SS.delete_story(ctx.root, safe)
+        # also sweep any lingering legacy on-disk forms + the assets folder
         yaml_p = ctx.story_dir() / f"{safe}.yaml"
-        legacy_json = ctx.story_dir() / f"{safe}.json"   # legacy flat form
-        folder = ctx.story_dir() / safe                  # folder form: story.json + chars/ + bg/
-        if not yaml_p.is_file() and not legacy_json.is_file() and not (folder / "story.json").is_file():
-            return JSONResponse({"error": "no such story"}, status_code=404)
+        legacy_json = ctx.story_dir() / f"{safe}.json"
+        folder = ctx.story_dir() / safe
         if yaml_p.is_file():
             yaml_p.unlink()
         delete_db(legacy_json)                           # legacy flat (+ any <safe>.db)
-        shutil.rmtree(folder, ignore_errors=True)        # folder form: story + its embedded chars' assets
+        shutil.rmtree(folder, ignore_errors=True)        # folder form: story's embedded chars' assets
         ctx.reload_settings()
         removed = ctx.prune_orphan_characters()  # cascade: any pre-migration global-pool leftovers
         return {"ok": True, "removed_characters": removed}

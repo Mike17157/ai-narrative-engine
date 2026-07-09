@@ -1029,11 +1029,8 @@ def generate_dream(ctx, skey: str, world_state: dict, present: list | None = Non
             return f"- {cname(k)}: {inner or '(unknown depths)'}"
         scaffolds = "\n".join(_scaf(k) for k in present) or "(no cast)"
 
-        from . import story_db as _SDB
-        _db = ctx._story_file(skey) if skey else None
         focus = set(present)
-        relset = (_SDB.relationships_for(_db, focus) if _db is not None
-                  else [r.model_dump() for r in (st.relationships if st else [])])
+        relset = [r.model_dump() for r in (st.relationships if st else [])]
         bonds = []
         for r in relset:
             s, t = r.get("source"), r.get("target")

@@ -52,25 +52,33 @@ def load_settings(root: str | Path) -> Settings:
         for path in sorted(persona_dir.glob("*.yaml")):
             personas[path.stem] = Persona(**_read_yaml(path))
 
-    # stories — ONE self-contained story per story, in its own folder: configs/stories/<key>/story.json
-    # (with the story's generated assets alongside). A story file EMBEDS its characters and is
-    # AUTHORITATIVE for them: merge those into the character library, overriding any global file of
-    # the same key. Legacy flat <key>.json still loads (iter_story_files handles both); legacy <key>.db
-    # is auto-migrated to .json on load (see migrate_db_to_json).
-    from ..stories import story_db as _SDB
+    # stories — the source of truth is the relational store (configs/stories.db). On startup we
+    # run a lazy JSON→DB migration (any configs/stories/<key>/story.json still on disk is folded
+    # into the tables and renamed .json.migrated), then load every story from the DB. A story
+    # EMBEDS its characters and is AUTHORITATIVE for them: merge those into the character library,
+    # overriding any global file of the same key. See server/services/story_store.py.
+    from ..server.services import story_store as _SS
     stories: dict[str, Story] = {}
     story_dir = configs / "stories"
     if story_dir.is_dir():
-        # Lazy one-time migration: convert any legacy .db to .json before enumerating.
-        from ..stories.migrate_db_to_json import migrate_dir as _migrate
-        _migrate(story_dir)
-        for skey, path in _SDB.iter_story_files(story_dir):
-            sdata, embedded = _SDB.load_story(path)
-            stories[skey] = Story(**sdata)
+        # First the legacy .db→.json migration (so very-old installs are on the JSON form), then
+        # the JSON→relational migration. Both are idempotent and reversible.
+        from ..stories.migrate_db_to_json import migrate_dir as _legacy_migrate
+        _legacy_migrate(story_dir)
+        _SS.migrate_from_json(root)
+        for skey in _SS.list_stories(root):
+            loaded = _SS.load_story(root, skey)
+            if loaded is None:
+                continue
+            sdata, embedded = loaded
+            try:
+                stories[skey] = Story(**sdata)
+            except Exception:  # noqa: BLE001 — a corrupt story never sinks the load
+                pass
             for ck, cdoc in embedded.items():
                 try:
-                    characters[ck] = Character(**cdoc)   # story file authoritative for its cast
-                except Exception:  # noqa: BLE001 — a bad embedded card never sinks the load
+                    characters[ck] = Character(**cdoc)   # story DB authoritative for its cast
+                except Exception:  # noqa: BLE001
                     pass
 
     pipelines: dict[str, Pipeline] = {}
