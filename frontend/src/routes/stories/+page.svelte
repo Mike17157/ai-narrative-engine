@@ -1,18 +1,19 @@
 <script>
   // The story library — a searchable, filterable grid of authored stories, the experiences
-  // that actually play. "New story" goes to the single create flow (/stories/genesis).
+  // that actually play. "New story" mints an empty story and opens the editor; you build it by
+  // CONVERSATION there (no wizard, no draft/commit).
   import { goto } from '$app/navigation';
   import { chars } from '$lib/characters.svelte.js';
-  import { stories, deleteStory, clearDraft } from '$lib/stories.svelte.js';
+  import { stories, deleteStory, loadStories } from '$lib/stories.svelte.js';
+  import { post } from '$lib/api.js';
 
-  const newStory = () => goto('/stories/genesis');   // resumes the cached draft, or starts fresh
+  async function newStory() {
+    const r = await post('/stories/new', {});
+    if (r.ok && r.data?.key) { await loadStories(); goto(`/stories/${r.data.key}/structure`); }
+  }
   const open = (key) => goto(`/stories/${key}/structure`);
 
-  let complete = $derived((stories.list || []).filter((s) => !s.draft));
-  // The single cached in-progress story (client-held until built). Shown as a "New story" card.
-  let draft = $derived(stories.draft);
-  let draftCast = $derived(draft?.harnesses?.length || 0);
-  let draftPremise = $derived(draft?.candidates?.[0]?.logline || 'Work in progress — open to keep building.');
+  let complete = $derived(stories.list || []);
 
   // ── search + filters ──
   let q = $state('');
@@ -65,21 +66,6 @@
     <span class="sectitle">Finished{complete.length ? ` · ${complete.length}` : ''}</span>
     <button onclick={newStory}>＋ New story</button>
   </div>
-
-  {#if draft}
-    <div class="grid draftgrid">
-      <div class="card story-card draft-card" onclick={newStory} role="button" tabindex="0">
-        <span class="draftbadge">Draft · in progress</span>
-        <div class="cname">{draft.newName || 'New story'}</div>
-        <p class="cprem">{draftPremise}</p>
-        <div class="cmeta">
-          <span class="badge">{draftCast} character{draftCast === 1 ? '' : 's'}</span>
-          <span class="tone">not yet named & saved</span>
-        </div>
-        <button class="del" title="Discard draft" onclick={(e) => { e.stopPropagation(); clearDraft(); }}>🗑</button>
-      </div>
-    </div>
-  {/if}
 
   {#if complete.length}
     <!-- toolbar: search + filter button -->
@@ -221,12 +207,6 @@
 
   /* grids */
   .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 14px; }
-  .draftgrid { margin-bottom: 16px; }
-  .draft-card { border-style: dashed; border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
-  .draft-card:hover { border-color: var(--accent); }
-  .draftbadge { align-self: flex-start; display: inline-block; margin-bottom: 6px; font-size: 10.5px;
-    font-weight: 600; padding: 2px 9px; border-radius: 999px;
-    background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
   .card {
     position: relative; padding: 14px; cursor: pointer;
   }

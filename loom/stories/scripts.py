@@ -234,6 +234,22 @@ def set_spine(doc, *, _id, field, value=""):
     doc[field] = value
 
 
+@script("set_core_question",
+        describe="Set the story's CORE QUESTION — the societal/moral dilemma the whole story exists to "
+                 "test, with the two genuinely defensible sides and the root pressure in the world that "
+                 "forces it on everyone. Call this only once the writer is happy with the question you "
+                 "arrived at together; it becomes the seed the world, cast, and plot are built to serve.",
+        keywords=["core question", "the question", "dilemma", "what the story is about", "theme"],
+        params={"question": "the core question — an open moral/societal dilemma, not a yes/no",
+                "sides": {"desc": "the two genuinely defensible answers to it (neither is the 'right' one)",
+                          "type": "array"},
+                "root": "the standing pressure/condition in the world that forces this question on everyone"})
+def set_core_question(doc, *, _id, question="", sides=None, root=""):
+    doc["core_question"] = {"question": question,
+                            "sides": [str(s) for s in (sides or []) if str(s).strip()],
+                            "root": root}
+
+
 # ── Locations (a {start, locations:[…]} artifact) ────────────────────────────────
 
 @script("add_location", describe="Add a neutral location to the story.",
@@ -516,3 +532,17 @@ def disconnect_scenes(doc, *, _id, source, target):
             doc["connections"] = kept
             return
     raise ValueError(f"no connection {source!r} -> {target!r}")
+
+
+if __name__ == "__main__":   # ponytail: one runnable check that scripts mutate the doc as declared
+    d: dict = {}
+    invoke("set_core_question", d, {
+        "question": "Does a community owe more to its own or to strangers at its gate?",
+        "sides": ["your own first — you can't pour from an empty cup",
+                  "the stranger too — a line drawn at the door is still a line"],
+        "root": "a failing harvest that forces every household to choose who eats"})
+    cq = d["core_question"]
+    assert cq["question"].startswith("Does a community") and len(cq["sides"]) == 2 and cq["root"]
+    invoke("set_spine", (s := {}), {"field": "lie", "value": "being right will protect you"})
+    assert s["lie"] == "being right will protect you"
+    print("ok — scripts: set_core_question writes {question, sides, root}; set_spine sets a field")

@@ -1,6 +1,7 @@
 // Story UI state. Navigation is route-based (routes/stories/**); this store is data only —
 // the library list, the loaded story, the edit clone, and per-story canvas view state.
-// (The old creation WIZARD was replaced by genesis — /stories/genesis → StructureWorkspace.)
+// (Creating "from scratch" = POST /stories/new mints an empty story you build by conversation in
+// the editor — no wizard, no client-held draft.)
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { get, post, put, del } from './api.js';
@@ -24,28 +25,10 @@ export function setStoryMode(key, mode) { viewFor(key).mode = mode; saveView(); 
 export function storyViewport(key) { return viewFor(key).viewport; }
 export function setStoryViewport(key, vp) { viewFor(key).viewport = vp; saveView(); }
 
-// The in-progress genesis story — ONE client-held draft, cached so it survives navigation and shows
-// in the library as a "New story" card. It graduates to a real library entry on commit (build),
-// which clears the slot. (Server-side draft stories don't exist — see router.py "DRAFT store removed".)
-const DRAFT_LS = 'loom.storyDraft';
-function loadDraft() {
-  if (!browser) return null;
-  try { return JSON.parse(localStorage.getItem(DRAFT_LS) || 'null'); } catch { return null; }
-}
-export function saveDraft(snap) {
-  stories.draft = snap;
-  if (browser) try { localStorage.setItem(DRAFT_LS, JSON.stringify(snap)); } catch { /* quota/disabled */ }
-}
-export function clearDraft() {
-  stories.draft = null;
-  if (browser) try { localStorage.removeItem(DRAFT_LS); } catch { /* disabled */ }
-}
-
 export const stories = $state({
   list: [],
   current: null,           // the loaded story for /stories/[key]
   view: loadView(),        // { [key]: { mode, viewport } } — canvas state, persisted
-  draft: loadDraft(),      // the single in-progress genesis snapshot (cached), or null
   editing: null,           // editable clone of `current` (the edit page)
   textModels: [],          // for per-stage model pickers
   imageModels: [],         // scene workflows (backgrounds)

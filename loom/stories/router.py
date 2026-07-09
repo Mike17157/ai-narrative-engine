@@ -600,6 +600,18 @@ def register(app, ctx):
         arcs = (res.data or {}).get("arcs") or []
         return {"ok": True, "arcs": arcs, "cast": [c["name"] for c in cast]}
 
+    @app.post("/api/stories/new")
+    def story_new(body: dict):
+        """Create an EMPTY story and return its key. This is the whole 'from scratch' path now —
+        no wizard, no draft/commit: you get a blank story and build it by CONVERSATION in the editor
+        (the chat, interviewer-flavoured while the story is thin, edits its world/premise/cast).
+        Body: { name?, type? }."""
+        body = body or {}
+        name = (body.get("name") or "Untitled story").strip() or "Untitled story"
+        type_ = body.get("type") if body.get("type") in ("novel", "vn") else "novel"
+        key = ctx.create_story(name, {}, character_keys=[], type_=type_)
+        return {"ok": True, "key": key}
+
     @app.post("/api/stories/from-cast")
     def story_from_cast(body: dict):
         """Persist a character-first build: a Story that REFERENCES the existing developed
