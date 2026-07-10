@@ -178,13 +178,36 @@ class OpenAICompatProvider:
                 calls.append({"fn": fn.get("name"), "params": args if isinstance(args, dict) else {}})
             return TextResult(text=msg.get("content") or "", tool_calls=calls)
 
-        # Structured path — OpenAI-style json_schema response_format.
+        # Structured path. Prefer LABELED PROSE for non-streaming calls: reasoning models flake on strict
+        # json_schema (the grammar fights the reasoning -> empty content) but write labeled text reliably.
+        # Falls back to json_schema when the schema is too complex to round-trip, or when the labeled parse
+        # comes back empty. Streaming structured keeps json_schema (below).
         if emits is not None:
+            if on_delta is None:
+                from .labeled_structured import parse_schema_labeled, schema_to_labeled
+                conv = schema_to_labeled(emits)
+                if conv is not None:
+                    instr, plan = conv
+                    lmsgs = list(messages)
+                    if lmsgs and lmsgs[0]["role"] == "system" and isinstance(lmsgs[0]["content"], str):
+                        lmsgs[0] = {"role": "system", "content": lmsgs[0]["content"] + "\n\n" + instr}
+                    else:
+                        lmsgs = [{"role": "system", "content": instr}] + lmsgs
+                    lbody = {"model": self.model, "messages": lmsgs,
+                             "max_tokens": self.max_tokens, **self.sampling}
+                    lresp = httpx.post(url, json=lbody, headers=self._headers(), timeout=120)
+                    if lresp.status_code < 400:
+                        ltext = lresp.json()["choices"][0]["message"].get("content") or ""
+                        data = parse_schema_labeled(ltext, plan)
+                        if any(v not in ("", [], 0, 0.0, False, None) for v in data.values()):
+                            return TextResult(text=data.get("reply") or data.get("text") or ltext, data=data)
+                    # else: fall through to json_schema
+
             body["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {"name": "loom_out", "strict": True, "schema": emits},
             }
-            # Non-streaming (no live consumer) — one blocking request.
+            # Non-streaming json_schema fallback — one blocking request.
             if on_delta is None:
                 resp = httpx.post(url, json=body, headers=self._headers(), timeout=120)
                 if resp.status_code >= 400:

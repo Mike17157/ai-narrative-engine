@@ -3402,7 +3402,12 @@ def register(app, ctx):
                     "trait: 'reality runs on a spendable life-energy', 'the gods are dead and magic answers "
                     "to whoever takes it') and the CONFLICT (premise_parts/question — the unresolvable "
                     "dilemma that principle forces, with two defensible sides). The premise/tone/themes "
-                    "follow from those. Edit with merge on premise_parts (key = root or question). Do NOT "
+                    "follow from those. Edit with merge on premise_parts (key = root or question). When the "
+                    "writer RESHAPES the world (a new principle, a different premise), update "
+                    "premise_parts/root, premise_parts/question, AND premise together in the SAME turn so "
+                    "they stay consistent — never rewrite the premise prose while leaving root or question "
+                    "describing the old world. 'Change the principle' means edit premise_parts/root (and "
+                    "re-derive the question), not the premise text. Do NOT "
                     "enumerate factions, traditions, or populations here — those particulars belong to the "
                     "cast, locations, and scenes, made when the story needs them. Never good-vs-evil; both "
                     "sides of the conflict must be righteous.",
@@ -3512,6 +3517,10 @@ def register(app, ctx):
             "You may edit at ANY granularity: a top-level field (premise), one dict key "
             "(premise_parts/root), one list item by id (arcs/arc-2), or one sub-field of an item "
             "(arcs/arc-2/premise). Prefer the SMALLEST change — set the one sub-field, not the whole item.\n"
+            "REPLY MUST MATCH OPS — never say in `reply` that you changed, updated, added, or removed "
+            "something unless you emitted an op for it THIS turn. If you only rewrote the premise, do not "
+            "claim you also updated the principle or the question. Saying 'Done' while the ops are empty "
+            "(or don't cover what you claim) is a hard failure — the writer trusts the reply.\n"
             "Only these top-level fields are editable: " + ", ".join(allowed) + ". Keep prose concrete and "
             "in the story's voice. NAMES: every faction, creed, religion, order or organization is ONE "
             "coined word — never two words, never 'The <Adjective> <Noun>' (Crownsworn, Unbound, "
@@ -3533,14 +3542,29 @@ def register(app, ctx):
                 "place with a history; a relationship under strain; a recurring texture or motif. A central "
                 "dilemma (the axioms below) is ONE fork among these, never the required destination — many "
                 "good stories are cozy, exploratory, or character-driven and never pose one. Follow the "
-                "writer; do not funnel every story toward a moral choice.\n\n"
+                "writer; do not funnel every story toward a moral choice.\n"
+                "PITCH WORLD FORKS AS KERNELS — one compressed sentence about HOW THE WORLD IS MADE: the "
+                "foundational condition that constitutes it. VARY THE KIND across the set. At least one "
+                "must be FULLY GROUNDED with no speculative or magical element whatsoever — a real "
+                "material condition of the world (a climate, an economy, a technology, a political order), "
+                "e.g. 'the world is dying: warming is desertifying the land, the cities flood, the old "
+                "currencies collapsed and everything trades in crypto'. Spread the rest across the other "
+                "registers — social, spiritual, mysterious, metaphysical — so magic is one option among "
+                "many, never the default. A kernel names the constituting condition and STOPS: it does "
+                "NOT enumerate society, customs, or factions — those are uncovered after a pick. The "
+                "strongest kernels hold a mystery: something beyond the surface.\n\n"
                 "DEFINITIONS\n"
-                "World root: the single defining trait of the world from which everything grows — a "
-                "generative property of how this world works, stated as a standing fact about the world, "
-                "not an event. It is what makes this world unlike ours and what makes the dilemma exist at "
-                "all. Rewrite: reality runs on a finite life-energy that can be spent and stolen. The "
-                "Wandering Inn: the gods are dead and magic is raw and unowned, answering to whoever levels "
-                "into it. Alien Stage: human voices are farmed as entertainment by an alien overclass. A "
+                "World root: HOW THE WORLD IS MADE — the foundational condition that constitutes it and "
+                "from which everything grows, stated as a standing fact about the world, not an event. It "
+                "need NOT be magical: it can be ecological, economic, technological, social, spiritual, "
+                "mysterious, or metaphysical — whatever makes this world's substrate unlike ours. A range "
+                "of kinds — Rewrite (metaphysical): the world is alive and incarnates its own life-energy "
+                "as familiars. The Wandering Inn (systemic + mystery): the world runs on Diablo-style "
+                "leveling — Classes, Levels, Skills — but magic is something older, beyond the system. "
+                "Alien Stage (social): human voices are farmed as entertainment by an alien overclass. "
+                "Fully grounded (ecological + economic): the world is dying — warming is desertifying the "
+                "land, the great cities are flooding, the old currencies collapsed and everything now "
+                "trades in crypto. A "
                 "mere circumstance ('a failing harvest') is an event IN a world; a root is the property of "
                 "the world that generates such events. In grounded fiction the root is a systemic condition "
                 "(a company town, an occupation), not a metaphysics — but still a standing trait, not an "
@@ -3597,9 +3621,10 @@ def register(app, ctx):
                 "OPENING MOVE — if the writer has provided no material yet: greet in one line in `reply`, "
                 "then put three to four DISTINCT forks in `suggestions`, MIXED in kind — e.g. a world with "
                 "a defining trait, a character with a want and a secret, a place with a history, a central "
-                "tension. Range widely: some speculative, some grounded, some dramatic, some quiet. Do not "
-                "offer bare theme-words or abstract oppositions (C1, C2), and do not make every option a "
-                "dilemma.\n\n"
+                "tension. Each fork is ONE kernel sentence — the principle, not its worked-out "
+                "consequences. Range widely: some speculative, some grounded, some dramatic, some quiet. Do "
+                "not offer bare theme-words or abstract oppositions (C1, C2), and do not make every option "
+                "a dilemma.\n\n"
                 "PROCEDURE\n"
                 "When the writer picks or supplies a fork, develop it into something specific in `reply` "
                 "(one or two lines), then put the NEXT forks in `suggestions`. If the fork is a central "
@@ -3634,11 +3659,12 @@ def register(app, ctx):
             prompt = (f"ANCHORED SECTION (path  #hash  preview):\n{view}\n\n"
                       f"EDITABLE FIELDS: {', '.join(allowed)}\n\nCONVERSATION:\n{convo}\n\n"
                       f"{note}Answer or edit per the writer's LATEST message.")
-            # First climb the effort ladder (reasoning ON, then the structured-flake fallback). A
-            # reasoning model occasionally returns a semantically-EMPTY {"reply":"","ops":[]} on this
-            # heavy prompt; if the whole ladder comes back blank, retry on the fast non-reasoning path
-            # a couple more times before giving up — an un-reasoned reply beats a dead turn.
-            for effort in ("high", "none", "none", "none"):
+            # Effort ladder. `reasoning_effort: high` on this model reliably produces near-EMPTY /
+            # malformed STRUCTURED output (a 48-char reply, no suggestions, sometimes nothing) — the
+            # reasoning channel eats the answer. Measured: high → ~empty; low → fast (~5s) + clean;
+            # none → works but slow/verbose. So lead with `low`, then fall back to the non-reasoning
+            # path a couple times before giving up.
+            for effort in ("low", "none", "none", "none"):
                 p = ctx.text_provider_for(_PROVIDER_ROLE, {"reasoning_effort": effort})
                 if p is None:
                     return None

@@ -8,34 +8,66 @@
   import { put } from '$lib/api.js';
   import { consumeSse } from '$lib/sse.js';
   import { loadStory } from '$lib/stories.svelte.js';
+  import { cubicOut } from 'svelte/easing';
 
-  // presentation: 'docked' (fixed left window) | 'modal' (centered overlay). 'hidden' is handled by
-  // the parent (it stops rendering us and shows a launcher chip). onCenter toggles docked↔modal.
+  // Slide the panel off the bottom edge on hide, back up on show. A Svelte transition (JS-driven,
+  // compiled to a keyframe) instead of a CSS transition — a var/percent-driven CSS transition on
+  // transform/padding gets stuck mid-animation in Chromium. intro t:0→1 = translateY(100%→0).
+  const slideY = (node, { duration = 260 } = {}) => ({
+    duration, easing: cubicOut, css: (t) => `transform: translateY(${(1 - t) * 100}%)`,
+  });
+
+  // The editor is a panel in the BOTTOM half of the screen. `presentation` is 'bottom' (shown) or
+  // 'hidden' (parent stops offsetting the body and shows a launcher chip; we render nothing).
   // interview=true (a blank story on the world/premise layer) → the editor OPENS the conversation
   // itself: it greets and puts a few core-question springboards on the table (see openInterview).
-  let { storyKey, layer, layerLabel = '', onCollapse = null, presentation = 'docked', onCenter = null,
+  let { storyKey, layer, layerLabel = '', onCollapse = null, presentation = 'bottom',
         interview = false } = $props();
 
-  let convo = $state([]);      // [{role, content, applied?, rejected?, before?, undone?, failed?}]
+  // Per-section conversation persistence — keep the last ~12 turns so switching sections or reloading
+  // doesn't lose the thread. Keyed by story + layer; stores role/content/suggestions only (the undo/
+  // apply metadata is live-session-only, and undoing across a reload would apply a stale snapshot).
+  const CONVO_MAX = 24;                        // ~12 user+assistant turns
+  const convoStoreKey = (l) => `loom.sectionchat.${storyKey}.${l}`;
+  function loadConvo(l) {
+    try { return JSON.parse(localStorage.getItem(convoStoreKey(l)) || '[]'); } catch { return []; }
+  }
+  function saveConvo() {
+    try {
+      localStorage.setItem(convoStoreKey(layer), JSON.stringify(convo.slice(-CONVO_MAX).map((m) => ({
+        role: m.role, content: m.content, ...(m.suggestions?.length ? { suggestions: m.suggestions } : {}) }))));
+    } catch { /* storage unavailable */ }
+  }
+
+  let convo = $state(loadConvo(layer));   // restored per section; [{role, content, applied?, ...}]
   let typed = $state('');
   let busy = $state(false);
   let err = $state('');
   let scroller;
   const scroll = () => requestAnimationFrame(() => { if (scroller) scroller.scrollTop = scroller.scrollHeight; });
 
-  // Switching sections starts a fresh conversation (the editor is scoped to one layer).
+  // Switching sections swaps in that section's saved conversation (the editor is scoped to one layer).
   let seen = layer;
-  $effect(() => { if (layer !== seen) { seen = layer; convo = []; err = ''; opened = false; } });
+  $effect(() => { if (layer !== seen) { seen = layer; convo = loadConvo(layer); err = ''; opened = false; } });
 
-  // Blank story on the world/premise layer → OPEN the interview ourselves: the editor greets and
-  // offers a few core-question springboards, so the writer arrives to a conversation, not a blank box.
+  // A BLANK section opens itself so the writer arrives to a conversation, not an empty box:
+  //   • a thin story on the world/premise layer → the fork INTERVIEW (springboards);
+  //   • any other blank section → PROPOSE IMPROVEMENTS to what's there.
+  // Fires once per section (opened resets on layer change); a restored saved convo skips it.
   let opened = $state(false);
   $effect(() => {
-    if (interview && !opened && !convo.length && !busy) { opened = true; openInterview(); }
+    if (!opened && !convo.length && !busy) {
+      opened = true;
+      if (interview) openInterview(); else openImprovements();
+    }
   });
   async function openInterview() {
     await stream([{ role: 'user',
       text: "I'm starting a brand-new story from nothing. Put a few different directions we could take it — a world, a character, a place, a tension — for me to pick from." }]);
+  }
+  async function openImprovements() {
+    await stream([{ role: 'user',
+      text: "Review this section and propose 3-4 concrete improvements to it — what's underdeveloped, unclear, or could be sharper. Keep your reply to ONE short line naming the biggest gap, and put each improvement as a separate pickable option in `suggestions` for me to choose from." }]);
   }
 
   // ONE streamed call: the agent's `reply` TEXT streams into a live bubble; a final `result` event
@@ -89,6 +121,7 @@
     } else if (d.rejected?.length) {
       convo[idx].rejected = d.rejected; convo[idx].before = d.before;   // all stale/invalid — say why
     }
+    saveConvo();   // persist the completed turn (user message + this reply) for this section
     scroll();
   }
 
@@ -102,18 +135,13 @@
   }
 </script>
 
-<!-- Rendered only when not hidden. When hidden the component stays MOUNTED (template empty) so the
-     conversation state (`convo`) survives hide/show instead of resetting. -->
+<!-- The aside is `{#if}`-toggled (so it slides in/out via slideY), but the COMPONENT stays mounted via
+     the parent's `{#if editor}`, so `convo` (script state) survives hide/show. -->
 {#if presentation !== 'hidden'}
-{#if presentation === 'modal' && onCenter}
-  <button class="backdrop" onclick={onCenter} aria-label="Dock editor to the side"></button>
-{/if}
-<aside class="schat" class:modal={presentation === 'modal'}>
-  <div class="sh"><span class="dot"></span>Editing <b>{layerLabel || layer}</b>
+<aside class="schat" transition:slideY>
+  <div class="sh"><span class="dot"></span><b>{layerLabel || layer}</b><span class="role">co-writer</span>
     <span class="winctl">
-      {#if onCenter}<button class="collapse" onclick={onCenter}
-        title={presentation === 'modal' ? 'Dock to side' : 'Center'} aria-label="Toggle centered">{presentation === 'modal' ? '▣' : '⤢'}</button>{/if}
-      {#if onCollapse}<button class="collapse" onclick={onCollapse} title="Hide editor" aria-label="Hide editor">⟨</button>{/if}
+      {#if onCollapse}<button class="collapse" onclick={onCollapse} title="Hide editor" aria-label="Hide editor">✕</button>{/if}
     </span></div>
   <div class="log" bind:this={scroller}>
     {#if !convo.length}
@@ -161,22 +189,20 @@
 {/if}
 
 <style>
-  .schat { position: fixed; left: var(--storynav-w, 0); top: var(--chrome-top, 86px); bottom: 0; width: 320px; z-index: 40;
+  /* The editor is a full-width panel in the BOTTOM half of the content: the form is the top half,
+     the chat the bottom. It spans right of the explorer. The slide in/out is the `slideY` Svelte
+     transition (see script), not a CSS transition. */
+  .schat { position: fixed; left: var(--storynav-w, 0); right: 0; bottom: 0; top: auto;
+           height: 50vh; z-index: 40;
            display: flex; flex-direction: column; background: var(--panel, #14161f);
-           border-right: 1px solid var(--border, #2a2f44); }
-  /* Centered overlay: a floating window instead of the side dock. */
-  .schat.modal { left: 50%; top: 50%; right: auto; bottom: auto; transform: translate(-50%, -50%);
-                 width: min(600px, 94vw); height: min(78vh, 760px); z-index: 60;
-                 border: 1px solid var(--border, #2a2f44); border-radius: 14px; overflow: hidden;
-                 box-shadow: 0 24px 70px rgba(0, 0, 0, .55); }
-  .backdrop { position: fixed; inset: 0; z-index: 55; padding: 0; border: none;
-              background: rgba(4, 6, 12, .5); cursor: default; }
+           border-top: 1px solid var(--border, #2a2f44); }
   .sh { display: flex; align-items: center; gap: 7px; padding: 11px 13px; flex: none;
         border-bottom: 1px solid var(--border-soft); font-size: 12.5px; color: var(--muted); }
-  .sh b { color: var(--text); text-transform: capitalize; }
+  .sh b { color: var(--text); text-transform: capitalize; font-weight: 600; }
+  .sh .role { color: var(--faint); font-size: 11px; }
   .winctl { margin-left: auto; display: flex; gap: 2px; }
-  .collapse { width: 22px; height: 22px; display: grid; place-items: center; padding: 0;
-              background: none; border: 1px solid transparent; border-radius: 6px; color: var(--faint); font-size: 12px; cursor: pointer; }
+  .collapse { width: 32px; height: 32px; display: grid; place-items: center; padding: 0;
+              background: none; border: 1px solid transparent; border-radius: 8px; color: var(--muted); font-size: 18px; cursor: pointer; }
   .collapse:hover { color: var(--text); background: var(--elev); }
   .log { flex: 1; min-height: 0; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
   .hint { color: var(--faint); line-height: 1.6; font-style: italic; font-size: 12.5px; }
