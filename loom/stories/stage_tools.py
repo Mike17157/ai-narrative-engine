@@ -138,7 +138,7 @@ def _storyboard(ctx, body: dict) -> dict:
     provider, systems = _provider(ctx, body, "storyboard")
     base = body.get("spine") or body.get("graph") or {}
     premise = (body.get("premise") or "").strip()
-    craft = _G.craft_notes(ctx.root, f"{premise} {ch.system or ''}"[:600], k=6, section="storyboard")
+    craft = _G.MINIMALISM
     system, prompt = storyboard_inputs(
         name=ch.name, persona=ch.system, extras=ctx.card_extras(ch, body["character"]),
         systems=systems, premise=premise, spine=base, craft=craft)
@@ -389,14 +389,13 @@ def _create_character(ctx, body: dict) -> dict:
     }
     deep_schema["properties"].update(extra)
     deep_schema["required"] = list(deep_schema["required"]) + list(extra)
-    craft = _G.craft_notes(ctx.root, f"{brief} {overview}", k=6, section="character")
-    psyche = _G.psyche_notes(ctx.root, f"{brief} {chosen_hook}", k=5)
+    craft = _G.MINIMALISM
     deep_prompt = "\n\n".join(p for p in [
         base_ctx,
         f"THE PERSON TO WRITE — develop THIS seed and keep its specific angle:\n{chosen_hook}",
-        _G.facet_palette(),
+        _G.ADAPTATION,
         rel_instr,
-        craft, psyche, _G.CONCRETENESS,
+        craft, _G.CONCRETENESS,
         "Write this ONE person in full: fill conflict, growth, lie, wound, want, need and arc_type, "
         "and a vivid `persona` built from concrete particulars (a daily situation, an object they "
         "keep, a line they actually say, a habit, a contradiction). JSON only.",
@@ -489,7 +488,7 @@ def _create_character(ctx, body: dict) -> dict:
                 f"CHARACTER: {cname}\nPERSONA:\n{persona}",
                 (f"INNER FRAME — {_wein}" if _wein else ""),
                 (f"STORY REGISTER:\n{overview}" if overview else ""),
-                rel_ctx, psyche,
+                rel_ctx, _G.ADAPTATION,
                 "Produce 6-9 concrete EXEMPLARS that make this character vivid and specific — a mix "
                 "of life (a vivid past moment + what they did), saying (a line in their own voice), "
                 "and reaction ('When <situation>, they <do/say>'). Each should reveal the inner frame "

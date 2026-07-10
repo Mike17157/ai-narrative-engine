@@ -7,8 +7,8 @@ local file by default (``configs/lorebooks.db``); set ``TURSO_DATABASE_URL`` (+
 synced to the cloud). Retrieval uses FTS5's built-in ``bm25()`` ranking — entries can be
 upserted/edited at runtime, so the lorebook is fully dynamic.
 
-Entries are keyed by (scope, entry_id). A scope is a namespace, e.g. ``_craft``,
-``_global``, a character key, or ``sim-<id>-<character>``.
+Entries are keyed by (scope, entry_id). A scope is a namespace, e.g. ``_global``,
+``_refusal``, a character key, or ``sim-<id>-<character>``.
 
 Each scope is also a first-class *book* with metadata (name, description, rating
 sfw/nsfw, category, builtin flag, enabled) stored in the ``books`` table — that's what
@@ -94,11 +94,6 @@ def _default_scope(category: str | None) -> str:
 # Books that exist by convention even before the manager writes metadata for them, so
 # the manager can present them with a friendly name/rating instead of a bare scope.
 RESERVED_BOOKS = {
-    "_craft":     {"name": "Storytelling Craft", "category": "craft",     "rating": "sfw",
-                   "description": "Modern storytelling theory the AI reasons with. Always-on for the workshop."},
-    "_psyche":    {"name": "Character Psyche (Big Five)", "category": "craft", "rating": "sfw",
-                   "description": "IPIP Big-Five facet behaviours (public domain) — grounds generated "
-                                  "characters in concrete tendencies instead of averaged priors."},
     "_global":    {"name": "Global Lore",        "category": "world",     "rating": "sfw",
                    "description": "World facts shared across every story and chat."},
     "_nsfw":      {"name": "Intimacy & NSFW",    "category": "intimacy",  "rating": "nsfw",
@@ -157,11 +152,16 @@ def _conn(root: Path):
                         "('function','guard','craft','character')")
         except Exception:  # noqa: BLE001 — already present
             pass
+        # Retire the deprecated CRAFT + PSYCHE(Big-Five) lorebooks: drop any residual rows so they no
+        # longer show as ghost books. One-time; idempotent (0 rows after the first run). A codified
+        # craft corpus and a Big-Five trait model both pulled generation toward the trained mean —
+        # replaced by grounding.MINIMALISM (prose) and grounding.ADAPTATION (character).
+        con.execute("DELETE FROM lore WHERE scope IN ('_craft', '_psyche')")
+        con.execute("DELETE FROM books WHERE id IN ('_craft', '_psyche')")
         con.commit()
         _inited.add(key)
         _migrate_json(root, con)
         _seed_books(root, con)
-        _topup_craft(root, con)
     return con
 
 
@@ -178,27 +178,6 @@ def _row_to_entry(r) -> LoreEntry:
 
 
 # ── One-time migration of the legacy JSON lorebooks ─────────────────────────────
-
-def _topup_craft(root: Path, con) -> None:
-    """Insert any `_craft.json` entries not yet in the DB (insert-if-absent). `_migrate_json` only
-    seeds when the whole table is empty, so this is how NEW craft principles added to the json reach
-    an existing DB — without clobbering user edits or resurrecting nothing else."""
-    p = root / "configs" / "lorebooks" / "_craft.json"
-    if not p.is_file():
-        return
-    try:
-        data = json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return
-    have = {r[0] for r in con.execute("SELECT entry_id FROM lore WHERE scope='_craft'").fetchall()}
-    added = 0
-    for e in (data.get("entries") or []):
-        if e.get("id") and e["id"] not in have:
-            _insert(con, "_craft", LoreEntry(**e))
-            added += 1
-    if added:
-        con.commit()
-
 
 def _migrate_json(root: Path, con) -> None:
     d = root / "configs" / "lorebooks"
@@ -260,15 +239,6 @@ def _seed_books(root: Path, con) -> None:
             for e in entries:
                 _insert(con, bid, LoreEntry(**e))
 
-    # _psyche: IPIP Big-Five facet behaviours, built from the grounding module (lazy import → no
-    # import cycle). Seeded once; never resurrected after the user empties it.
-    if not (con.execute("SELECT COUNT(*) FROM lore WHERE scope='_psyche'").fetchone() or [0])[0]:
-        try:
-            from ...stories.pipeline.grounding import psyche_entries
-            for e in psyche_entries():
-                _insert(con, "_psyche", LoreEntry(**e))
-        except Exception:  # noqa: BLE001 — grounding optional; seeding must not break init
-            pass
 
     # Keep the managed `_refusal` floor entry current: convert the original one-phrase-per-
     # entry format to the trigger→action model AND refresh the phrase set when it changes

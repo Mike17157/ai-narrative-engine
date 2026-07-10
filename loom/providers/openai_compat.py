@@ -218,10 +218,18 @@ class OpenAICompatProvider:
                         chunks.append(delta)
                         on_delta(delta)
             content = "".join(chunks)
-            try:
-                data = json.loads(content) if (content and content.strip()) else {}
-            except json.JSONDecodeError:
-                # streamed JSON arrived malformed/truncated — fall back to one clean blocking call
+            data = None
+            if content and content.strip():
+                try:
+                    data = json.loads(content)
+                except json.JSONDecodeError:
+                    data = None
+            if data is None:
+                # Streamed content was EMPTY or malformed. Empty happens with reasoning models that
+                # emit their thinking on a separate channel and stream NO `content` deltas — the live
+                # text never arrives, but the final message.content still holds the JSON. Fall back to
+                # one clean blocking call. ponytail: this re-runs the model (2x cost) only on the empty
+                # path; when content DOES stream we keep the live tokens and never hit this.
                 body.pop("stream", None)
                 resp = httpx.post(url, json=body, headers=self._headers(), timeout=120)
                 if resp.status_code >= 400:

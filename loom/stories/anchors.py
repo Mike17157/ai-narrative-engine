@@ -389,6 +389,43 @@ def merge_results(prior: dict, retry: dict) -> dict:
     return {"applied": merged_applied, "rejected": merged_rejected, "before": merged_before}
 
 
+_ESC = {"n": "\n", "t": "\t", "r": "\r", '"': '"', "\\": "\\", "/": "/", "b": "\b", "f": "\f"}
+
+
+def partial_reply(raw: str) -> str:
+    """Decode the `"reply"` string field out of a possibly-truncated JSON object.
+
+    The card-chat model streams a structured `{reply, ops}` object; we want to show
+    the reply text live as it forms. This walks the streamed prefix, so it returns
+    the reply-so-far even when the JSON isn't closed yet. It's a PREVIEW only — the
+    authoritative reply comes from the final parsed object — so a mid-stream `\\uXXXX`
+    that hasn't fully arrived is left as-is rather than complicating the walk."""
+    i = raw.find('"reply"')
+    if i < 0:
+        return ""
+    j = raw.find(":", i + 7)
+    if j < 0:
+        return ""
+    k = raw.find('"', j + 1)
+    if k < 0:
+        return ""
+    out: list[str] = []
+    x, n = k + 1, len(raw)
+    while x < n:
+        c = raw[x]
+        if c == "\\":
+            if x + 1 >= n:
+                break                       # incomplete escape at the tail — drop it
+            out.append(_ESC.get(raw[x + 1], raw[x + 1]))
+            x += 2
+            continue
+        if c == '"':
+            break                           # closing quote — reply done
+        out.append(c)
+        x += 1
+    return "".join(out)
+
+
 # ── self-check ─────────────────────────────────────────────────────────────── #
 if __name__ == "__main__":   # ponytail: a runnable check of the core contracts
     # node_hash is deterministic + stable
@@ -490,5 +527,12 @@ if __name__ == "__main__":   # ponytail: a runnable check of the core contracts
     m2 = merge_results(prior, retry2)
     assert m2["rejected"] == [{"path": "premise", "reason": "stale"}]
     assert m2["applied"] == [{"path": "tone", "op": "set"}]
+
+    # ── partial_reply: reply-so-far from truncated streamed JSON ─────────────
+    assert partial_reply('{"reply":"Hello wor') == "Hello wor"          # mid-string
+    assert partial_reply('{"reply":"a \\"quote\\" b","ops":[]}') == 'a "quote" b'  # escapes + closed
+    assert partial_reply('{"reply":"line\\nbreak') == "line\nbreak"     # escape decoded
+    assert partial_reply('{"reply":"tail\\') == "tail"                  # dangling escape dropped
+    assert partial_reply('{"ops":[]}') == ""                            # no reply field yet
 
     print("ok — hashline anchors: hash, view, resolve, apply (set/merge/remove + stale rejection + recovery)")

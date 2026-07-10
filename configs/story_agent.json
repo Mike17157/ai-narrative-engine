@@ -1,5 +1,5 @@
 {
-  "_comment": "The AUTHOR agent — every word of its definition lives here. Each AGENT (under `agents`) is one complete section: its persona prose, the tool FUNCTIONS it offers, the trigger keywords that route a request to it, and which craft section + grounding to inject. The tool IMPLEMENTATIONS live in code (loom/stories/scripts.py + stage_tools.py) — this file only NAMES them, and `agent_config.load_config` VALIDATES every name against that registry at load time, raising loudly if a name doesn't resolve (so drift is caught, never silent). LAYERING CONTRACT: the base `system` is the minimal invariant spine (role + core ACT stance + tool policy). Agent personas and directives REFINE or SPECIALIZE — they never restate or contradict the base. When a directive needs a different rule, it states its own rule and the base never made a conflicting claim. Reply length, specific tool preferences, and prose role are NOT restated across layers. Edit agents/directives here; edit tool implementations in scripts.py/stage_tools.py.",
+  "_comment": "The AUTHOR agent — every word of its definition lives here. Each AGENT (under `agents`) is one complete section: its persona prose, the tool FUNCTIONS it offers, the trigger keywords that route a request to it, and which grounding to inject. The tool IMPLEMENTATIONS live in code (loom/stories/scripts.py + stage_tools.py) — this file only NAMES them, and `agent_config.load_config` VALIDATES every name against that registry at load time, raising loudly if a name doesn't resolve (so drift is caught, never silent). LAYERING CONTRACT: the base `system` is the minimal invariant spine (role + core ACT stance + tool policy). Agent personas and directives REFINE or SPECIALIZE — they never restate or contradict the base. When a directive needs a different rule, it states its own rule and the base never made a conflicting claim. Reply length, specific tool preferences, and prose role are NOT restated across layers. Edit agents/directives here; edit tool implementations in scripts.py/stage_tools.py.",
   "name": "Author",
   "role": "author",
   "system": "You are the writer's story collaborator — you both DISCUSS and ACT.\nACT NOW (call the richest matching tool, filling EVERY param) whenever the writer asks for something to exist or change — a character, an outfit, a location, a scene, a relationship, a title/premise/ending — or when they clearly agree to a proposal. This includes VAGUE or open-ended requests ('a shy boy and a popstar', 'build me a cast', 'give it a setting') — vague is not a reason to stop and ask; it's your cue to invent something specific and commit to it. Prefer the richer tool when one applies; don't merely describe what you'd make — make it, with the same idiosyncratic depth whatever the subject. Reply in PROSE ONLY for genuine questions, opinions, or open brainstorming where no concrete change was requested. When in doubt, ACT — your calls are proposals the writer reviews and can dismiss, so a wrong guess costs nothing; asking first costs a whole turn for no reason. NEVER end a reply with a question mark and never ask the writer to fill in a gap, pick a tone, or choose a direction — invent the specific choice yourself (a name, a twist, a tone) and state it as a fact you've already run with; the writer can always redirect after. DEFAULT to a terse reply — one short sentence — unless an active directive below asks for more or less. You're a co-editor, not a narrator: don't recap what you just did at length, don't restate the request back, don't explain your reasoning unless asked. The tool calls carry the work; the reply is a quick handoff. Be specific to THIS story; never re-suggest something already present; always say something back.",
@@ -301,53 +301,6 @@
     "arcs",
     "cast"
   ],
-  "craft": {
-    "scope": "_craft",
-    "k": 5,
-    "section_anchors": {
-      "premise": [
-        "designing-principle",
-        "moral-argument"
-      ],
-      "character": [
-        "want-vs-need",
-        "the-ghost",
-        "lie-the-character-believes",
-        "sacred-flaw"
-      ],
-      "antagonist": [
-        "opponent-attacks-weakness",
-        "four-corner-opposition",
-        "antagonist-mirror"
-      ],
-      "arc": [
-        "arc-types",
-        "growth-cycles",
-        "moral-argument",
-        "seven-key-steps"
-      ],
-      "storyboard": [
-        "seven-key-steps",
-        "promise-progress-payoff",
-        "escalation-causality"
-      ],
-      "chapters": [
-        "self-revelation",
-        "world-bound-climax",
-        "escalation-causality",
-        "try-fail-cycles"
-      ],
-      "ending": [
-        "self-revelation",
-        "world-bound-climax",
-        "inevitable-surprising-ending"
-      ]
-    }
-  },
-  "psyche": {
-    "scope": "_psyche",
-    "k": 4
-  },
   "tool_policy": {
     "all_tools_cap": 40,
     "attached_cap": 12

@@ -1,6 +1,6 @@
 """The story chat agent — the fixed STRUCTURE that runs a turn. All authored text/rules come from
 `configs/story_agent.json` (see agent_config.py); the lorebooks supply the TOOLS (function books)
-and the retrieved KNOWLEDGE (_craft principles, _psyche facets). This was extracted out of the
+and the injected GUIDANCE (the adaptation basis + the literary-minimalist stance). This was extracted out of the
 fat `story_graph_ops` router endpoint — the router is now a thin wrapper. See [[agents-and-scripts]].
 """
 from __future__ import annotations
@@ -276,14 +276,13 @@ def run_turn(ctx, body: dict) -> dict:
     # ── Grounding: story context + craft (by the mode's section) + the mode's extra injects. ──
     story_ctx = _story_context(ctx, body.get("story"), cfg.get("story_context_fields") or [])
     _q = req_text or transcript
-    craft_block = _G.craft_notes(root, _q, k=(cfg.get("craft") or {}).get("k", 5),
-                                 section=(primary.get("craft_section") or ""))
+    craft_block = _G.MINIMALISM       # the literary-minimalist stance (replaced the _craft lorebook)
     inject = primary.get("inject") or []
     ground = []
     if "concreteness" in inject:
         ground.append(_G.CONCRETENESS)
     if "psyche" in inject:
-        ground.append(_G.psyche_notes(root, _q, k=(cfg.get("psyche") or {}).get("k", 4)))
+        ground.append(_G.ADAPTATION)      # the wound→lie→coping adaptation basis (replaced Big Five)
     char_ground = "\n\n".join(p for p in ground if p)
 
     # ── System prompt — assembled by assemble_system_prompt (also used by the dump endpoint).

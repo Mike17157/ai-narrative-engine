@@ -60,7 +60,7 @@ def register(app, ctx):
                                            systems=systems,
                                            premise=_prem,
                                            spine=spine,
-                                           craft=_G.craft_notes(ctx.root, f"{_prem} {ch.system or ''}"[:600], k=6, section="character"))
+                                           craft=_G.MINIMALISM)
 
         loop = asyncio.get_running_loop()
         q: asyncio.Queue = asyncio.Queue()
@@ -660,7 +660,7 @@ def register(app, ctx):
         if provider is None:
             return JSONResponse({"error": _systems}, status_code=400)
         from .pipeline import grounding as _G
-        _arc_craft = _G.craft_notes(ctx.root, f"theme arc structure climax ending {body.get('premise') or ''}"[:400], k=6, section="arc")
+        _arc_craft = _G.MINIMALISM
         try:
             res = provider.generate_text(system=ARCS_SYSTEM + (("\n\n" + _arc_craft) if _arc_craft else ""),
                                          prompt=arcs_prompt(cast, body.get("premise") or ""),
@@ -1034,11 +1034,11 @@ def register(app, ctx):
         if provider is None:
             return JSONResponse({"error": systems}, status_code=400)
         seed = body.get("seed", "")
-        # Ground the cast in the SAME modern-psych scaffold the workshop uses (_psyche book) — so
+        # Ground the cast in the SAME adaptation basis the workshop uses (wound→lie→coping) — so
         # genesis characters have real depth, not random traits. See GENESIS.md §6.
         from .pipeline import grounding as _G
         try:
-            psyche = _G.psyche_notes(ctx.root, seed or "character personality behaviour", k=6)
+            psyche = _G.ADAPTATION
         except Exception:  # noqa: BLE001 — grounding is best-effort; never block generation
             psyche = ""
         try:
@@ -1066,7 +1066,7 @@ def register(app, ctx):
         seed = body.get("seed", "")
         from .pipeline import grounding as _G
         try:
-            psyche = _G.psyche_notes(ctx.root, seed or "character personality behaviour", k=6)
+            psyche = _G.ADAPTATION
         except Exception:  # noqa: BLE001 — grounding is best-effort; never block generation
             psyche = ""
         try:
@@ -1191,10 +1191,10 @@ def register(app, ctx):
         if isinstance(saved, dict) and saved:
             state = genesis_state_from(saved)
         else:
-            # Ground the cast in the modern-psych scaffold (same _psyche book as genesis_roles).
+            # Ground the cast in the adaptation basis (wound→lie→coping, same as genesis_roles).
             from .pipeline import grounding as _G
             try:
-                psyche = _G.psyche_notes(ctx.root, seed or "character personality behaviour", k=6)
+                psyche = _G.ADAPTATION
             except Exception:  # noqa: BLE001 — grounding is best-effort
                 psyche = ""
             state = GenesisState(seed=seed, world=body.get("world") or "", grounding=psyche,
@@ -1673,7 +1673,7 @@ def register(app, ctx):
             return JSONResponse({"error": systems}, status_code=400)
         extras = ctx.card_extras(ch, body["character"])
         from .pipeline import grounding as _G
-        _craft = _G.craft_notes(ctx.root, (ch.system or ch.name or "")[:600], k=6, section="character")
+        _craft = _G.MINIMALISM
         try:
             base = extract_protagonist(provider, name=ch.name, persona=ch.system or "",
                                        extras=extras, systems=systems, craft=_craft)
@@ -1829,22 +1829,6 @@ def register(app, ctx):
         from ..server.services.lorebook import format_lore_block
         query_text = " ".join(str(m.get("content", "")) for m in messages)
 
-        # Craft lorebook (_craft): modern storytelling theory the consultant
-        # reasons with. Surface what the exchange calls for; always keep a
-        # foundational floor so the AI is never without a craft lens.
-        craft_hits = _LS.retrieve(ctx.root, query_text, ["_craft"], top_k=7)
-        if not craft_hits:
-            craft_hits = _LS.top_by_priority(ctx.root, "_craft", 4)
-        if craft_hits:
-            system = system + "\n\n" + format_lore_block(
-                craft_hits,
-                header=(
-                    "CRAFT NOTES — modern storytelling principles relevant to this "
-                    "exchange. Reason with these and name the thinker when it sharpens "
-                    "a point, but apply them to THIS character; never lecture:"
-                ),
-            )
-
         # World lore (setting, history, established facts). The console may assign
         # specific scopes via body["lorebooks"]; default to character + global.
         world_scopes = body.get("lorebooks")
@@ -1981,15 +1965,13 @@ def register(app, ctx):
         primary = agents.get(active_ids[0], {}) if active_ids else {}
         story_ctx = _AG._story_context(ctx, body.get("story"),
                                        cfg.get("story_context_fields") or [])
-        craft_block = _G.craft_notes(root, req_text or "",
-                                     k=(cfg.get("craft") or {}).get("k", 5),
-                                     section=(primary.get("craft_section") or ""))
+        craft_block = _G.MINIMALISM       # literary-minimalist stance (replaced the _craft lorebook)
         inject = primary.get("inject") or []
         ground = []
         if "concreteness" in inject:
             ground.append(_G.CONCRETENESS)
         if "psyche" in inject:
-            ground.append(_G.psyche_notes(root, req_text, k=(cfg.get("psyche") or {}).get("k", 4)))
+            ground.append(_G.ADAPTATION)      # the wound→lie→coping adaptation basis (replaced Big Five)
         char_ground = "\n\n".join(p for p in ground if p)
         target = (body.get("target") or "story").strip()
         draft = (target == "draft") or (body.get("commit", True) is False)
@@ -2376,8 +2358,7 @@ def register(app, ctx):
         )
 
         from .pipeline import grounding as _G
-        _arc_craft = _G.craft_notes(
-            ctx.root, f"{intended_ending} arc structure change"[:400], k=6, section="arc")
+        _arc_craft = _G.MINIMALISM
         prompt = (
             (f"{_arc_craft}\n\n" if _arc_craft else "")
             + f"PREMISE CONVERSATION:\n{transcript}\n\n"
@@ -2487,9 +2468,7 @@ def register(app, ctx):
         # Truby/ending craft so the arc (esp. its final chapter) lands a self-revelation whose
         # consequence binds the world's fate to the hero's choice — never a generic "greater good".
         from .pipeline import grounding as _G
-        _exp_craft = _G.craft_notes(
-            ctx.root, f"{arc.name} {arc.mini_ending or ''} {arc.premise or ''} climax self-revelation"[:400],
-            k=6, section="chapters")
+        _exp_craft = _G.MINIMALISM
 
         system = (
             "You are writing the CHAPTERS for ONE ARC of a book.\n\n"
@@ -2506,7 +2485,7 @@ def register(app, ctx):
             f"The id should be {arc_id}-ch1, {arc_id}-ch2, etc. (e.g. {arc_id}-ch1).\n"
             "The final chapter must land on this arc's mini_ending — as the protagonist's "
             "self-revelation and the CHOICE it forces, with the outer stakes bound to that choice "
-            "(never a generic 'greater good'). Apply the CRAFT NOTES below.\n"
+            "(never a generic 'greater good'). Apply the guidance below.\n"
             "Characters in each chapter must be a subset of this arc's cast — no one else."
         )
 
@@ -3434,7 +3413,7 @@ def register(app, ctx):
     }
 
     @app.post("/api/stories/{key}/card/{layer}/chat")
-    def story_card_chat(key: str, layer: str, body: dict):
+    async def story_card_chat(key: str, layer: str, body: dict):
         """The SECTION COLLABORATOR — a thinking partner AND editor for ONE section, using
         HASH-ANCHORED (hashline) ops in the OhMyPi style.
 
@@ -3449,9 +3428,15 @@ def register(app, ctx):
         Returns {reply, applied:[{path,op}], rejected:[{path,reason, current_hash?}],
                  before:{top_field:old}, layer?}. `before` holds the pre-edit top-level
         fields for the client's Undo. Body {messages:[{role,text}]}."""
+        import asyncio
+        import threading
+
+        from fastapi.concurrency import run_in_threadpool
+        from fastapi.responses import StreamingResponse
+
         from ..server.services import config_files as _cf
         from .card import LAYER_FIELDS
-        from .anchors import anchored_view, apply_ops, any_stale_rejections, merge_results
+        from .anchors import anchored_view, apply_ops, any_stale_rejections, merge_results, partial_reply
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -3475,10 +3460,17 @@ def register(app, ctx):
         # Structured `ops` (a real array — not a string-encoded patch). Each op names its
         # target by slash-path and cites the #hash it saw; merge/set/remove cover every
         # edit at field, item, and sub-field granularity under one vocabulary.
-        schema = {"type": "object", "additionalProperties": False, "required": ["reply", "ops"],
+        schema = {"type": "object", "additionalProperties": False, "required": ["reply", "ops", "suggestions"],
                   "properties": {
                       "reply": {"type": "string", "description": "your conversational turn to the writer — "
-                                "an ANSWER if they asked a question, a brief note if you made a change"},
+                                "an ANSWER if they asked a question, a brief note if you made a change. Keep "
+                                "it SHORT; put the concrete options in `suggestions`, not a wall of prose"},
+                      "suggestions": {"type": "array", "description": "a short list (2–5) of concrete things "
+                                "the writer could ADDRESS OR DEVELOP next — forks, gaps, open threads, or "
+                                "directions to pursue. Each is a brief actionable phrase the writer can pick "
+                                "to run with. In INTERVIEW MODE these are the forks. EMPTY only if truly "
+                                "nothing is open.",
+                                "items": {"type": "string"}},
                       "ops": {"type": "array", "description": "SURGICAL edits — one entry per node you "
                               "change. EMPTY if you're only discussing. Each entry: "
                               "{path, anchor, op, value}.",
@@ -3524,12 +3516,24 @@ def register(app, ctx):
             "in the story's voice. NAMES: every faction, creed, religion, order or organization is ONE "
             "coined word — never two words, never 'The <Adjective> <Noun>' (Crownsworn, Unbound, "
             "Emberwake — NOT 'Harvest Binding').\n"
+            "ALWAYS, in BOTH modes: keep `reply` short and fill `suggestions` with 2–5 concrete things "
+            "the writer could address or develop next — the open threads, gaps, or directions that follow "
+            "from where the story is now. These are optional picks the writer can run with, not commands. "
+            "Leave `suggestions` empty only when there is genuinely nothing open.\n"
             f"SECTION: {_SECTION_BRIEF.get(layer, layer)}")
         if _thin and layer in ("overview", "map"):
             system += (
-                "\n\nINTERVIEW MODE — the story has no core question yet. The objective is to derive, "
-                "through conversation, the world's ROOT — its single defining trait — and the core "
-                "question that trait forces. Lead; do not wait for edit commands.\n\n"
+                "\n\nINTERVIEW MODE — the story is blank. The objective is to help the writer build a "
+                "rich story from nothing by offering FORKS — concrete directions the story could take — "
+                "and developing whichever one the writer picks. Lead; do not wait for edit commands.\n\n"
+                "FORKS — a story gets rich by accumulating specifics, lorebook-style, not by nailing one "
+                "dramatic spine. Each turn, put a few forks on the table, then develop the one the writer "
+                "chooses and offer the next. A fork can be any of: a defining trait or law of the world; a "
+                "central tension or question the story turns on; a character with a want and a secret; a "
+                "place with a history; a relationship under strain; a recurring texture or motif. A central "
+                "dilemma (the axioms below) is ONE fork among these, never the required destination — many "
+                "good stories are cozy, exploratory, or character-driven and never pose one. Follow the "
+                "writer; do not funnel every story toward a moral choice.\n\n"
                 "DEFINITIONS\n"
                 "World root: the single defining trait of the world from which everything grows — a "
                 "generative property of how this world works, stated as a standing fact about the world, "
@@ -3547,8 +3551,9 @@ def register(app, ctx):
                 "Concrete situation: a specific circumstance — particular place, time, and people — where "
                 "the root makes the choice unavoidable. An abstract formulation ('freedom vs. security') "
                 "is never a situation; it is a seminar topic.\n\n"
-                "AXIOMS — what the evidence shows produces profundity. These constrain every question you "
-                "ask.\n"
+                "AXIOMS — WHEN the writer takes the central-tension fork, these sharpen it into something "
+                "that lands. They do NOT apply to the other forks; skip them entirely if the story has no "
+                "dilemma.\n"
                 "1. SYMMETRY OF SIDES. A core question must have two defensible sides. A decent person "
                 "could choose either, and suffer for it. If one side is obviously correct, the question "
                 "is under-derived: continue until you can name the person who would take the losing side "
@@ -3578,111 +3583,158 @@ def register(app, ctx):
                 "character's wound, derive the false belief it installed, the behavior it dictates, and "
                 "the event that would falsify it.\n\n"
                 "HARD CONSTRAINTS\n"
-                "C1. Never present a question in abstract form. Always instantiate it: specific world, "
-                "specific circumstance, specific person facing the choice. 'Freedom vs. security' is "
-                "non-compliant; 'the last free city falls unless it adopts the methods it is fighting' is "
-                "compliant.\n"
+                "C1. Stay concrete. Instantiate every fork in specifics — a particular world, place, "
+                "person, or thing — never an abstract label. For a tension: 'the last free city falls "
+                "unless it adopts the methods it is fighting', not 'freedom vs. security'.\n"
                 "C2. Never use capitalized abstract-noun oppositions, 'X versus Y' framings, or "
                 "theme-word labels. These are the exact failure signature of unoriginal output.\n"
-                "C3. One question per turn. Then stop and wait.\n"
-                "C4. Do not answer your own question. The writer answers; you interrogate the answer.\n"
-                "C5. Keep `ops` empty during the interview phase. Commit only after the question is "
-                "agreed.\n\n"
-                "OPENING MOVE — if the writer has provided no material yet: greet in one sentence, then "
-                "offer three to four options, each ANCHORED IN A DISTINCT WORLD ROOT (a defining trait, "
-                "per the definition above) and the concrete dilemma that trait forces. Range widely — some "
-                "speculative, some grounded. Invite the writer to select, modify, or replace one. Do not "
-                "offer themes, abstract oppositions, or bare situations with no world trait behind them "
-                "(C1, C2).\n\n"
+                "C3. One fork or question per turn. Then stop and wait.\n"
+                "C4. Do not answer for the writer. You offer forks and develop their pick; they decide.\n"
+                "C5. Keep `ops` empty while exploring. Commit only once the writer settles on something.\n\n"
+                "PUT THE FORKS IN `suggestions` — the forks you offer are the `suggestions` list, one "
+                "fork per item, each a short concrete phrase the writer can pick. `reply` is just the "
+                "one-line framing around them, never a long enumeration.\n"
+                "OPENING MOVE — if the writer has provided no material yet: greet in one line in `reply`, "
+                "then put three to four DISTINCT forks in `suggestions`, MIXED in kind — e.g. a world with "
+                "a defining trait, a character with a want and a secret, a place with a history, a central "
+                "tension. Range widely: some speculative, some grounded, some dramatic, some quiet. Do not "
+                "offer bare theme-words or abstract oppositions (C1, C2), and do not make every option a "
+                "dilemma.\n\n"
                 "PROCEDURE\n"
-                "When the writer supplies material, do not accept it at face value. FIRST locate the root: "
-                "what standing trait of this world generates the tension? Then apply the axioms — who is "
-                "destroyed by it (A1), what the choice costs the chooser (A2), is the antagonist "
-                "conditional (A4), what false belief it implies (A6). State the result in one line, then "
-                "ask ONE next question.\n"
-                "AGREEMENT SIGNAL: when the writer accepts a formulation, says it's right, picks an option, "
-                "or stops opening new angles, treat the question as AGREED and go straight to COMMIT. "
-                "Continuing to interrogate past agreement is itself a failure mode — the interview must "
-                "produce a committed root, not talk indefinitely.\n\n"
-                "COMMIT — on agreement, write to premise_parts via merge, TWO keys only: root = the world's "
-                "defining trait (the principle, per the definition — NOT a one-off circumstance); question = "
-                "the dilemma that trait forces. Nothing else — no factions, no cast, no stakes; those are "
-                "derived later, by the cast/locations/plot editors, when the story needs them. Do not commit "
-                "on the first message; interview first, then commit as soon as the writer agrees.")
+                "When the writer picks or supplies a fork, develop it into something specific in `reply` "
+                "(one or two lines), then put the NEXT forks in `suggestions`. If the fork is a central "
+                "tension, sharpen it with the axioms — who is destroyed by it (A1), what it costs the "
+                "chooser (A2), is the antagonist conditional (A4), what false belief it implies (A6). For "
+                "any other fork, add a concrete detail and a reason it matters.\n"
+                "AGREEMENT SIGNAL: when the writer accepts a formulation, says it's right, or picks an "
+                "option, treat it as SETTLED and COMMIT it. Continuing to interrogate past agreement is a "
+                "failure mode — the interview must produce committed material, not talk indefinitely.\n\n"
+                "COMMIT — on agreement, write what the writer settled on to the fields you own (merge, so "
+                "you touch only what changed): premise = a sentence on what the story is; premise_parts/root "
+                "= the world's defining trait, IF the story has one; premise_parts/question = a central "
+                "tension, ONLY IF the writer took that fork — never invent one. Commit only what's actually "
+                "settled and leave the rest blank; a cozy story may commit a premise and nothing else. Cast, "
+                "places, and plot are built later by their own editors. Do not commit on the first message; "
+                "offer forks first, then commit each piece as the writer agrees.")
         convo = "\n".join(f"{'Writer' if m.get('role') == 'user' else 'You'}: {m['text']}" for m in messages)
         _roles = _cf.load_text_roles(ctx.root)
         _PROVIDER_ROLE = _roles.get("director") or _roles.get("narrator")
 
-        def _run(view, note=""):
-            """Run the editor with a given anchored view. Returns (out, prompt_used) so a
-            retry can pass a freshness note. `note` appends an instruction to the prompt."""
+        # SSE plumbing — the model streams its `reply` text so the writer watches it form
+        # in the chat window; the ops apply/persist happens after and lands in a final event.
+        loop = asyncio.get_running_loop()
+        q: asyncio.Queue = asyncio.Queue()
+
+        def _emit_reply(text: str):
+            loop.call_soon_threadsafe(q.put_nowait, {"type": "reply", "text": text})
+
+        def _run(view, note="", stream=False):
+            """Run the editor with a given anchored view. `note` appends a freshness
+            instruction; `stream=True` pushes reply-so-far deltas to the SSE queue."""
             prompt = (f"ANCHORED SECTION (path  #hash  preview):\n{view}\n\n"
                       f"EDITABLE FIELDS: {', '.join(allowed)}\n\nCONVERSATION:\n{convo}\n\n"
                       f"{note}Answer or edit per the writer's LATEST message.")
-            for effort in ("high", "none"):       # reasoning ON, then the structured flake fallback
+            # First climb the effort ladder (reasoning ON, then the structured-flake fallback). A
+            # reasoning model occasionally returns a semantically-EMPTY {"reply":"","ops":[]} on this
+            # heavy prompt; if the whole ladder comes back blank, retry on the fast non-reasoning path
+            # a couple more times before giving up — an un-reasoned reply beats a dead turn.
+            for effort in ("high", "none", "none", "none"):
                 p = ctx.text_provider_for(_PROVIDER_ROLE, {"reasoning_effort": effort})
                 if p is None:
                     return None
+                on_delta = None
+                if stream:
+                    acc: list[str] = []           # per-attempt (a retry restreams cleanly, replacing)
+                    def on_delta(t, acc=acc):
+                        acc.append(t)
+                        _emit_reply(partial_reply("".join(acc)))
                 try:
-                    out = (p.generate_text(system=system, prompt=prompt, emits=schema).data) or {}
+                    out = (p.generate_text(system=system, prompt=prompt, emits=schema,
+                                           on_delta=on_delta).data) or {}
                 except Exception:  # noqa: BLE001 — reasoning channel can break structured output
                     out = {}
-                if out.get("reply") or out.get("ops"):
+                if out.get("reply") or out.get("ops") or out.get("suggestions"):
                     return out
             return {}
 
-        out = _run(view)
-        if out is None:
-            return JSONResponse({"error": "no editor model configured"}, status_code=400)
-        reply = (out.get("reply") or "").strip()
-        ops = out.get("ops") if isinstance(out.get("ops"), list) else []
-        # Re-read the LIVE story right before applying, so anchors are checked against the
-        # freshest state (not the snapshot the model read). apply_ops mutates `live` in place
-        # and returns {applied, rejected, before} — `before` holds the OLD top-level field
-        # values for the client's Undo; `live` now holds the NEW merged values to persist.
-        try:
-            live = ctx._read_story_data(key)
-        except FileNotFoundError:
-            live = raw
-        result = apply_ops(live, ops)
+        def compute():
+            """The blocking model→apply→persist path (run off the event loop). Returns the
+            final result dict the client applies; reply text has already streamed live."""
+            out = _run(view, stream=True)
+            if out is None:
+                return {"error": "no editor model configured", "_status": 400}
+            reply = (out.get("reply") or "").strip()
+            suggestions = [s.strip() for s in (out.get("suggestions") or [])
+                           if isinstance(s, str) and s.strip()]
+            ops = out.get("ops") if isinstance(out.get("ops"), list) else []
+            # Re-read the LIVE story right before applying, so anchors are checked against the
+            # freshest state (not the snapshot the model read). apply_ops mutates `live` in place
+            # and returns {applied, rejected, before} — `before` holds the OLD top-level field
+            # values for the client's Undo; `live` now holds the NEW merged values to persist.
+            try:
+                live = ctx._read_story_data(key)
+            except FileNotFoundError:
+                live = raw
+            result = apply_ops(live, ops)
 
-        # ── Stale-anchor recovery (one retry) ─────────────────────────────────
-        # If any op failed PURELY due to staleness (the node drifted since the model read it
-        # — a concurrent edit), re-show the model the FRESH anchored view and ask it to
-        # re-emit just those ops with the updated anchors. Structural failures (a path that's
-        # gone, a merge on a non-object) are NOT retried — they'd loop. We persist once
-        # (after the retry) so the writer sees a single coherent apply. `live` already holds
-        # any first-pass applied mutations in memory (nothing persisted yet) — the retry
-        # applies ON TOP of that state, so nothing is lost.
-        if any_stale_rejections(result["rejected"]):
-            stale_paths = [r["path"] for r in result["rejected"] if any_stale_rejections([r])]
-            fresh_view = anchored_view(live, allowed)
-            note = (f"NOTE: your prior edit(s) to {', '.join(stale_paths)} were STALE — those "
-                    "nodes changed since you read them. The fresh anchored view above has the "
-                    "CURRENT #hashes. Re-emit ONLY the op(s) for those path(s) with the updated "
-                    "anchors, or reply that you can't.\n\n")
-            r2 = _run(fresh_view, note=note)
-            if r2:
-                ops2 = r2.get("ops") if isinstance(r2.get("ops"), list) else []
-                if ops2:
-                    retry_result = apply_ops(live, ops2)   # on the already-mutated state
-                    result = merge_results(result, retry_result)
-                    if r2.get("reply") and not reply:
-                        reply = r2["reply"].strip()
+            # ── Stale-anchor recovery (one retry) ─────────────────────────────────
+            # If any op failed PURELY due to staleness (the node drifted since the model read it
+            # — a concurrent edit), re-show the model the FRESH anchored view and ask it to
+            # re-emit just those ops with the updated anchors. Structural failures (a path that's
+            # gone, a merge on a non-object) are NOT retried — they'd loop. We persist once
+            # (after the retry) so the writer sees a single coherent apply. `live` already holds
+            # any first-pass applied mutations in memory (nothing persisted yet) — the retry
+            # applies ON TOP of that state, so nothing is lost.
+            if any_stale_rejections(result["rejected"]):
+                stale_paths = [r["path"] for r in result["rejected"] if any_stale_rejections([r])]
+                fresh_view = anchored_view(live, allowed)
+                note = (f"NOTE: your prior edit(s) to {', '.join(stale_paths)} were STALE — those "
+                        "nodes changed since you read them. The fresh anchored view above has the "
+                        "CURRENT #hashes. Re-emit ONLY the op(s) for those path(s) with the updated "
+                        "anchors, or reply that you can't.\n\n")
+                r2 = _run(fresh_view, note=note)
+                if r2:
+                    ops2 = r2.get("ops") if isinstance(r2.get("ops"), list) else []
+                    if ops2:
+                        retry_result = apply_ops(live, ops2)   # on the already-mutated state
+                        result = merge_results(result, retry_result)
+                        if r2.get("reply") and not reply:
+                            reply = r2["reply"].strip()
 
-        applied, rejected, before = result["applied"], result["rejected"], result["before"]
-        if not applied:
-            # Nothing landed — reply only. Surface rejections so the client can show why.
-            return {"reply": reply, "applied": [], "rejected": rejected, "before": {}}
-        # Persist the NEW values (live was mutated by apply_ops) through the validated write
-        # path — `before` (the old values) goes back to the client for Undo.
-        try:
-            ctx.update_story_fields(key, {f: live.get(f) for f in before})
-        except Exception as exc:  # noqa: BLE001 — validation rejected the merged story → don't corrupt
-            return {"reply": reply, "applied": [], "rejected": rejected, "before": {},
-                    "error": f"couldn't apply: {exc}"}
-        return {"reply": reply, "applied": applied, "rejected": rejected,
-                "before": before, "layer": _rebuilt_layer(key, layer)}
+            applied, rejected, before = result["applied"], result["rejected"], result["before"]
+            if not applied:
+                # Nothing landed — reply only. Surface rejections so the client can show why.
+                return {"reply": reply, "suggestions": suggestions, "applied": [], "rejected": rejected, "before": {}}
+            # Persist the NEW values (live was mutated by apply_ops) through the validated write
+            # path — `before` (the old values) goes back to the client for Undo.
+            try:
+                ctx.update_story_fields(key, {f: live.get(f) for f in before})
+            except Exception as exc:  # noqa: BLE001 — validation rejected the merged story → don't corrupt
+                return {"reply": reply, "suggestions": suggestions, "applied": [], "rejected": rejected,
+                        "before": {}, "error": f"couldn't apply: {exc}"}
+            return {"reply": reply, "suggestions": suggestions, "applied": applied, "rejected": rejected,
+                    "before": before, "layer": _rebuilt_layer(key, layer)}
+
+        # Drive compute() off the event loop; stream reply deltas, then the final result.
+        async def run():
+            try:
+                data = await run_in_threadpool(compute)
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "result", "data": data})
+            except Exception as exc:  # noqa: BLE001
+                loop.call_soon_threadsafe(q.put_nowait, {"type": "error", "error": str(exc)})
+            loop.call_soon_threadsafe(q.put_nowait, None)
+
+        asyncio.create_task(run())
+
+        async def events():
+            while True:
+                ev = await q.get()
+                if ev is None:
+                    break
+                yield f"data: {json.dumps(ev)}\n\n"
+            yield 'data: {"type": "done"}\n\n'
+
+        return StreamingResponse(events(), media_type="text/event-stream")
 
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):

@@ -25,8 +25,6 @@ _DEFAULTS: dict = {
     "tool_rules": "Fill every tool param using exact ids from the document; set all fields when adding.",
     "story_context_fields": ["title", "premise", "tone", "themes", "logline", "heart",
                              "arcs", "cast"],
-    "craft": {"scope": "_craft", "k": 5, "section_anchors": {}},
-    "psyche": {"scope": "_psyche", "k": 4},
     "tool_policy": {"all_tools_cap": 40, "attached_cap": 12},
     "routing": {"semantic_floor": 0.55},
     "agents": {},
@@ -127,11 +125,6 @@ def load_config(root: Path, *, fresh: bool = False) -> dict:
     _join_prose(cfg)
     _cache[key] = cfg
     return cfg
-
-
-def section_anchors(root: Path) -> dict:
-    """The per-part craft anchor map (entry ids per section) — single source for pipeline + chat."""
-    return (load_config(root).get("craft") or {}).get("section_anchors") or {}
 
 
 def modes_list(root: Path) -> list[dict]:

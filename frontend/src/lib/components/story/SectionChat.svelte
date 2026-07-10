@@ -5,7 +5,8 @@
   // approve step. A stale anchor (the node changed elsewhere since) is REJECTED, never silently over-
   // written; the writer is told which paths drifted and can ask again. Undo restores the exact field
   // values snapshotted before the edit. Apply failures surface as a clear error, never a silent break.
-  import { post, put } from '$lib/api.js';
+  import { put } from '$lib/api.js';
+  import { consumeSse } from '$lib/sse.js';
   import { loadStory } from '$lib/stories.svelte.js';
 
   // presentation: 'docked' (fixed left window) | 'modal' (centered overlay). 'hidden' is handled by
@@ -33,37 +34,60 @@
     if (interview && !opened && !convo.length && !busy) { opened = true; openInterview(); }
   });
   async function openInterview() {
-    busy = true; err = '';
-    const r = await post(`/stories/${storyKey}/card/${layer}/chat`, { messages: [{ role: 'user',
-      text: "I'm starting a brand-new story from nothing. Before anything else, put a few big core questions or themes on the table for me to react to." }] });
-    busy = false;
-    if (r.ok && r.data?.reply) convo = [...convo, { role: 'assistant', content: r.data.reply }];
-    scroll();
+    await stream([{ role: 'user',
+      text: "I'm starting a brand-new story from nothing. Put a few different directions we could take it — a world, a character, a place, a tension — for me to pick from." }]);
   }
 
-  // ONE call: the agent answers (question) OR emits anchored ops. The backend verifies each anchor
-  // against the live story, applies the non-stale ones, and returns the pre-edit values for undo.
+  // ONE streamed call: the agent's `reply` TEXT streams into a live bubble; a final `result` event
+  // carries the anchored ops the backend already verified + applied (with pre-edit values for undo)
+  // plus `suggestions` — the list of things to potentially address, rendered as pickable chips.
   async function send() {
     const t = typed.trim(); if (!t || busy) return;
-    typed = ''; busy = true; err = '';
+    typed = ''; err = '';
     convo = [...convo, { role: 'user', content: t }]; scroll();
     const messages = convo.filter((m) => m.role === 'user' || m.role === 'assistant').map((m) => ({ role: m.role, text: m.content }));
-    const r = await post(`/stories/${storyKey}/card/${layer}/chat`, { messages });
-    busy = false;
-    if (!r.ok) { err = r.data?.error || 'editor failed'; return; }
-    const d = r.data || {};
-    const reply = d.reply || 'Okay.';
-    if (d.error) { convo = [...convo, { role: 'assistant', content: reply, failed: d.error }]; scroll(); return; }
+    await stream(messages);
+  }
+
+  // Picking a suggestion = pursuing it: send it as the next message.
+  function pick(s) { if (busy) return; typed = s; send(); }
+
+  // Open the SSE stream: fill a placeholder assistant bubble as reply tokens arrive, then reconcile
+  // the final result (apply/undo/rejections). The reply text is authoritative from the `result` event.
+  async function stream(messages) {
+    busy = true; err = '';
+    convo = [...convo, { role: 'assistant', content: '', streaming: true }];
+    const idx = convo.length - 1;
+    let res;
+    try {
+      res = await fetch(`/api/stories/${storyKey}/card/${layer}/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ messages }) });
+    } catch { convo = convo.slice(0, idx); busy = false; err = 'editor failed'; return; }
+    if (!res.ok) {
+      convo = convo.slice(0, idx); busy = false;
+      try { err = (await res.json())?.error || 'editor failed'; } catch { err = 'editor failed'; }
+      return;
+    }
+    let final = null;
+    await consumeSse(res, (ev) => {
+      if (ev.type === 'reply') { convo[idx].content = ev.text; scroll(); }
+      else if (ev.type === 'result') { final = ev.data; }
+      else if (ev.type === 'error') { err = ev.error; }
+    });
+    busy = false; convo[idx].streaming = false;
+    const d = final || {};
+    convo[idx].content = d.reply || convo[idx].content || 'Okay.';
+    convo[idx].suggestions = d.suggestions || [];
+    if (d.error) { convo[idx].failed = d.error; scroll(); return; }
     if (d.applied?.length) {
       await loadStory(storyKey);
       window.dispatchEvent(new CustomEvent('queue:refresh'));
-      convo = [...convo, { role: 'assistant', content: reply,
-                           applied: d.applied, rejected: d.rejected || [], before: d.before }];
+      // Let the visible form show itself being edited — flash the fields the agent just wrote.
+      window.dispatchEvent(new CustomEvent('story:edited', { detail: { paths: d.applied.map((o) => o.path) } }));
+      convo[idx].applied = d.applied; convo[idx].rejected = d.rejected || []; convo[idx].before = d.before;
     } else if (d.rejected?.length) {
-      // All ops were stale/invalid — nothing applied, but tell the writer why.
-      convo = [...convo, { role: 'assistant', content: reply, rejected: d.rejected, before: d.before }];
-    } else {
-      convo = [...convo, { role: 'assistant', content: reply }];   // a question / discussion — no edit
+      convo[idx].rejected = d.rejected; convo[idx].before = d.before;   // all stale/invalid — say why
     }
     scroll();
   }
@@ -99,7 +123,7 @@
         flagged <b>stale</b> — ask again and it’ll re-read.</div>
     {/if}
     {#each convo as m, i (i)}
-      <div class="msg {m.role}">{m.content}</div>
+      <div class="msg {m.role}">{#if m.streaming && !m.content}<span class="dots"><i></i><i></i><i></i></span>{:else}{m.content}{/if}</div>
       {#if m.applied?.length}
         <div class="applied">
           <div class="al">
@@ -117,8 +141,15 @@
         </div>
       {/if}
       {#if m.failed}<div class="failed">⚠ couldn’t apply — {m.failed}</div>{/if}
+      {#if m.suggestions?.length && !m.streaming && i === convo.length - 1}
+        <div class="sugs">
+          <div class="sugl">Things you could address next</div>
+          {#each m.suggestions as s}
+            <button class="sug" onclick={() => pick(s)} disabled={busy}>{s}</button>
+          {/each}
+        </div>
+      {/if}
     {/each}
-    {#if busy}<div class="msg assistant pending"><span class="dots"><i></i><i></i><i></i></span></div>{/if}
     {#if err}<div class="err">⚠ {err}</div>{/if}
   </div>
   <div class="foot">
@@ -166,6 +197,13 @@
            background: color-mix(in srgb, var(--warn, #d8b35a) 9%, transparent); border: 1px solid color-mix(in srgb, var(--warn, #d8b35a) 28%, transparent); }
   .failed { align-self: stretch; font-size: 11.5px; color: var(--bad, #d0655a); padding: 6px 9px; border-radius: 9px;
             background: color-mix(in srgb, var(--bad, #d0655a) 8%, transparent); border: 1px solid color-mix(in srgb, var(--bad, #d0655a) 25%, transparent); }
+  /* Things to potentially address — the pickable list under the message. */
+  .sugs { align-self: stretch; display: flex; flex-direction: column; gap: 5px; margin-top: 2px; }
+  .sugl { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; color: var(--faint); margin: 2px 0 1px; }
+  .sug { text-align: left; font-size: 12.5px; line-height: 1.35; color: var(--text); padding: 7px 10px; border-radius: 9px;
+         background: var(--elev); border: 1px solid var(--border-soft); cursor: pointer; transition: border-color .12s, background .12s; }
+  .sug:hover:not(:disabled) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 8%, var(--elev)); }
+  .sug:disabled { opacity: .5; cursor: default; }
   .err { font-size: 12px; color: var(--bad, #d0655a); }
   .dots { display: inline-flex; gap: 4px; } .dots i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: blink 1.2s infinite; }
   .dots i:nth-child(2){animation-delay:.2s;} .dots i:nth-child(3){animation-delay:.4s;}

@@ -4,14 +4,18 @@ Why this exists: a single structured LLM call returns the MEAN of its training d
 epithets, abstract theme-word salad, cliché "The Adjective Noun" titles. The research-backed fixes,
 all gathered here so the pipeline can share them:
 
-  • CRAFT / PSYCHE retrieval — inject the existing _craft lorebook + an IPIP Big-Five behavioural
-    lorebook into generation prompts (we already author the workshop this way; generation flew blind).
+  • LITERARY-MINIMALIST guidance — one lean, standing nudge (MINIMALISM) toward restraint and
+    concreteness, injected where the deleted "craft lorebook" used to inject storytelling theory. A
+    codified craft corpus just pulled output back toward the trained mean (generic); a spare stance
+    that says "say less, be specific" pushes the other way.
   • POSITIVE concreteness targets — phrase the anti-fluff guidance as things to DO, not bans. Telling
     a model "don't be clichéd" raises clichés (the "Pink Elephant" effect, arXiv:2402.07896).
   • CLICHÉ POST-FILTER — bans belong at filter time, not in the prompt: detect the fluff shapes and
     regenerate-on-match (looks_cliche / clichés_in).
-  • IPIP Big-Five facets (public domain, ipip.ori.org) — ground each character in concrete behaviour
-    instead of the model's averaged priors. One source of truth here; the lorebook is seeded from it.
+  • ADAPTATION basis — build each character from a wound→lie→coping chain + attachment + want/need +
+    if-then signatures (Level-2 characteristic adaptations), NOT a Big-Five trait profile. Traits are
+    "the psychology of the stranger" (McAdams) — independent dials that average a person into a type
+    and can't hold a contradiction; adaptations are tensions that GENERATE behaviour. See ADAPTATION.
 
 Pure/data module — retrieval helpers lazy-import the store so there's no import cycle.
 Self-check: python -m loom.stories.pipeline.grounding
@@ -31,6 +35,20 @@ CONCRETENESS = (
     "• Prefer the small and ordinary to the cosmic. A real person doing a real thing in a real room "
     "lands deeper than any prophecy. Use plain words; if a sentence sounds impressive, make it true "
     "and specific instead."
+)
+
+# ── Literary-minimalist stance — the standing guidance where the craft lorebook used to inject theory.
+# One lean nudge toward restraint + concreteness; DO-phrased. Replaces the deleted _craft corpus.
+MINIMALISM = (
+    "WRITE WITH RESTRAINT — the literary-minimalist stance: say less, trust the reader more.\n"
+    "• Prefer the plain word to the impressive one. If a sentence sounds like writing, make it true "
+    "and specific instead.\n"
+    "• State, don't underline. Give the concrete detail and stop; let the reader feel its weight "
+    "without being told what to feel.\n"
+    "• Leave things out. Imply emotion through action and object; cut the explanation, the adjective "
+    "stack, the recap of what just happened.\n"
+    "• No ornament: no epithets, no abstract-noun grandeur, no 'the very fabric of'. One exact image "
+    "beats a paragraph of atmosphere."
 )
 
 # ── Cliché post-filter (regenerate-on-match) ────────────────────────────────────────────────────
@@ -73,95 +91,32 @@ def looks_cliche(text: str) -> str | None:
     return h[0] if h else None
 
 
-# ── IPIP Big-Five facets — the behavioural grounding layer (public domain, ipip.ori.org) ─────────
-# domain -> list of (facet, HIGH behavioural marker, LOW behavioural marker). Distilled from the
-# IPIP-NEO facet scales; markers are plain observable tendencies, not adjectives.
-BIG_FIVE: dict[str, list[tuple[str, str, str]]] = {
-    "Openness": [
-        ("Imagination", "drifts into vivid daydreams, invents possibilities", "stays with the literal and concrete"),
-        ("Artistic interest", "stops to notice beauty, moved by art/music", "indifferent to art, unmoved by scenery"),
-        ("Emotionality", "feels emotions strongly and names them", "rarely notices or shares feelings"),
-        ("Adventurousness", "seeks the unfamiliar, changes routine", "clings to the familiar, dislikes change"),
-        ("Intellect", "chases abstract ideas and puzzles", "avoids theory, prefers the practical"),
-        ("Liberalism", "questions authority and tradition", "defends the established way of doing things"),
-    ],
-    "Conscientiousness": [
-        ("Self-efficacy", "confident they can handle tasks", "doubts their own competence"),
-        ("Orderliness", "keeps things tidy and planned", "leaves mess, works in chaos"),
-        ("Dutifulness", "keeps promises, follows the rules", "bends rules, lets obligations slide"),
-        ("Achievement-striving", "drives hard toward goals", "content to do the minimum"),
-        ("Self-discipline", "finishes what they start", "abandons tasks, easily distracted"),
-        ("Cautiousness", "thinks before acting", "acts on impulse, then deals with it"),
-    ],
-    "Extraversion": [
-        ("Friendliness", "warms to people fast", "keeps a reserved distance"),
-        ("Gregariousness", "seeks crowds and company", "drained by groups, prefers solitude"),
-        ("Assertiveness", "takes charge, speaks up", "hangs back, lets others lead"),
-        ("Activity level", "always busy, fast-paced", "unhurried, slow and deliberate"),
-        ("Excitement-seeking", "courts risk and thrill", "avoids danger and loud stimulation"),
-        ("Cheerfulness", "laughs easily, radiates good mood", "rarely shows joy, flat affect"),
-    ],
-    "Agreeableness": [
-        ("Trust", "assumes others mean well", "suspects hidden motives"),
-        ("Sincerity", "plain and straight with people", "manipulates, flatters to get their way"),
-        ("Altruism", "goes out of their way to help", "puts their own needs first"),
-        ("Cooperation", "yields to keep the peace", "stands their ground, picks fights"),
-        ("Modesty", "downplays themselves", "claims credit, talks themselves up"),
-        ("Sympathy", "softened by others' pain", "hard-nosed, unmoved by sob stories"),
-    ],
-    "Neuroticism": [
-        ("Anxiety", "expects things to go wrong, worries", "stays calm, untroubled"),
-        ("Anger", "flares up fast when crossed", "slow to anger, lets things go"),
-        ("Depression", "sinks into low moods", "rarely downcast, bounces back"),
-        ("Self-consciousness", "fears judgement, easily embarrassed", "unbothered by what others think"),
-        ("Immoderation", "gives in to cravings and urges", "resists temptation easily"),
-        ("Vulnerability", "panics under pressure", "steady in a crisis"),
-    ],
-}
-
-
-def facet_palette() -> str:
-    """A compact Big-Five facet menu for prompts: forces full-person coverage so a character is built
-    from a deliberate, distinctive trait PROFILE — not the model's default 'brooding hero' average."""
-    lines = ["BIG-FIVE FACET PALETTE — give this character a DISTINCTIVE position on these 30 facets "
-             "(most people are mixed: high on some, low on others). Pick a handful that define them and "
-             "express each through concrete behaviour, not the trait word:"]
-    for domain, facets in BIG_FIVE.items():
-        lines.append(f"  {domain}: " + "; ".join(
-            f"{f} (high: {hi} / low: {lo})" for f, hi, lo in facets))
-    return "\n".join(lines)
-
-
-def psyche_entries() -> list[dict]:
-    """Lorebook entries (one per facet) built from BIG_FIVE — the seed for the `_psyche` book."""
-    out = []
-    for domain, facets in BIG_FIVE.items():
-        for facet, hi, lo in facets:
-            out.append({
-                "id": re.sub(r"[^a-z]+", "-", f"{domain}-{facet}".lower()).strip("-"),
-                "title": f"{domain}: {facet}",
-                "priority": 4,
-                "keywords": [facet.lower(), domain.lower()] + facet.lower().split("-"),
-                "content": (f"{domain} facet '{facet}'. A HIGH-{facet} person {hi}; a LOW-{facet} "
-                            f"person {lo}. Show the level through a concrete action, never the label."),
-            })
-    return out
-
-
-# ── Retrieval helpers (lazy import — no cycle with lorebook_store) ───────────────────────────────
-def _retrieve_block(root, query: str, scope: str, k: int, header: str) -> str:
-    try:
-        from ...server.services.lorebook_store import retrieve, top_by_priority
-        from ...server.services.lorebook import format_lore_block
-    except Exception:  # noqa: BLE001 — pipeline must run even if the store is unavailable
-        return ""
-    try:
-        hits = retrieve(root, query or "", [scope], top_k=k)
-        if not hits:
-            hits = top_by_priority(root, scope, k)
-        return format_lore_block(hits, header=header) if hits else ""
-    except Exception:  # noqa: BLE001
-        return ""
+# ── The ADAPTATION basis — depth as a causal chain of tensions, not a trait profile ──────────────
+# Replaces the Big-Five facet palette. Big Five is a Level-1 DISPOSITIONAL model (McAdams' "psychology
+# of the stranger") — five independent dials that average a person into a type and can't hold a
+# contradiction. Depth lives one layer down, in Level-2 CHARACTERISTIC ADAPTATIONS: a wound → a lie →
+# a coping strategy, an attachment style, want-vs-need, and if-then situational signatures. Every link
+# here is a TENSION, not a dial; each generates behaviour instead of describing it. Grounding: schema
+# therapy (Young — schemas + surrender/avoid/overcompensate modes), attachment (Bowlby/Ainsworth),
+# defence maturity (Vaillant), Mischel's if-then behavioural signatures.
+ADAPTATION = (
+    "BUILD THE CHARACTER FROM A WOUND, NOT A TRAIT LIST — depth is a tension, never a profile. Give "
+    "this person a causal chain, each link a specific fact rather than a label:\n"
+    "• WOUND — one concrete unmet need or injury from before the story (a thing that happened, named "
+    "plainly), not the word 'trauma'.\n"
+    "• LIE — the belief the wound installed, in their own words ('I'm only safe if I'm useful').\n"
+    "• COPING — how the lie runs their behaviour: do they SURRENDER to it, AVOID what triggers it, or "
+    "OVERCOMPENSATE against it? Overcompensation is the richest seam — the arrogant one who feels "
+    "worthless, the caretaker who can't accept care.\n"
+    "• ATTACHMENT — how they do closeness: secure; anxious (clings, dreads being left); avoidant "
+    "(wants it and flees it); or disorganized (wants and fears the same person). Show it in one "
+    "relationship, not as a label.\n"
+    "• WANT vs. NEED — what they consciously chase versus what would actually heal them; these two "
+    "should pull against each other.\n"
+    "• IF-THEN — one or two situational contradictions: warm with strangers and cutting with a "
+    "sibling, brave at work and a coward at home. A person is their inconsistencies, not an average.\n"
+    "Never name the framework in the prose — instantiate it as a specific person doing specific things."
+)
 
 
 def declichify_titles(provider, board: dict) -> dict:
@@ -197,60 +152,6 @@ def declichify_titles(provider, board: dict) -> dict:
     return board
 
 
-# Per-PART anchor craft: which _craft entry ids are bound to each authoring stage, fed
-# deterministically (bypasses retrieve()'s fuzzy ranking) so the governing theory always lands.
-# The map lives in configs/story_agent.json (agent_config.section_anchors) — single source, shared
-# with the chat agent. premise→seed+moral-argument, character→inner life, antagonist→attacks-weakness,
-# arc→change spine, storyboard→structure/causality, chapters→beats land the climax, ending→the climax.
-_CRAFT_HEADER = "CRAFT NOTES — modern storytelling principles to apply here:"
-
-
-def craft_notes(root, query: str, k: int = 6, section: str = "") -> str:
-    """Modern story-craft principles (the _craft lorebook) for an authoring prompt. When `section`
-    is given, its ANCHOR entries are guaranteed first (deterministic — not subject to retrieval
-    ranking), then query-retrieval fills in for breadth. Without a section it's pure retrieval.
-
-    Section→anchor bindings come from configs/story_agent.json (single source, shared with the chat
-    agent via agent_config.section_anchors)."""
-    anchors = []
-    if section:
-        try:
-            from ..agent_config import section_anchors as _sa
-            anchors = _sa(root).get(section) or []
-        except Exception:  # noqa: BLE001
-            anchors = []
-    if not anchors:
-        return _retrieve_block(root, query, "_craft", k, _CRAFT_HEADER)
-    try:
-        from ...server.services.lorebook_store import load_lorebook, retrieve, top_by_priority
-        from ...server.services.lorebook import format_lore_block
-    except Exception:  # noqa: BLE001
-        return ""
-    try:
-        by_id = {e.id: e for e in load_lorebook(root, "_craft")}
-        chosen, seen = [], set()
-        for aid in anchors:                          # guaranteed anchors, in order
-            e = by_id.get(aid)
-            if e and e.id not in seen:
-                chosen.append(e); seen.add(e.id)
-        total = max(k, len(chosen))                  # keep the block ≈ k: anchors + a little breadth
-        hits = retrieve(root, query or "", ["_craft"], top_k=k) or top_by_priority(root, "_craft", k)
-        for e in hits:                               # retrieval fills the remaining slots
-            if len(chosen) >= total:
-                break
-            if e.id not in seen:
-                chosen.append(e); seen.add(e.id)
-        return format_lore_block(chosen, header=_CRAFT_HEADER) if chosen else ""
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def psyche_notes(root, query: str, k: int = 5) -> str:
-    """Retrieved Big-Five behavioural markers (the _psyche lorebook) for a character prompt."""
-    return _retrieve_block(root, query, "_psyche", k,
-                           "PSYCHE NOTES — ground traits in these behaviours:")
-
-
 def demo() -> None:
     assert looks_cliche("The Fractured Mask")
     assert looks_cliche("The Gilded Cage")
@@ -264,9 +165,8 @@ def demo() -> None:
         def generate_text(self, **k):
             raise AssertionError("model called for clean titles")
     assert declichify_titles(_NoProv(), {"beats": [{"title": "The Workroom"}]})["beats"][0]["title"] == "The Workroom"
-    assert len(psyche_entries()) == 30
-    assert "FACET PALETTE" in facet_palette() and "Anxiety" in facet_palette()
-    print("grounding demo ok —", len(psyche_entries()), "facets")
+    assert "WOUND" in ADAPTATION and "OVERCOMPENSATE" in ADAPTATION and "IF-THEN" in ADAPTATION
+    print("grounding demo ok — adaptation basis + cliché filter")
 
 
 if __name__ == "__main__":
