@@ -3,6 +3,7 @@
 // CharactersPanel so the list + import status are shared across sub-routes.
 import { goto } from '$app/navigation';
 import { get, post, del } from './api.js';
+import { loadStories } from './stories.svelte.js';
 import { refreshHealth, setActiveChar } from './app.svelte.js';
 
 export const chars = $state({ list: [], importing: false, msg: null });
@@ -39,33 +40,46 @@ function readBase64(file) {
   });
 }
 
-async function finishImport(r) {
+async function finishImport(r, seedStory = false) {
   if (r.data?.ok) {
     await loadChars();
     await refreshHealth();
     setActiveChar(r.data.key);
     chars.msg = { ok: true, text: `✓ Imported ${r.data.name}` };
+    if (seedStory) {
+      const seeded = await post('/stories/from-cast', {
+        name: r.data.name,
+        characters: [r.data.key],
+        premise: r.data.name ? `A story seeded by ${r.data.name}.` : ''
+      });
+      if (seeded.data?.ok) {
+        await loadStories();
+        goto(`/stories/${seeded.data.key}/structure?tab=overview`);
+        return;
+      }
+      chars.msg = { err: true, text: seeded.data?.error || 'Character imported, but story seed failed' };
+    }
     goto('/characters/selected');
   } else {
     chars.msg = { err: true, text: r.data?.error || 'import failed' };
   }
 }
 
-export async function importFile(file) {
+export async function importFile(file, seedStory = false) {
   chars.importing = true; chars.msg = null;
   try {
     const data_b64 = await readBase64(file);
-    await finishImport(await post('/characters/import', { filename: file.name, data_b64 }));
+    await finishImport(await post('/characters/import', { filename: file.name, data_b64 }), seedStory);
   } catch (err) { chars.msg = { err: true, text: String(err) }; }
   chars.importing = false;
 }
 
-export async function importUrl(url) {
+export async function importUrl(url, seedStory = false) {
   const u = (url || '').trim();
   if (!u || chars.importing) return;
   chars.importing = true; chars.msg = null;
   try {
-    await finishImport(await post('/characters/import-url', { url: u }));
+    await finishImport(await post('/characters/import-url', { url: u }), seedStory);
   } catch (err) { chars.msg = { err: true, text: String(err) }; }
   chars.importing = false;
 }

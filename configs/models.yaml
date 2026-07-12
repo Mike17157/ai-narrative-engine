@@ -280,6 +280,19 @@ models:
       output_node: "13"
       timeout_s: 600
 
+  # Reference-grounded map renderer. Give it a town/map skeleton image and a style prompt;
+  # low denoise preserves streets and landmark placement.
+  krea2_turbo_map:
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_map_reference_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"
+      timeout_s: 600
+
   # krea2_scene — landscape (1216×832), no cutout.
   krea2_scene:
     provider: comfyui

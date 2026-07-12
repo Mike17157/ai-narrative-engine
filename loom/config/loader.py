@@ -63,7 +63,7 @@ def load_settings(root: str | Path) -> Settings:
     if story_dir.is_dir():
         # First the legacy .db→.json migration (so very-old installs are on the JSON form), then
         # the JSON→relational migration. Both are idempotent and reversible.
-        from ..stories.migrate_db_to_json import migrate_dir as _legacy_migrate
+        from ..server.services.story_migration import migrate_dir as _legacy_migrate
         _legacy_migrate(story_dir)
         _SS.migrate_from_json(root)
         for skey in _SS.list_stories(root):

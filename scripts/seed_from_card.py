@@ -8,7 +8,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from loom.server import build_context
-from loom.stories.story_seed import build_seed
+from loom.stories.world.creation import build_seed
 
 # A Janitor-AI-style card (thin, scenario-led) — the kind of seed a user would import.
 CARD = """Name: Rin Amasawa

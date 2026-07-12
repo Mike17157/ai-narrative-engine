@@ -206,6 +206,18 @@ def serve(
 
     import uvicorn
 
+    # ``create_app`` loads .env, but external bind validation happens before the
+    # server is constructed so a public listener can never start unauthenticated.
+    from .server.app import _load_dotenv
+    from .server.security import require_token_for_bind
+
+    _load_dotenv(root)
+    try:
+        require_token_for_bind(host)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+
     dev = _resolve_dev(dev, root)
     front_port = 5173
     vite = None

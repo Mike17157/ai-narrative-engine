@@ -19,6 +19,9 @@ from .services import config_files
 from .services import prompts as _prompts
 
 
+_IMG_URL_RE = re.compile(r"https?://[^\s\"'<>)]+?\.(?:png|jpe?g|webp|gif)", re.IGNORECASE)
+
+
 
 def _self_heal_refs(data: dict, known_chars=None) -> list[str]:
     """Drop the REPAIRABLE dangling references in a raw story dict, in place, and return a list of
@@ -431,11 +434,11 @@ class StorageContextMixin:
     # ── Persistence routing ── A story is JSON-backed: one self-contained <key>.json file that
     # embeds its characters (authoritative for them). A character not embedded in any story is a
     # global YAML card. These helpers hide the split so read/write paths are store-agnostic.
-    # See loom/stories/story_db.py.
+    # See loom/stories/records/store.py.
     def _story_file(self, key: str):
         # Kept for callers that still resolve a path (mostly the asset dirs + the migrator). The
         # store is the source of truth now; this returns the JSON path if one lingers on disk.
-        from ..stories import story_db as SDB
+        from ..stories.records import store as SDB
         p = SDB.story_json_path(self.story_dir(), key)   # folder form, legacy flat as fallback
         return p if p.is_file() else None
 

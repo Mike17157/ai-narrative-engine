@@ -734,7 +734,7 @@ def migrate_from_json(root: Path, *, verbose: bool = False) -> int:
     story_dir = root / "configs" / "stories"
     if not story_dir.is_dir():
         return 0
-    from ...stories import story_db as _SDB   # the JSON reader (still used for migration reads)
+    from ...stories.records import store as _SDB  # JSON reader used for migration reads
     migrated = 0
     for skey, path in _SDB.iter_story_files(story_dir):
         # Skip a key already in the DB (already migrated) — but still rename the leftover JSON.

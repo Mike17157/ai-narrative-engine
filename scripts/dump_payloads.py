@@ -8,7 +8,7 @@ import sys
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from loom.stories.character_engine import generate_cast, generate_history
+from loom.stories.characters.engine import generate_cast, generate_history
 
 
 class Capture:

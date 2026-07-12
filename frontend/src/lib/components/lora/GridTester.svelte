@@ -399,38 +399,6 @@
     }, 1200);
   });
 
-  // --- RunPod volume reconcile ---
-  let syncing = $state(false);
-  let syncMsg = $state(null);  // {ok, text} | null
-
-  async function syncRunpod() {
-    if (syncing || !selCkpts.length) return;
-    syncing = true; syncMsg = null;
-    try {
-      const res = await fetch('/api/runpod/volume/reconcile', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkpoints: selCkpts, loras: [...allLoraNames] }),
-      });
-      const data = await res.json();
-      if (!data.ok || !data.id) {
-        syncMsg = { ok: false, text: data.error || 'failed to start reconcile' };
-        syncing = false; return;
-      }
-      // Stream the job so Activity panel picks it up; wait for done.
-      await new Promise((resolve) => {
-        const es = new EventSource(`/api/jobs/${data.id}/stream`);
-        es.onmessage = (e) => {
-          let ev; try { ev = JSON.parse(e.data); } catch { return; }
-          if (ev.type === 'plan') syncMsg = { ok: true, text: `${ev.delete} delete · ${ev.upload} upload` };
-          else if (ev.type === 'done') { es.close(); resolve(); }
-        };
-        es.onerror = () => { es.close(); resolve(); };
-      });
-      syncMsg = syncMsg || { ok: true, text: 'done' };
-    } catch (e) { syncMsg = { ok: false, text: String(e) }; }
-    syncing = false;
-  }
-
   // Build a triage cell dict. Diffusion models (split UNet) use the model-based path so
   // inject_models wires the whole stack through the real anima workflow. Bundled checkpoints
   // use the minimal graph path (which now chains the whole LoRA stack too).
@@ -574,14 +542,7 @@
     {/if}
     {#if running}<span class="m pulse">generating…</span>{/if}
     <div class="runbar-sep"></div>
-    <button class="ghost sync-btn" onclick={syncRunpod}
-      disabled={syncing || !selCkpts.length}
-      title="Upload selected checkpoints + LoRAs to RunPod volume; remove anything not in this grid">
-      {syncing ? 'Syncing…' : 'Sync RunPod'}
-    </button>
-    {#if syncMsg}
-      <span class="m" class:bad={!syncMsg.ok}>{syncMsg.text}</span>
-    {/if}
+    <span class="m">Cloud volume sync is managed in Settings → System → RunPod</span>
     <button class="ghost save-preset" onclick={saveAsPreset} disabled={savingPreset || !selCell}
       title="Save the selected cell — its checkpoint + the column's full LoRA stack — as an image preset">
       {savingPreset ? 'Saving…' : '＋ Save preset'}

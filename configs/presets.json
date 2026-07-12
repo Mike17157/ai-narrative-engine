@@ -323,7 +323,7 @@
       "group": "Dungeon Master",
       "order": 2,
       "connection": "openrouter",
-      "model": "qwen/qwen-2.5-72b-instruct",
+      "model": "minimax/minimax-m3",
       "mode": "assist",
       "image_workflow": "",
       "image_provider": "",

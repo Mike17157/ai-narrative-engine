@@ -120,15 +120,52 @@
 
   // RunPod inference — per-image-model local⇄serverless toggle.
   let rpModels = $state({ models: [], configured: false, endpoint_id: '' });
+  let rpConfig = $state({ configured: false, enabled: true, min_instances: 0, max_instances: 2, idle_timeout_s: 5, queue_delay_s: 4 });
+  let rpStatus = $state(null);
+  let rpVolume = $state(null);
+  let rpSaving = $state(false);
+  let rpSyncing = $state(false);
+  let rpMessage = $state(null);
   async function loadRpModels() { try { rpModels = await get('/runpod-models'); } catch {} }
+  async function loadRunpod() {
+    const [config, status, volume] = await Promise.all([get('/runpod/config'), get('/runpod/status'), get('/runpod/volume/status')]);
+    if (config) rpConfig = config;
+    rpStatus = status;
+    rpVolume = volume;
+  }
   async function toggleRp(key, on) {
     try { await put('/runpod-models', { key, runpod: on }); } catch {}
     const m = rpModels.models.find((x) => x.key === key); if (m) m.runpod = on;
+  }
+  async function saveRunpod() {
+    rpSaving = true; rpMessage = null;
+    try {
+      const r = await put('/runpod/config', rpConfig);
+      if (!r.ok) throw new Error(r.data?.error || 'Could not save RunPod settings');
+      rpConfig = r.data;
+      rpMessage = r.data.warning || (r.data.reconciled ? 'Saved and applied to the RunPod endpoint.' : 'Saved locally. Configure an endpoint to apply scaling.');
+      await refreshHealth();
+      await loadRunpod();
+    } catch (e) { rpMessage = String(e.message || e); }
+    rpSaving = false;
+  }
+  async function purgeRunpod() {
+    if (!await askConfirm({ title: 'Clear the RunPod queue?', message: 'Pending remote jobs will be removed. Jobs already running are unaffected.', confirmLabel: 'Clear queue' })) return;
+    const r = await post('/runpod/purge');
+    rpMessage = r.ok ? 'Queued RunPod jobs cleared.' : (r.data?.error || 'Could not clear the queue.');
+    await loadRunpod();
+  }
+  async function syncRunpodVolume() {
+    rpSyncing = true; rpMessage = null;
+    const r = await post('/runpod/volume/sync');
+    rpMessage = r.ok ? (r.data?.total ? `Started upload of ${r.data.total} missing model(s).` : (r.data?.message || 'Volume is up to date.')) : (r.data?.error || 'Volume sync failed.');
+    rpSyncing = false;
   }
 
   onMount(async () => {
     loadSrv();
     loadRpModels();
+    loadRunpod();
     await refreshFlags();
     gpu = await get('/trainer/detect');
     await loadTrainer();
@@ -176,19 +213,51 @@
   <!-- RunPod inference -->
   <section class="card">
     <div class="card-head">
-      <h3>RunPod inference</h3>
-      <span class="card-sub">{rpModels.configured ? `endpoint ${rpModels.endpoint_id}` : 'not configured (set RUNPOD_ENDPOINT_ID + RUNPOD_API_KEY)'}</span>
+      <h3>RunPod</h3>
+      <span class="card-sub">{rpConfig.configured ? `endpoint ${rpConfig.endpoint_id}` : 'not configured (set RUNPOD_ENDPOINT_ID + RUNPOD_API_KEY)'}</span>
     </div>
-    <p class="card-sub" style="margin:0 0 10px">Run a workflow on the RunPod serverless GPU instead of local ComfyUI. Per-model — flip heavy graphs (e.g. Wan 14B) to the cloud, keep light ones local.</p>
-    {#each rpModels.models as m (m.key)}
-      <label class="nsfwrow">
-        <input type="checkbox" checked={m.runpod} disabled={!rpModels.configured} onchange={(e) => toggleRp(m.key, e.currentTarget.checked)} />
-        <span class="nsfwlabel">{m.name}
-          <span class="nsfwsub">{m.runpod ? '☁ runs on RunPod serverless' : '🖥 runs on local ComfyUI'}</span>
-        </span>
-      </label>
-    {/each}
-    {#if !rpModels.models.length}<p class="card-sub">No image models registered.</p>{/if}
+    <label class="nsfwrow">
+      <input type="checkbox" bind:checked={rpConfig.enabled} disabled={!rpConfig.configured} />
+      <span class="nsfwlabel">Enable cloud inference
+        <span class="nsfwsub">Global circuit breaker. When off, every workflow runs locally even if it is cloud-enabled below.</span>
+      </span>
+    </label>
+
+    <div class="rp-grid">
+      <label>Minimum workers<input type="number" min="0" bind:value={rpConfig.min_instances} /></label>
+      <label>Maximum workers<input type="number" min="0" bind:value={rpConfig.max_instances} /></label>
+      <label>Idle timeout (seconds)<input type="number" min="0" bind:value={rpConfig.idle_timeout_s} /></label>
+      <label>Scale-up queue delay (seconds)<input type="number" min="1" bind:value={rpConfig.queue_delay_s} /></label>
+    </div>
+    <div class="actions">
+      <button onclick={saveRunpod} disabled={rpSaving}>{rpSaving ? 'Saving…' : 'Save RunPod settings'}</button>
+      {#if rpConfig.configured}<button class="ghost sm" onclick={purgeRunpod}>Clear queue</button>{/if}
+    </div>
+
+    <div class="rp-status">
+      <span>Endpoint: <b>{rpStatus?.error ? 'unreachable' : (rpStatus?.configured ? 'reachable' : 'not configured')}</b></span>
+      <span>Queued: <b>{rpStatus?.jobs?.inQueue ?? rpStatus?.jobs?.queued ?? '—'}</b></span>
+      <span>Running: <b>{rpStatus?.jobs?.inProgress ?? rpStatus?.jobs?.running ?? '—'}</b></span>
+      <span>Volume: <b>{rpVolume?.configured ? `ready (${rpVolume.volume_id})` : 'not configured'}</b></span>
+    </div>
+    <div class="actions">
+      <button class="ghost sm" onclick={syncRunpodVolume} disabled={!rpVolume?.configured || rpSyncing}>{rpSyncing ? 'Starting sync…' : 'Sync missing volume models'}</button>
+      <button class="ghost sm" onclick={loadRunpod}>Refresh status</button>
+    </div>
+    {#if rpMessage}<p class="hint rpmsg">{rpMessage}</p>{/if}
+
+    <div class="rp-models">
+      <p class="hint mt0">Workflow placement</p>
+      {#each rpModels.models as m (m.key)}
+        <label class="nsfwrow">
+          <input type="checkbox" checked={m.runpod} disabled={!rpConfig.configured} onchange={(e) => toggleRp(m.key, e.currentTarget.checked)} />
+          <span class="nsfwlabel">{m.name}
+            <span class="nsfwsub">{m.runpod ? '☁ runs on RunPod serverless' : '🖥 runs on local ComfyUI'}</span>
+          </span>
+        </label>
+      {/each}
+      {#if !rpModels.models.length}<p class="card-sub">No image models registered.</p>{/if}
+    </div>
   </section>
 
   <!-- Row 1: Environment + Backend -->
@@ -403,4 +472,13 @@
   .nsfwrow input { width: 16px; height: 16px; margin-top: 2px; flex: none; }
   .nsfwlabel { display: flex; flex-direction: column; gap: 2px; font-size: 13px; color: var(--text); }
   .nsfwsub { font-size: 11.5px; color: var(--muted); }
+  .rp-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 14px; margin-top: 12px; }
+  .rp-grid label { margin: 0; }
+  .rp-grid input { margin-top: 4px; }
+  .rp-status { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 16px; padding: 10px 0; border-top: 1px solid var(--border-soft); border-bottom: 1px solid var(--border-soft); font-size: 12px; color: var(--muted); }
+  .rp-status b { color: var(--text); font-weight: 580; }
+  .rpmsg { color: var(--muted); }
+  .rp-models { margin-top: 16px; }
+  .rp-models .nsfwrow { margin-top: 10px; }
+  @media (max-width: 900px) { .rp-grid { grid-template-columns: 1fr 1fr; } }
 </style>

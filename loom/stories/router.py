@@ -5,20 +5,14 @@ Route families live in ``loom.stories.api``; this module only registers them.
 
 from __future__ import annotations
 
-from .api import builder, genesis, drafting, authoring, arcs, library, play, assets, manuscript, play_state
+from .api import assets, creation, library, runtime
 
 
 _ROUTE_FAMILIES = (
-    builder,
-    genesis,
-    drafting,
-    authoring,
-    arcs,
+    creation,
+    runtime,
     library,
-    play,
     assets,
-    manuscript,
-    play_state,
 )
 
 

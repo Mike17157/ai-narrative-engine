@@ -4,24 +4,25 @@
   let url = $state('');
   let dragging = $state(false);
   let fileInput = $state();
+  let seedStory = $state(true);
 
   async function onFile(e) {
     const file = e.target.files?.[0];
     e.target.value = '';
-    if (file) await importFile(file);
+    if (file) await importFile(file, seedStory);
   }
   async function onDrop(e) {
     e.preventDefault();
     dragging = false;
     const file = e.dataTransfer?.files?.[0];
-    if (file) await importFile(file);
+    if (file) await importFile(file, seedStory);
   }
 </script>
 
 <div class="importpane">
   <div class="hint">
-    Import a SillyTavern character card — PNG or JSON, by file or URL. The avatar,
-    persona, greetings, and lorebook are all preserved.
+    Import a SillyTavern character card — PNG or JSON, by file or URL. JanitorAI cards
+    preserve their avatar, persona, greetings, and lorebook, and can immediately seed a story card.
   </div>
 
   <div class="dropzone" class:drag={dragging}
@@ -39,11 +40,15 @@
     bind:this={fileInput} onchange={onFile} hidden />
 
   <div class="orline"><span>or import from a URL</span></div>
+  <label class="seed">
+    <input type="checkbox" bind:checked={seedStory} />
+    <span>Also create a story card with this character as its first character card</span>
+  </label>
   <div class="urlrow">
     <input class="url" placeholder="Chub, JanitorAI, AICC, Pygmalion, RisuRealm, or a direct .png link"
-      bind:value={url} onkeydown={(e) => e.key === 'Enter' && importUrl(url)} />
-    <button class="import" onclick={() => importUrl(url)} disabled={chars.importing || !url.trim()}>
-      {chars.importing ? 'Importing…' : 'Import'}
+      bind:value={url} onkeydown={(e) => e.key === 'Enter' && importUrl(url, seedStory)} />
+    <button class="import" onclick={() => importUrl(url, seedStory)} disabled={chars.importing || !url.trim()}>
+      {chars.importing ? 'Importing…' : (seedStory ? 'Import & seed story' : 'Import')}
     </button>
   </div>
 </div>
@@ -67,6 +72,8 @@
   .orline { display: flex; align-items: center; gap: 12px; margin: 20px 0 12px; color: var(--faint); font-size: 12px; }
   .orline::before, .orline::after { content: ''; flex: 1; height: 1px; background: var(--border-soft); }
   .urlrow { display: flex; gap: 12px; }
+  .seed { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; font-size: 12px; color: var(--muted); cursor: pointer; }
+  .seed input { accent-color: var(--accent); }
   .url { flex: 1; padding: 8px 12px; }
   .import { white-space: nowrap; padding: 0 14px; min-height: 40px; font-weight: 560; font-size: 13px; }
 </style>

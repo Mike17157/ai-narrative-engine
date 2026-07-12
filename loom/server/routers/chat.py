@@ -88,7 +88,7 @@ def _compose_system(ctx, cfg: dict, character: str | None, persona: dict | None,
     if scopes and top_k > 0:
         hits = _LS.retrieve(ctx.root, recent, scopes, top_k=top_k, allow_nsfw=ctx.allow_nsfw())
         # Function-book entries are operations, not world facts — never inject their specs.
-        from ...stories import graph_ops as _GO
+        from ...stories import story_graph as _GO
         hits = [e for e in hits if not _GO.is_function_entry(e)]
         if hits:
             system = system + "\n\n" + format_lore_block(hits)

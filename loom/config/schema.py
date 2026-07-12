@@ -685,10 +685,12 @@ class RunPodSettings(BaseModel):
     # Serverless endpoint id. When set, batch rendering fans jobs out to this
     # auto-scaling ComfyUI endpoint instead of managing whole GPU pods.
     serverless_endpoint_id: str = ""
-    # Queue allocation: images per GPU instance before spinning up another
-    images_per_instance: int = 10
-    min_instances: int = 1
-    max_instances: int = 10
+    # Scale-to-zero is the cost-safe Serverless default. ``max_instances`` maps
+    # directly to the endpoint's workersMax and to the client batch fan-out cap.
+    min_instances: int = 0
+    max_instances: int = 2
+    idle_timeout_s: int = 5
+    queue_delay_s: int = 4
     # Optional: specific RunPod template ID for new instances
     template_id: str | None = None
 

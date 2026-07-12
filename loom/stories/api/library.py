@@ -22,7 +22,7 @@ from ...server.services.jobs_util import _start_stream_job
 from ...server.services.prompts import FEATURES_SCHEMA, PLAY_SCHEMA, _assemble_base_prompt
 from ..pipeline import apply_manifest as _apply_manifest, plan_and_apply as _plan_and_apply
 # The story pipeline runs on pydantic-graph state machines (see graph_pipeline.py).
-from ..graph_pipeline import StoryState, StoryDeps, run_turn, run_draft
+from ..authoring.pipeline_graph import StoryState, StoryDeps, run_turn, run_draft
 
 def register(app, ctx):
     @app.get("/api/stories")
@@ -160,7 +160,7 @@ def register(app, ctx):
             existing.add((s, t)); existing.add((t, s))   # dedupe within the proposal too
             bonds.append({"id": f"r-{s}-{t}", **b})
         if bonds:   # pipe into the work queue: proposals survive navigation until reviewed
-            from .queue import set_pending
+            from ..records.cards import set_pending
             try:
                 ctx.update_story_fields(key, {"fields": set_pending(_story_fields(key), "bonds", bonds)})
             except FileNotFoundError:
@@ -230,7 +230,7 @@ def register(app, ctx):
                           "description": (c.get("description") or "").strip(),
                           "effect": (c.get("effect") or "").strip()})
         if conds:   # pipe into the work queue: proposals survive navigation until reviewed
-            from .queue import set_pending
+            from ..records.cards import set_pending
             try:
                 ctx.update_story_fields(key, {"fields": set_pending(_story_fields(key), "conditions", conds)})
             except FileNotFoundError:
@@ -243,8 +243,8 @@ def register(app, ctx):
         (`when:<id>` tags across the cast's banks), plus ORPHANS — when: ids bound to no
         existing stage (a renamed/deleted condition silently kills its content otherwise).
         Returns {usage: {cond_id: count}, orphans: {when_id: count}}."""
-        from ..server.services import lorebook_store as _LS
-        from .pipeline.character_scaffold import entry_when
+        from ...server.services import lorebook_store as _LS
+        from ..pipeline.character_scaffold import entry_when
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -279,7 +279,7 @@ def register(app, ctx):
     def pending_put(key: str, kind: str, body: dict):
         """Set one kind's pending items (the review surfaces call this as the user keeps or
         dismisses proposals; an empty list clears the kind and its queue entry)."""
-        from .queue import PENDING_KINDS, set_pending
+        from ..records.cards import PENDING_KINDS, set_pending
         if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
         if kind not in PENDING_KINDS:
@@ -292,9 +292,9 @@ def register(app, ctx):
     def story_queue(key: str):
         """The ordered work queue: for each card layer (overview → cast), pending approvals
         first, then the layer's todos. Advisory order — every item deep-links to its tab."""
-        from .card import build_card
-        from .queue import build_queue
-        from ..server.services.prompts import style_anchor
+        from ..records.cards import build_card
+        from ..records.cards import build_queue
+        from ...server.services.prompts import style_anchor
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -311,8 +311,8 @@ def register(app, ctx):
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        from .card import build_card
-        from ..server.services.prompts import style_anchor
+        from ..records.cards import build_card
+        from ...server.services.prompts import style_anchor
         manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
         card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
         card["story"] = key
@@ -326,7 +326,7 @@ def register(app, ctx):
         update path. Returns the rebuilt layer so callers can re-check the step."""
         if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
-        from .card import build_card, layer_patch_fields
+        from ..records.cards import build_card, layer_patch_fields
         try:
             fields = layer_patch_fields(layer, body or {})
         except KeyError:
@@ -340,7 +340,7 @@ def register(app, ctx):
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"could not save: {exc}"}, status_code=400)
         st = ctx.base_settings.stories.get(key)
-        from ..server.services.prompts import style_anchor
+        from ...server.services.prompts import style_anchor
         manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
         card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
         lay = next((l for l in card["layers"] if l["id"] == layer), None)
@@ -348,8 +348,8 @@ def register(app, ctx):
 
     def _rebuilt_layer(key: str, layer: str):
         st = ctx.base_settings.stories.get(key)
-        from .card import build_card
-        from ..server.services.prompts import style_anchor
+        from ..records.cards import build_card
+        from ...server.services.prompts import style_anchor
         manifests = {m.character: ctx.portrait_manifest(m.character) for m in st.cast}
         card = build_card(st.model_dump(), manifests, global_style=style_anchor(ctx.root))
         return next((l for l in card["layers"] if l["id"] == layer), None)
@@ -397,9 +397,9 @@ def register(app, ctx):
         from fastapi.concurrency import run_in_threadpool
         from fastapi.responses import StreamingResponse
 
-        from ..server.services import config_files as _cf
-        from .card import LAYER_FIELDS
-        from .anchors import anchored_view, apply_ops, any_stale_rejections, merge_results, partial_reply
+        from ...server.services import config_files as _cf
+        from ..records.cards import LAYER_FIELDS
+        from ..records.anchors import anchored_view, apply_ops, any_stale_rejections, merge_results, partial_reply
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -723,8 +723,8 @@ def register(app, ctx):
     @app.delete("/api/stories/{key}")
     def delete_story(key: str):
         import shutil
-        from ..server.services import story_store as _SS
-        from .story_db import delete_db
+        from ...server.services import story_store as _SS
+        from ..records.store import delete_db
         safe = re.sub(r"[^\w\-]+", "", key)
         if not _SS.story_exists(ctx.root, safe):
             # fall back to legacy on-disk forms (pre-migration yaml/json/folder)
@@ -756,7 +756,7 @@ def register(app, ctx):
         Returns {job} — consume /api/jobs/<id>/stream to watch + know when it's done."""
         import shutil
 
-        from .pipeline import extract_characters, extract_protagonist
+        from ..pipeline import extract_characters, extract_protagonist
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
@@ -800,7 +800,7 @@ def register(app, ctx):
             people = ([("__prot__", prot_data)] if prot_data else []) \
                 + [(str(i), n) for i, n in enumerate(npcs)]
 
-            from .pipeline import compose_base_prompt as _compose_base_prompt
+            from ..pipeline import compose_base_prompt as _compose_base_prompt
             _bp_cfg = ctx.load_story_builder()
             _bp_prov = ctx.stage_provider("base_image")
             _bp_sys = (_bp_cfg.get("systems") or {})
@@ -866,8 +866,8 @@ def register(app, ctx):
             try:
                 w_prov, w_sys = ctx.builder_ctx({}, "wardrobe")
                 if w_prov is not None:
-                    from .pipeline import plan_story_wardrobe as _plan_story_wardrobe
-                    from .pipeline.wardrobe import compose_outfit_prompt as _cop
+                    from ..pipeline import plan_story_wardrobe as _plan_story_wardrobe
+                    from ..pipeline.wardrobe import compose_outfit_prompt as _cop
                     from concurrent.futures import ThreadPoolExecutor as _TPE
                     full_story = st.model_dump()
                     name_to_key_regen = {}

@@ -511,7 +511,7 @@ def _stage_preset_from_books(root: Path, stage: str) -> dict | None:
     (`{kind:"stage", fn:<stage>}` + book.preset). Only reached when no `stage_<stage>` preset
     exists — e.g. a hand-authored binding."""
     from . import lorebook_store as _LS
-    from ...stories.graph_ops import stage_spec as _stage_spec
+    from ...stories.story_graph import stage_spec as _stage_spec
 
     def _from_book(meta) -> dict | None:
         if not meta.get("preset"):

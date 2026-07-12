@@ -5,6 +5,9 @@ The `stories` package is organized by responsibility, not by when code was added
 ```text
 stories/
   api/          HTTP adapters: validate requests, select a service, shape responses
+  records/      card projections, raw-turn residuals, and safe graph updates
+  runtime/      live play, scene context, state, and direction
+  creation.py   world-design subsystem: design, material, geography, and orchestration
   pipeline/     multi-step story creation pipeline
   *.py          domain behavior and persistence-facing collaborators
   router.py     composition root only
@@ -33,4 +36,19 @@ stories/
 - New code uses a descriptive noun for the owned capability (`manuscript`, `assets`, `arcs`), not a catch-all name such as `utils`, `helpers`, or `misc`.
 - `router.py` only composes route families. It must not contain endpoints or business logic.
 
-The next extraction target is application state in `server/context.py`: split provider selection, asset paths, and story persistence into explicit collaborators without changing the `AppContext` public surface in one step.
+The next consolidation target is the live-play runtime: `play_context`, `play_graph`, `state_engine`, and `storymaster` currently overlap and should become one explicit runtime subsystem.
+
+## Runtime story model
+
+The authored surface is deliberately only two card types: a Story card and portable Character
+cards. Locations and arcs are sections of the Story card, not independent cards. Live play appends
+immutable raw turns, then periodically consolidates them into small evidence-citing residual claims.
+See `CARD_NETWORK.md` for the complete card, activation, and map contract.
+
+The Storymaster uses `minimax/minimax-m3` for the reflective residual pass. It reasons over
+plain-text card sections and raw turns, using narrow tools, rather than consuming or emitting one
+large JSON document.
+
+## Creation subsystem
+
+`creation.py` is the canonical home for everything that makes a story world before play begins: world framing, cast harnesses, relationship weaving, premise and substrate material, geography, and pydantic-graph orchestration. New code imports from `stories.creation`.

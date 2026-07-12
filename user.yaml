@@ -18,9 +18,10 @@ comfyui:
 runpod:
   api_key: ''
   serverless_endpoint_id: ''
-  images_per_instance: 10
-  min_instances: 1
-  max_instances: 10
+  min_instances: 0
+  max_instances: 2
+  idle_timeout_s: 5
+  queue_delay_s: 4
   template_id: null
   python: null
   main_py: null

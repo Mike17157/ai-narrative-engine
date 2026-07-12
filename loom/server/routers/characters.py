@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from ...cards import extract_card_json, to_character
 from ...card_sources import fetch_card
+from ..safe_downloads import DOWNLOAD_TIMEOUT, MAX_REFERENCE_DOWNLOAD_BYTES, DownloadError, get_public_response, read_limited
 from ..services import config_files
 from ..services.emotions import EMOTION_KEYS, EMOTION_LABELS
 from ..services.images import _clean_reference_png, _randomize_seeds, _render
@@ -745,13 +746,19 @@ def register(app, ctx):
         if key not in ctx.base_settings.characters:   # embedded (DB) or global — not a YAML-file check
             return JSONResponse({"error": "no such character"}, status_code=404)
         url = (body or {}).get("url", "")
-        if not re.match(r"^https?://", url):
-            return JSONResponse({"error": "bad url"}, status_code=400)
         try:
-            async with httpx.AsyncClient(timeout=30, follow_redirects=True) as c:
-                resp = await c.get(url)
-                resp.raise_for_status()
-                data = resp.content
+            async with httpx.AsyncClient(timeout=DOWNLOAD_TIMEOUT, follow_redirects=False) as c:
+                resp = await get_public_response(c, url)
+                try:
+                    resp.raise_for_status()
+                    content_type = resp.headers.get("content-type", "").lower()
+                    if not content_type.startswith("image/"):
+                        return JSONResponse({"error": "remote file is not an image"}, status_code=415)
+                    data = await read_limited(resp, MAX_REFERENCE_DOWNLOAD_BYTES)
+                finally:
+                    await resp.aclose()
+        except DownloadError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": f"download failed: {exc}"}, status_code=502)
         try:

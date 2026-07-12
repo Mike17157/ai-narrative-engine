@@ -1,13 +1,9 @@
 <script>
-  // The story EXPLORER — a VS Code-style file tree that replaces the horizontal in-story subnav.
-  // It mirrors the authored hierarchy (Overview · World▸locations · Cast▸characters · Relationships ·
-  // Arcs▸scenes · Play) over the routes that already exist. One tree, collapsible folders, indent
-  // guides, active-path reveal. See [[navigation-pattern]] / [[story-tab-shell]] — this is the
-  // in-story nav; the app's top bar is unchanged.
+  // The story workspace is deliberately three-card shaped: a story card, character cards, and
+  // outfit cards. The old world/arc/map tree exposed implementation layers instead of the things
+  // a writer actually owns, so those editors now live inside the Story card.
   import { page } from '$app/stores';
   import { stories } from '$lib/stories.svelte.js';
-  import { charName } from '$lib/characters.svelte.js';
-  import { arcSpine, ACCESS } from '$lib/storyspine.js';
 
   let { collapsed = false, onToggle } = $props();
 
@@ -18,42 +14,13 @@
 
   const tab = (t) => `/stories/${key}/structure?tab=${t}`;
 
-  // The tree model — derived from the live story. kind: file | folder; folders carry children.
+  // The three durable authoring frames. Each frame has one clear owner and no nested navigation.
   let tree = $derived.by(() => {
     if (!st) return [];
-    const locs = st.locations || [];
-    const cast = st.cast || [];
-    const primary = cast.find((m) => m.primary)?.character || cast[0]?.character;
-    // Arcs (and the scenes inside them) come from the ONE shared spine — real arcs or the concrete
-    // example — so the tree, the Arcs page, and the Scenes pane never disagree.
-    const arcNodes = arcSpine(st).arcs;
-    // Per-character STAGE snapshots = the same arcs (each arc is a card snapshot for that character).
-    const stageOf = (charKey) => arcNodes.map((a, i) => ({
-      id: `cs-${charKey}-${a.id}`, icon: '·', label: a.title,
-      href: `/stories/${key}/characters?char=${charKey}&stage=${i}` }));
-    const cch = `/stories/${key}/characters`;
     return [
-      { id: 'overview', label: 'Overview', icon: '◈', href: tab('overview') },
-      { id: 'world', label: 'World', icon: '🌐', href: tab('map'),
-        children: locs.map((l) => ({ id: `loc-${l.id}`, label: l.name || 'Location', icon: '▪', href: tab('map') })) },
-      // Characters = the narrative CARDS (base + tell/shape/full ladder, per-stage snapshots).
-      { id: 'characters', label: 'Characters', icon: '🪪', href: cch,
-        children: cast.map((m) => ({ id: `char-${m.character}`, icon: m.character === primary ? '★' : '◦',
-          label: charName(m.character) || m.character, href: `${cch}?char=${m.character}`,
-          children: stageOf(m.character) })) },
-      { id: 'relationships', label: 'Relationships', icon: '⁂', href: tab('relationships') },
-      // Selecting an arc opens ITS scenes directly (/scenes?arc=). Scenes aren't nested in the tree —
-      // an arc IS its scenes. (The "Arcs" header still opens the spine overview at /arcs.)
-      { id: 'arcs', label: 'Arcs', icon: '❖', href: `/stories/${key}/arcs`,
-        children: arcNodes.map((a) => ({ id: `arc-${a.id}`, icon: '●', tint: (ACCESS[a.access] || {}).color,
-          label: a.title, title: `access: ${(ACCESS[a.access] || {}).label || ''}`,
-          href: `/stories/${key}/scenes?arc=${a.id}` })) },
-      // Outfits = the wardrobe / appearance catalogue (sprites, emotions) — distinct from the cards.
-      { id: 'outfits', label: 'Outfits', icon: '👗', href: `/stories/${key}/cast`,
-        children: cast.map((m) => ({ id: `fit-${m.character}`, icon: '▪',
-          label: charName(m.character) || m.character, href: `/stories/${key}/cast` })) },
-      // Prompts = every image prompt (art style · appearance · outfits · locations · scenes) in one place.
-      { id: 'prompts', label: 'Prompts', icon: '🎨', href: `/stories/${key}/prompts` },
+      { id: 'story', label: 'Story card', icon: '◈', href: tab('overview') },
+      { id: 'characters', label: 'Character cards', icon: '🪪', href: `/stories/${key}/characters` },
+      { id: 'outfits', label: 'Outfit cards', icon: '👗', href: `/stories/${key}/cast` },
     ];
   });
 
@@ -99,15 +66,12 @@
       <span class="tname">{st?.name || 'Untitled story'}</span>
     </div>
 
-    <div class="tree">
+    <div class="tree frames">
       {#each tree as node (node.id)}
         {@render Row(node, 0)}
       {/each}
     </div>
 
-    <a class="play" class:on={path.endsWith('/play')} href={`/stories/${key}/play`}>
-      <span class="pico">▶</span> Play
-    </a>
   </nav>
 {/if}
 
@@ -173,6 +137,7 @@
 
   /* the tree */
   .tree { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 2px 4px 10px; }
+  .frames { padding: 10px 8px; display: flex; flex-direction: column; gap: 7px; }
   .tree::-webkit-scrollbar { width: 8px; }
   .tree::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 
@@ -182,6 +147,10 @@
     padding-left: calc(6px + var(--depth, 0) * 15px);
     transition: background .1s, color .1s;
   }
+  .frames .row { height: 44px; padding-left: 8px; border: 1px solid var(--border); background: var(--elev); }
+  .frames .row:hover { border-color: var(--accent); }
+  .frames .row.active { border-color: var(--accent); }
+  .frames .ico { font-size: 16px; width: 24px; }
   .row:hover { background: var(--elev); color: var(--text); }
   .row.active { background: var(--elev-2, #222838); color: #fff; }
   .row.active::before {

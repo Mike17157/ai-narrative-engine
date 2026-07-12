@@ -9,6 +9,7 @@ from fastapi import File, Form, UploadFile
 from fastapi.responses import JSONResponse
 
 from ...comfy.server import get_server
+from ..safe_downloads import DOWNLOAD_TIMEOUT, DownloadError, get_public_response, max_model_download_bytes, validate_content_length
 from ..services import config_files
 
 
@@ -241,20 +242,27 @@ def register(app, ctx):
             tmp = target.with_suffix(target.suffix + ".part")
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
-                async with httpx.AsyncClient(follow_redirects=True, timeout=None) as client:
-                    async with client.stream("GET", url) as r:
+                max_bytes = max_model_download_bytes()
+                async with httpx.AsyncClient(follow_redirects=False, timeout=DOWNLOAD_TIMEOUT) as client:
+                    r = await get_public_response(client, str(url))
+                    try:
                         if r.status_code != 200:
                             yield f"data: {json.dumps({'type': 'error', 'error': f'HTTP {r.status_code} from source'})}\n\n"
                             return
+                        validate_content_length(r, max_bytes)
                         total = int(r.headers.get("content-length", 0))
                         done, last = 0, 0
                         with open(tmp, "wb") as f:
                             async for chunk in r.aiter_bytes(1 << 20):
-                                f.write(chunk)
                                 done += len(chunk)
+                                if done > max_bytes:
+                                    raise DownloadError(f"download exceeds the {max_bytes} byte limit")
+                                f.write(chunk)
                                 if done - last >= (5 << 20):
                                     last = done
                                     yield f"data: {json.dumps({'type': 'progress', 'done': done, 'total': total})}\n\n"
+                    finally:
+                        await r.aclose()
                 tmp.replace(target)
                 from ...comfy.scan import invalidate_scan_cache
                 invalidate_scan_cache()

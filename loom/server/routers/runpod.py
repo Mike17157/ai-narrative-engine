@@ -243,6 +243,64 @@ def register(app, ctx) -> None:
         return (f"https://api.runpod.ai/v2/{eid}",
                 {"Authorization": f"Bearer {key}"}), eid
 
+    @app.get("/api/runpod/config")
+    def runpod_config():
+        """Safe, UI-facing serverless settings; never exposes the API key."""
+        rp = ctx.runpod_config
+        return {
+            "configured": bool(rp.get("serverless_endpoint_id") and rp.get("api_key")),
+            "endpoint_id": rp.get("serverless_endpoint_id", ""),
+            "enabled": rp.get("enabled", True),
+            "min_instances": rp.get("min_instances", 0),
+            "max_instances": rp.get("max_instances", 2),
+            "idle_timeout_s": rp.get("idle_timeout_s", 5),
+            "queue_delay_s": rp.get("queue_delay_s", 4),
+        }
+
+    @app.put("/api/runpod/config")
+    def update_runpod_config(body: dict):
+        """Save desired scaling and, when configured, reconcile the live endpoint."""
+        body = body or {}
+        try:
+            values = {
+                "enabled": bool(body.get("enabled", ctx.runpod_config.get("enabled", True))),
+                "min_instances": int(body.get("min_instances", ctx.runpod_config.get("min_instances", 0))),
+                "max_instances": int(body.get("max_instances", ctx.runpod_config.get("max_instances", 2))),
+                "idle_timeout_s": int(body.get("idle_timeout_s", ctx.runpod_config.get("idle_timeout_s", 5))),
+                "queue_delay_s": int(body.get("queue_delay_s", ctx.runpod_config.get("queue_delay_s", 4))),
+            }
+        except (TypeError, ValueError):
+            return JSONResponse({"error": "RunPod scaling values must be integers"}, status_code=422)
+        if values["min_instances"] < 0 or values["max_instances"] < values["min_instances"]:
+            return JSONResponse({"error": "workers must satisfy 0 ≤ min ≤ max"}, status_code=422)
+        if values["idle_timeout_s"] < 0 or values["queue_delay_s"] < 1:
+            return JSONResponse({"error": "idle timeout must be ≥ 0 and queue delay ≥ 1"}, status_code=422)
+
+        # Persist first: a temporary RunPod API failure should not discard the user's
+        # desired configuration. The response explicitly reports whether it reached
+        # the endpoint so the UI can make that visible.
+        ctx.update_runpod_settings(**values)
+        conn, eid = _serverless()
+        reconciled, warning = False, None
+        if conn is not None:
+            import httpx
+            try:
+                with httpx.Client(base_url="https://rest.runpod.io/v1",
+                                  headers={"Authorization": f"Bearer {ctx.runpod_config['api_key']}",
+                                           "Content-Type": "application/json"}, timeout=20) as c:
+                    response = c.patch(f"/endpoints/{eid}", json={
+                        "workersMin": values["min_instances"],
+                        "workersMax": values["max_instances"],
+                        "idleTimeout": values["idle_timeout_s"],
+                        "scalerType": "QUEUE_DELAY",
+                        "scalerValue": values["queue_delay_s"],
+                    })
+                    response.raise_for_status()
+                    reconciled = True
+            except httpx.HTTPError as exc:
+                warning = f"Saved locally, but RunPod endpoint was not updated: {exc}"
+        return {"ok": True, **runpod_config(), "reconciled": reconciled, "warning": warning}
+
     @app.get("/api/runpod/status")
     def serverless_status():
         """Live serverless health: job counts (queued / in-progress / failed) + worker

@@ -1,0 +1,14 @@
+{
+  "1": {"class_type": "UNETLoader", "inputs": {"unet_name": "krea2TurboOfficialComfy_krea2TurboNvfp4.safetensors", "weight_dtype": "default"}, "_meta": {"title": "Krea2 Turbo (NVFP4)"}},
+  "2": {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen3vl_4b_fp8_scaled.safetensors", "type": "krea2", "device": "default"}, "_meta": {"title": "Qwen3-VL text encoder (type=krea2)"}},
+  "3": {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}, "_meta": {"title": "Qwen-Image VAE"}},
+  "30": {"class_type": "easy loraStack", "inputs": {"toggle": false, "mode": "simple", "num_loras": 1, "lora_1_name": "None", "lora_1_strength": 1.0}, "_meta": {"title": "LoRA stack (configure up to 10)"}},
+  "31": {"class_type": "easy loraStackApply", "inputs": {"lora_stack": ["30", 0], "model": ["1", 0], "optional_clip": ["2", 0]}, "_meta": {"title": "Apply LoRA stack"}},
+  "4": {"class_type": "CLIPTextEncode", "inputs": {"text": "{{image}}", "clip": ["31", 1]}, "_meta": {"title": "Map style prompt"}},
+  "7": {"class_type": "ConditioningZeroOut", "inputs": {"conditioning": ["4", 0]}, "_meta": {"title": "Negative (zeroed — Turbo runs CFG 1)"}},
+  "14": {"class_type": "LoadImage", "inputs": {"image": "map_reference.png"}, "_meta": {"title": "Town/map reference image"}},
+  "15": {"class_type": "VAEEncode", "inputs": {"pixels": ["14", 0], "vae": ["3", 0]}, "_meta": {"title": "Encode reference geometry"}},
+  "5": {"class_type": "KSampler", "inputs": {"model": ["31", 0], "positive": ["4", 0], "negative": ["7", 0], "latent_image": ["15", 0], "seed": 0, "steps": 10, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 0.35}, "_meta": {"title": "Map reference refinement (low denoise preserves layout)"}},
+  "12": {"class_type": "VAEDecode", "inputs": {"samples": ["5", 0], "vae": ["3", 0]}, "_meta": {"title": "Decode map"}},
+  "13": {"class_type": "SaveImage", "inputs": {"filename_prefix": "loom_map", "images": ["12", 0]}, "_meta": {"title": "Save map"}}
+}

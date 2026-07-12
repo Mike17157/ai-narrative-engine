@@ -44,9 +44,10 @@ class AppContext(ProviderContextMixin, StorageContextMixin):
             "enabled": rp.enabled if rp else True,
             "api_key": os.environ.get("RUNPOD_API_KEY", "") or (rp.api_key if rp else ""),
             "serverless_endpoint_id": os.environ.get("RUNPOD_ENDPOINT_ID", "") or (rp.serverless_endpoint_id if rp else ""),
-            "images_per_instance": rp.images_per_instance if rp else 10,
-            "min_instances": rp.min_instances if rp else 1,
-            "max_instances": rp.max_instances if rp else 10,
+            "min_instances": rp.min_instances if rp else 0,
+            "max_instances": rp.max_instances if rp else 2,
+            "idle_timeout_s": rp.idle_timeout_s if rp else 5,
+            "queue_delay_s": rp.queue_delay_s if rp else 4,
             "template_id": rp.template_id if rp else None,
         }
 
@@ -58,10 +59,16 @@ class AppContext(ProviderContextMixin, StorageContextMixin):
 
     def set_runpod_enabled(self, enabled: bool) -> None:
         """Toggle RunPod routing on/off and persist to user.yaml."""
-        self.runpod_config["enabled"] = enabled
+        self.update_runpod_settings(enabled=enabled)
+
+    def update_runpod_settings(self, **changes) -> None:
+        """Persist non-secret RunPod settings and keep the live context in sync."""
+        allowed = {"enabled", "min_instances", "max_instances", "idle_timeout_s", "queue_delay_s"}
+        changes = {key: value for key, value in changes.items() if key in allowed}
+        self.runpod_config.update(changes)
         user_path = self.root / "user.yaml"
         raw: dict = yaml.safe_load(user_path.read_text(encoding="utf-8")) if user_path.is_file() else {}
-        raw.setdefault("runpod", {})["enabled"] = enabled
+        raw.setdefault("runpod", {}).update(changes)
         user_path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def reload_settings(self) -> None:

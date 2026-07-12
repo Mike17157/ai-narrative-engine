@@ -30,17 +30,10 @@
   let activeHref = $derived(path + search);
 
   let comfyUp = $derived(app.health?.comfyui?.up);
-  let runpodConfigured = $derived(app.health?.runpod?.configured ?? false);
-  let runpodEnabled = $derived(app.health?.runpod?.enabled ?? true);
   let running = $derived(app.activity?.running || 0);
 
   // ── helpers ──
   function closeMenus() { showActivity = false; openDrop = null; }
-
-  async function toggleRunpod() {
-    await post('/runpod/enabled', { enabled: !runpodEnabled });
-    await refreshHealth();
-  }
 
   const nav = [
     { id: 'chat',       label: 'Chat',       icon: '💬', href: '/chat' },
@@ -150,10 +143,6 @@
         </button>
         {#if showActivity}<ActivityMenu onnavigate={(s) => { if (s) goto(`/${s}`); showActivity = false; }} />{/if}
       </div>
-      {#if runpodConfigured}
-        <button class="rptoggle" class:rpon={runpodEnabled} onclick={toggleRunpod}
-          title={runpodEnabled ? 'RunPod active — click to run locally' : 'Running locally — click to use RunPod'}>☁</button>
-      {/if}
       <a href="/settings/system" class="cdot {comfyUp ? 'up' : 'down'}" title={comfyUp ? 'ComfyUI live — click for system info' : 'ComfyUI off — click for system info'}></a>
     </div>
   </header>

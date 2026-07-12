@@ -1,8 +1,10 @@
 # Relationship-first story genesis — design note
 
-Status: **theory, unbuilt.** This is the contract we build to. Supersedes the
-six-box premise linter (`premise_coverage` + `_PREMISE_COMPONENTS` in router.py),
-which it deletes.
+Status: **historical genesis design.** The harness/web ideas below remain useful for creating a
+first story draft, but the persisted/runtime card contract is now `CARD_NETWORK.md`: Story and
+Character are the only card types; locations and arcs are Story-card sections; relationship facts
+are optional direct edges, never relationship cards; raw turns and evidence-citing residuals carry
+live play. This document must not be used to reintroduce a separate relationship-card system.
 
 ## 1. The inversion
 

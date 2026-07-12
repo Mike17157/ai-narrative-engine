@@ -22,6 +22,8 @@ from ..connections import ConnectionStore
 from .context import AppContext
 from .index_html import INDEX_HTML
 from . import startup
+from .routing import register_domain
+from .security import configure_api_auth
 from ..stories import router as stories  # story domain lives in loom/stories/, not routers/
 from .routers import (
     characters,
@@ -79,26 +81,28 @@ def _register_comfy(user, root: Path) -> str:
     return c.base_url
 
 
-# Every domain router exposes `register(app, ctx)`. Order is cosmetic (paths are distinct).
+# Every feature router retains its existing ``register(app, ctx)`` contract. The
+# composition root owns the public API domains so routes have a stable place for
+# access policy, quotas, and observability as the local app becomes a service.
 _ROUTERS = (
-    server,
-    characters,
-    chat,
-    stories,
-    tags,
-    models_conn,
-    workflow,
-    lora,
-    trainer,
-    comfy,
-    personas,
-    jobs,
-    runpod,
-    lorebooks,
-    presets,
-    image_presets,
-    tts,
-    stt,
+    (server, "admin"),
+    (characters, "characters"),
+    (chat, "conversations"),
+    (stories, "stories"),
+    (tags, "images"),
+    (models_conn, "models"),
+    (workflow, "images"),
+    (lora, "models"),
+    (trainer, "admin"),
+    (comfy, "images"),
+    (personas, "profiles"),
+    (jobs, "jobs"),
+    (runpod, "admin"),
+    (lorebooks, "stories"),
+    (presets, "models"),
+    (image_presets, "images"),
+    (tts, "audio"),
+    (stt, "audio"),
 )
 
 
@@ -179,8 +183,9 @@ def create_app(root: str | Path = ".") -> FastAPI:
     ctx = build_context(root)
 
     app = FastAPI(title="Loom")
-    for mod in _ROUTERS:
-        mod.register(app, ctx)
+    configure_api_auth(app)
+    for mod, domain in _ROUTERS:
+        register_domain(mod, app, ctx, domain)
 
     _mount_spa(app, root)
 

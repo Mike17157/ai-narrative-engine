@@ -214,5 +214,9 @@ actually changed, since `sync.py` also regenerates the Dockerfile.
 - Serverless bills only while a worker is running a job; idle timeout returns it to zero.
 - First request after idle has a **cold start** (~1–2 min here) while the worker boots
   and loads the checkpoint from the volume. Warm requests are fast.
-- For big casts, Loom fires N jobs concurrently (capped at `runpod.max_instances`)
-  and RunPod scales workers up to your endpoint's max.
+- For big casts, Loom fires N jobs concurrently only when that workflow was selected
+  for RunPod. The client cap is `runpod.max_instances`, which should match the
+  endpoint's `workersMax`. `deploy.py` reads `runpod.min_instances`,
+  `runpod.max_instances`, `runpod.idle_timeout_s`, and `runpod.queue_delay_s`
+  from `user.yaml`; re-run it with `--update-existing` after changing them.
+  Otherwise jobs will just wait in RunPod's remote queue.

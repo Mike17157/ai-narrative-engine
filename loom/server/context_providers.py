@@ -154,7 +154,10 @@ class ProviderContextMixin:
         # Where does this workflow run? Explicit override wins; otherwise the per-workflow
         # global default (runpod_models.json). 'cloud' needs the serverless endpoint + key.
         rp = self.runpod_config
-        cloud_ready = bool(rp.get("api_key") and rp.get("serverless_endpoint_id"))
+        # The header's cloud toggle is a global circuit breaker.  A model may be
+        # RunPod-flagged, but it must still resolve locally when the user turns
+        # cloud inference off for this session.
+        cloud_ready = bool(rp.get("enabled", True) and rp.get("api_key") and rp.get("serverless_endpoint_id"))
         want_cloud = (provider_override == "cloud") or \
             (provider_override in (None, "") and model_id in self.runpod_models())
         # Hardware fallback: if the caller didn't force a target and this workflow's models

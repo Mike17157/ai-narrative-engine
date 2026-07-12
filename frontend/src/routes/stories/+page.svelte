@@ -5,11 +5,30 @@
   import { goto } from '$app/navigation';
   import { chars } from '$lib/characters.svelte.js';
   import { stories, deleteStory, loadStories } from '$lib/stories.svelte.js';
-  import { post } from '$lib/api.js';
+  import { post, put } from '$lib/api.js';
 
   async function newStory() {
     const r = await post('/stories/new', {});
     if (r.ok && r.data?.key) { await loadStories(); goto(`/stories/${r.data.key}/structure`); }
+  }
+  let seedOpen = $state(false), seedUrl = $state(''), seedBusy = $state(false), seedError = $state('');
+  async function seedFromCard() {
+    if (!seedUrl.trim() || seedBusy) return;
+    seedBusy = true; seedError = '';
+    try {
+      const imported = await post('/characters/import-url', { url: seedUrl.trim() });
+      if (!imported.data?.ok) throw new Error(imported.data?.error || 'Could not import card');
+      const seeded = await post('/stories/seed-from-card', { character: imported.data.key });
+      if (!seeded.data?.seed) throw new Error(seeded.data?.error || 'The story model could not build a seed');
+      const seed = seeded.data.seed;
+      await post(`/characters/${imported.data.key}/card`, { fields: { story_seed: seed } });
+      const story = await post('/stories/from-cast', { name: seed.name || imported.data.name, characters: [imported.data.key], premise: seed.opening || seed.world || '' });
+      if (!story.data?.ok) throw new Error(story.data?.error || 'Could not create story');
+      await put(`/stories/${story.data.key}`, { world: { seed: seed.world || '', question: seed.question || '' }, premise_parts: { root: seed.world || '', question: seed.question || '' } });
+      await loadStories();
+      goto(`/stories/${story.data.key}/structure?tab=overview`);
+    } catch (err) { seedError = err.message || String(err); }
+    finally { seedBusy = false; }
   }
   const open = (key) => goto(`/stories/${key}/structure`);
 
@@ -64,7 +83,7 @@
 
   <div class="sechead">
     <span class="sectitle">Finished{complete.length ? ` · ${complete.length}` : ''}</span>
-    <button onclick={newStory}>＋ New story</button>
+    <div class="newacts"><button class="ghost" onclick={() => (seedOpen = true)}>Seed from card link</button><button onclick={newStory}>＋ New story</button></div>
   </div>
 
   {#if complete.length}
@@ -117,6 +136,16 @@
   {/if}
 
 </div></div>
+
+{#if seedOpen}
+  <div class="overlay" onclick={() => (seedOpen = false)} role="presentation"><div class="dlg" role="dialog" aria-modal="true" onclick={(e) => e.stopPropagation()}>
+    <div class="dlghead"><h3 class="title">Seed from a character card</h3><button class="x" onclick={() => (seedOpen = false)}>✕</button></div>
+    <p class="seedhint">Paste a JanitorAI, Chub, AICC, Pygmalion, Risu, or direct Tavern-card link. Loom imports the card, runs the story seed model, and creates the first Character and Story cards.</p>
+    <input class="seedurl" bind:value={seedUrl} placeholder="https://janitorai.com/characters/..." onkeydown={(e) => e.key === 'Enter' && seedFromCard()} />
+    {#if seedError}<p class="seederr">{seedError}</p>{/if}
+    <div class="acts"><button class="ghost" onclick={() => (seedOpen = false)}>Cancel</button><button onclick={seedFromCard} disabled={!seedUrl.trim() || seedBusy}>{seedBusy ? 'Building cards…' : 'Import & build cards'}</button></div>
+  </div></div>
+{/if}
 
 {#if showFilters}
   <div class="overlay" onclick={() => (showFilters = false)} role="presentation">
@@ -200,6 +229,7 @@
   .field span { font-size: 11.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--muted); }
   .field select { width: 100%; }
   .acts { display: flex; justify-content: flex-end; gap: 10px; margin-top: 18px; }
+  .newacts { display:flex; gap:8px; } .seedhint { color:var(--muted); font-size:13px; line-height:1.45; } .seedurl { width:100%; box-sizing:border-box; margin-top:12px; } .seederr { color:var(--bad); font-size:12px; }
   .acts button { padding: 8px 16px; font-size: 13.5px; border-radius: 9px; }
   .acts .ghost:disabled { opacity: .4; cursor: not-allowed; }
   @keyframes fade { from { opacity: 0; } }

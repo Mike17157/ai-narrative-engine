@@ -22,7 +22,7 @@ from ...server.services.jobs_util import _start_stream_job
 from ...server.services.prompts import FEATURES_SCHEMA, PLAY_SCHEMA, _assemble_base_prompt
 from ..pipeline import apply_manifest as _apply_manifest, plan_and_apply as _plan_and_apply
 # The story pipeline runs on pydantic-graph state machines (see graph_pipeline.py).
-from ..graph_pipeline import StoryState, StoryDeps, run_turn, run_draft
+from ..authoring.pipeline_graph import StoryState, StoryDeps, run_turn, run_draft
 
 def register(app, ctx):
     @app.post("/api/stories/{key}/dream")
@@ -33,8 +33,8 @@ def register(app, ctx):
         player SLEEPS (see consolidate_on_rest), exposed here for a deliberate rest/dream. Pure read.
         Body: { sid?, present?[keys], you? } → { dream }."""
         from ..server.services.story_sessions import load_session
-        from . import state_engine as _SE
-        from . import stage_tools as _ST
+        from ..runtime import state as _SE
+        from ..authoring import stages as _ST
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
@@ -52,7 +52,7 @@ def register(app, ctx):
         locations. `apply` (default true) writes locations/places/fields.travel onto the story,
         which arms the whereabouts lines + the move rate-limiter in play (geography.py).
         Body: { model?, apply? } → { geography, applied, locations, places, travel }."""
-        from .geography import gen_geography, apply_geography
+        from ..world.creation import gen_geography, apply_geography
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
@@ -92,7 +92,7 @@ def register(app, ctx):
         """Plan one cast character's wardrobe (outfits) + story-derived expression prompts,
         STREAMED live as a job. Returns {job}; the final `result` event carries the plan for
         review (persist via the portraits wardrobe endpoint). Renders nothing."""
-        from .pipeline import plan_wardrobe
+        from ..pipeline import plan_wardrobe
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
@@ -114,7 +114,7 @@ def register(app, ctx):
             # Pass 2 — refine EACH outfit into careful, consistent booru tags, in parallel (same
             # 2-step pipeline the base image gets).
             emit({"type": "phase", "label": "Refining each outfit — booru tags"})
-            from .pipeline import refine_outfits as _refine_outfits
+            from ..pipeline import refine_outfits as _refine_outfits
             plan["outfits"] = _refine_outfits(provider, plan.get("outfits"), ch.system, appearance, emit=emit)
             return {"character": char_key, **plan}
 
@@ -133,7 +133,7 @@ def register(app, ctx):
         refresh the persona-driven canonical expression prompts (and plan a wardrobe if none exists) —
         and SKIPS every image render, leaving existing outfits and rendered sprites untouched. The
         gated RegenModal uses this so the user can review each image stage before it renders."""
-        from .pipeline import revise_character
+        from ..pipeline import revise_character
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
@@ -164,7 +164,7 @@ def register(app, ctx):
                 return {"cancelled": True}
             # 2. Compose the rich base-image prompt from the rewritten persona + appearance.
             emit({"type": "phase", "label": "Composing the base-image prompt"})
-            from .pipeline import compose_base_prompt as _compose_base_prompt
+            from ..pipeline import compose_base_prompt as _compose_base_prompt
             _bp_cfg = ctx.load_story_builder()
             _bp_prov = ctx.stage_provider("base_image")
             comp = _compose_base_prompt(_bp_prov, revised["name"], revised["persona"],
@@ -216,7 +216,7 @@ def register(app, ctx):
                 if text_only:
                     # Recompose persona-driven prompts from the revised persona and merge them into
                     # the manifest without touching the existing outfits or their sprites.
-                    from .pipeline import (compose_expressions as _compose_expressions,
+                    from ..pipeline import (compose_expressions as _compose_expressions,
                                                compose_poses as _compose_poses,
                                                compose_affect_range as _compose_affect_range,
                                                plan_wardrobe as _plan_wardrobe,
@@ -261,7 +261,7 @@ def register(app, ctx):
         """Regenerate ONE location's background_prompt using the locations stage's
         configured model + system prompt (framing rules included), then save it to the
         story. Returns {prompt}."""
-        from .pipeline import DEFAULT_SYSTEMS
+        from ..pipeline import DEFAULT_SYSTEMS
 
         st = ctx.base_settings.stories.get(key)
         if st is None:

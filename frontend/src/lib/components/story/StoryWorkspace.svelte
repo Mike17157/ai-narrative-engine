@@ -21,6 +21,7 @@
   import QueueButton from '$lib/components/story/QueueButton.svelte';
   import WorkflowModal from '$lib/components/story/WorkflowModal.svelte';
   import StoryOverview from '$lib/components/story/StoryOverview.svelte';
+  import StoryCard from '$lib/components/story/StoryCard.svelte';
   import StoryWorldMap from '$lib/components/story/StoryWorldMap.svelte';
   import { workflow, closeWorkflow } from '$lib/workflow.svelte.js';
 
@@ -291,6 +292,9 @@
   {/if}
 
   {#if tab === 'overview'}
+  <StoryCard storyKey={st.key} />
+
+  {:else if tab === 'legacy-overview'}
   <!-- Overview = the WORLD DOCUMENT (world-first). The old premise causal-engine form (root →
        question → creeds → …) was retired in favour of authoring the world itself; premise distils
        from it. See StoryOverview. Config (art/cast/memory) stays below. -->

@@ -13,7 +13,7 @@ from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from loom.server import build_context
-from loom.stories.character_engine import generate_cast, generate_history, generate_setting
+from loom.stories.characters.engine import generate_cast, generate_history, generate_setting
 
 WORLD = (
     "A small town at the end of a train line that keeps getting slower — one train a day now, and soon "

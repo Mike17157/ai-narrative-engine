@@ -4,8 +4,8 @@
 renders them concurrently, reports per-image progress, and honours cancellation —
 propagated into in-flight RunPod jobs so they stop billing. It picks the backend:
 
-  * a RunPod **serverless** endpoint is configured  → one endpoint job per prompt, fanned
-    out up to ``max_instances``; the endpoint auto-scales workers to the queue depth.
+  * a RunPod **serverless** provider was selected for the workflow → one endpoint job per
+    prompt, fanned out no faster than the configured endpoint worker ceiling.
   * otherwise (**local** ComfyUI)                   → a small thread pool against the one
     local GPU (ComfyUI serialises on the GPU anyway).
 
@@ -54,15 +54,18 @@ def render_batch(
         return []
 
     cfg = (getattr(ctx, "runpod_config", None) or {}) if ctx else {}
-    # force_local: for workflows that only exist on the local ComfyUI (e.g. the krea2 sprite
-    # detailer) — the serverless worker lacks them, so routing there just fails the whole batch.
-    serverless = not force_local and bool(
-        cfg.get("enabled", True) and cfg.get("serverless_endpoint_id") and cfg.get("api_key")
-    )
+    # Provider selection is deliberately made once by ``ctx.image_provider``.  Do not
+    # override it here merely because RunPod credentials happen to be present: that used
+    # to send every batch (including workflows deliberately set to local) to RunPod.
+    from ...providers.runpod_serverless_provider import RunPodServerlessProvider
+    serverless = not force_local and isinstance(provider, RunPodServerlessProvider)
 
     if serverless:
-        cap = max(1, int(cfg.get("max_instances", 10)))
-        make = _serverless_factory(provider, cfg, seed)
+        # ``max_instances`` is the desired RunPod endpoint workersMax.  Keeping client
+        # fan-out at or below it avoids flooding the remote queue with jobs that cannot
+        # run concurrently.  The deployment script exposes the same setting.
+        cap = max(1, int(cfg.get("max_instances", 2)))
+        make = _serverless_factory(provider, seed)
     else:
         cap = 2   # one local GPU; deepcopy-per-task just avoids shared-workflow races
         make = _local_factory(provider, seed)
@@ -78,7 +81,7 @@ def _seed_fn(seed):
     return (lambda wf: _set_seeds(wf, seed)) if seed is not None else _randomize_seeds
 
 
-def _serverless_factory(provider, cfg, seed=None) -> Callable[[], Any]:
+def _serverless_factory(provider, seed=None) -> Callable[[], Any]:
     from ...providers.runpod_serverless_provider import RunPodServerlessProvider
     seed_wf = _seed_fn(seed)
 
@@ -86,8 +89,8 @@ def _serverless_factory(provider, cfg, seed=None) -> Callable[[], Any]:
         wf = copy.deepcopy(provider.workflow)
         seed_wf(wf)
         return RunPodServerlessProvider({
-            "endpoint_id": cfg["serverless_endpoint_id"],
-            "api_key": cfg["api_key"],
+            "endpoint_id": provider.endpoint_id,
+            "api_key": provider.api_key,
             "workflow": wf,
             "inputs": provider.inputs,
             "output_node": provider.output_node,

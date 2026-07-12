@@ -38,6 +38,14 @@ configs/pipelines/  ─┘            (text | image)
 Every config is validated by Pydantic on load, including cross-checks that each
 step targets a real model of the correct kind. Flexible, never silently broken.
 
+## Story runtime
+
+Stories use two authored cards: a Story card (world, locations, arcs, cast references) and
+portable Character cards. Roleplay is preserved as raw turns, then consolidated into
+evidence-citing residuals rather than rewriting source cards. Locations activate deterministically
+from the Story card; `krea2_turbo_map` renders a reference-grounded map asset. See
+[`loom/stories/CARD_NETWORK.md`](loom/stories/CARD_NETWORK.md).
+
 ## Quick start
 
 ```bash

@@ -1,0 +1,7 @@
+{
+  "source": "purpose-built reference-map img2img workflow",
+  "positive_node": "4",
+  "output_node": "13",
+  "reference_node": "14",
+  "layout_control": "reference-image geometry; add GLIGEN/ControlNet boxes only after the required model is installed"
+}

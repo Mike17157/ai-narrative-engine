@@ -5,7 +5,7 @@ plan persistence, old-scene close into the log, and the consequence-context bloc
 """
 from types import SimpleNamespace
 
-from loom.stories.storymaster import (StoryMaster, advance_arc, arc_milestone, plot_direction,
+from loom.stories.runtime.director import (StoryMaster, advance_arc, arc_milestone, plot_direction,
                                       record_page, scene_block, state_card)
 
 
