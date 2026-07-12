@@ -10,9 +10,8 @@ and scenes — as background jobs. It also owns the decision of what the narrato
 Slice 1 handlers (here): the CHARACTER NETWORK, organized by location —
   • `person`    a named person appeared in the narration → upsert a thin record AT a location
                 (mention makes them real; they persist, pinned to a place — static for now).
-  • `encounter` a person is physically ON STAGE and not yet fleshed → flesh them into a full card
-                via the transposition engine (similarity-seeded), one at a time (gradual).
-  • `fleshed`   (emitted by encounter) → the seam where a sprite-render job will hang later.
+  • `encounter` a person is physically ON STAGE and not yet known → record a cheap sketch.
+  • `fleshed`   (emitted by periodic consolidation) → the seam where a sprite-render job will hang later.
 
 Registering a new capability is just `@StoryMaster.on("event")` — images and plot beats become
 handlers on this same bus, not more inline code.
@@ -158,26 +157,18 @@ def _h_person(sm: StoryMaster, d: dict) -> None:
 
 @StoryMaster.on("encounter")
 def _h_encounter(sm: StoryMaster, d: dict) -> None:
-    """On stage and not fleshed → flesh into a full card (similarity-seeded transposition), one
-    per turn. Emits `fleshed` (the future sprite-render seam)."""
-    if sm._fleshed_now:                                 # gradual: one new face fully realized per turn
-        return
+    """On stage → persist a sketch only. Character depth is intentionally paid for in the
+    batched consolidation pass, rather than adding a generation call to this turn."""
     nm = d["name"]
     rec = sm.world["people"].get(nm) or {}
-    if rec.get("born"):
+    if rec.get("sketched") or rec.get("born"):
         return
-    if sm.provider is None:
-        sm.world["people"].setdefault(nm, rec).update({"at": sm.location, "born": False})
-        return
-    from .worldgen import birth_character
-    story_ctx = f"{sm.st.premise or sm.st.name}. Just now in the story: {(sm._narration or '')[:600]}"
-    card = birth_character(sm.provider, name=nm, role=(rec.get("note") or "someone met in this scene"),
-                           story=story_ctx, prominence="supporting", root=sm.ctx.root)
-    if card.get("card"):
-        rec.update({"at": sm.location, "note": rec.get("note", ""), "born": True, "card": card["card"]})
-        sm.world["people"][nm] = rec
-        sm._fleshed_now.append(nm)
-        sm.emit("fleshed", name=nm)
+    # The scribe's concrete note is the appearance/role sketch.  Keep an archetype slot so
+    # consolidation can turn this into a durable card after the person has actually played.
+    rec.update({"at": sm.location, "note": rec.get("note", ""), "archetype": rec.get("archetype", "unknown"),
+                "sketched": True, "born": False})
+    sm.world["people"][nm] = rec
+    sm.world.setdefault("log", []).append(f"(a new person entered the story: {nm})")
 
 
 @StoryMaster.on("fleshed")

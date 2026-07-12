@@ -266,6 +266,34 @@ CREATE TABLE IF NOT EXISTS features (
     ord       INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (story_key, id)
 );
+
+-- Per-playthrough living cards. These never rewrite the authored story tables above:
+-- one row is the latest mutable state, and card_history is the evidence ledger behind it.
+CREATE TABLE IF NOT EXISTS play_cards (
+    story_key  TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    kind       TEXT NOT NULL,              -- character | arc | story
+    card_key   TEXT NOT NULL,
+    foundation TEXT NOT NULL DEFAULT '{}', -- immutable baseline copied on first sight
+    current    TEXT NOT NULL DEFAULT '{}', -- model-mutated present state
+    updated    REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (story_key, session_id, kind, card_key)
+);
+CREATE INDEX IF NOT EXISTS idx_play_cards_session ON play_cards(story_key, session_id, kind);
+
+CREATE TABLE IF NOT EXISTS card_history (
+    story_key  TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    card_key   TEXT NOT NULL,
+    seq        INTEGER NOT NULL,
+    turn       INTEGER NOT NULL DEFAULT 0,
+    event      TEXT NOT NULL DEFAULT '',
+    evidence   TEXT NOT NULL DEFAULT '[]',
+    created    REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (story_key, session_id, kind, card_key, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_card_history_session ON card_history(story_key, session_id, kind, card_key, seq);
 """
 
 
@@ -280,6 +308,69 @@ def list_stories(root: Path) -> list[str]:
 def story_exists(root: Path, key: str) -> bool:
     con = _conn(root)
     return bool(con.execute("SELECT 1 FROM stories WHERE key=?", (key,)).fetchone())
+
+
+# ── Living playthrough cards ──────────────────────────────────────────────────
+def get_play_cards(root: Path, story_key: str, session_id: str) -> dict[str, dict[str, dict]]:
+    """Return the current runtime-card projection, grouped as kind → card_key → card.
+
+    `foundation` is immutable after first insert. `current` is deliberately mutable, while the
+    append-only evidence ledger is fetched by ``get_card_history`` only when a caller needs depth.
+    This keeps normal per-turn prompt assembly cheap.
+    """
+    con = _conn(root)
+    out: dict[str, dict[str, dict]] = {"character": {}, "arc": {}, "story": {}}
+    for kind, card_key, foundation, current, updated in con.execute(
+            "SELECT kind, card_key, foundation, current, updated FROM play_cards "
+            "WHERE story_key=? AND session_id=?", (story_key, session_id)).fetchall():
+        out.setdefault(kind, {})[card_key] = {"foundation": _jloads(foundation, dict),
+                                                "current": _jloads(current, dict), "updated": updated}
+    return out
+
+
+def get_card_history(root: Path, story_key: str, session_id: str, kind: str, card_key: str,
+                     limit: int = 50) -> list[dict]:
+    con = _conn(root)
+    rows = con.execute(
+        "SELECT seq, turn, event, evidence, created FROM card_history "
+        "WHERE story_key=? AND session_id=? AND kind=? AND card_key=? "
+        "ORDER BY seq DESC LIMIT ?", (story_key, session_id, kind, card_key, max(1, limit))).fetchall()
+    return [{"seq": r[0], "turn": r[1], "event": r[2], "evidence": _jloads(r[3], list),
+             "created": r[4]} for r in reversed(rows)]
+
+
+def apply_play_card_update(root: Path, story_key: str, session_id: str, *, kind: str, card_key: str,
+                           foundation: dict | None, current: dict, event: str = "",
+                           evidence: list[str] | None = None, turn: int = 0) -> None:
+    """Atomically mutate a runtime card's present state and append its evidence event.
+
+    The first non-empty foundation wins (`COALESCE` is not enough because it is JSON), so later
+    consolidations cannot silently rewrite what the character/arc/story was at the start of play.
+    """
+    con = _conn(root)
+    now = time.time()
+    try:
+        con.execute("BEGIN")
+        old = con.execute("SELECT foundation FROM play_cards WHERE story_key=? AND session_id=? AND kind=? AND card_key=?",
+                          (story_key, session_id, kind, card_key)).fetchone()
+        base = _jdumps(foundation or {}) if old is None else old[0]
+        con.execute(
+            "INSERT INTO play_cards (story_key,session_id,kind,card_key,foundation,current,updated) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(story_key,session_id,kind,card_key) DO UPDATE SET "
+            "current=excluded.current, updated=excluded.updated",
+            (story_key, session_id, kind, card_key, base, _jdumps(current or {}), now))
+        if event.strip():
+            seq = con.execute("SELECT COALESCE(MAX(seq), 0) + 1 FROM card_history "
+                              "WHERE story_key=? AND session_id=? AND kind=? AND card_key=?",
+                              (story_key, session_id, kind, card_key)).fetchone()[0]
+            con.execute("INSERT INTO card_history (story_key,session_id,kind,card_key,seq,turn,event,evidence,created) "
+                        "VALUES (?,?,?,?,?,?,?,?,?)",
+                        (story_key, session_id, kind, card_key, seq, int(turn or 0), event.strip(),
+                         _jdumps(evidence or []), now))
+        con.execute("COMMIT")
+    except Exception:
+        con.execute("ROLLBACK")
+        raise
 
 
 # ── LOAD: reconstruct the {story, characters} aggregate from rows ────────────
@@ -547,7 +638,7 @@ def delete_story(root: Path, key: str) -> None:
         # child tables partition by story_key; the stories table keys on `key`
         for tbl in ("characters", "cast_members", "locations", "relationships",
                     "conditions", "arcs", "chapters", "scene_harnesses", "connections",
-                    "features"):
+                    "features", "play_cards", "card_history"):
             con.execute(f"DELETE FROM {tbl} WHERE story_key=?", (key,))
         con.execute("DELETE FROM stories WHERE key=?", (key,))
         con.execute("COMMIT")
@@ -760,6 +851,18 @@ def _self_test_body(root: Path) -> None:
     assert get_character(root, key, "eli") == chars["eli"]
     assert story_owner(root, "eli") == key
     assert story_owner(root, "nobody") is None
+
+    # Living cards keep an immutable baseline, mutate their present projection, and append
+    # evidence without touching the authored character/story rows.
+    apply_play_card_update(root, key, "play-test", kind="character", card_key="eli",
+                           foundation={"wound": "old loss"}, current={"mood": "guarded"},
+                           event="Eli refused Mara's help.", evidence=["scene 1"], turn=3)
+    apply_play_card_update(root, key, "play-test", kind="character", card_key="eli",
+                           foundation={"wound": "must not replace"}, current={"mood": "less guarded"},
+                           event="Eli accepted the lantern.", evidence=["scene 2"], turn=8)
+    live = get_play_cards(root, key, "play-test")["character"]["eli"]
+    assert live["foundation"] == {"wound": "old loss"} and live["current"]["mood"] == "less guarded"
+    assert [h["turn"] for h in get_card_history(root, key, "play-test", "character", "eli")] == [3, 8]
 
     # node_hash stability: the reconstructed world dict must hash the same as the original.
     # (anchors.py hashes the live dict; if reconstruction drifts, every anchor breaks.)

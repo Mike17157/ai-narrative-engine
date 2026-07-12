@@ -363,6 +363,11 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         pov_out = (data.get("pov") or "").strip()
         pov_key = name_to_key.get(pov_out.lower(), pov_out) or prior_pov
         world_state["scene"] = {"space": loc, "members": [k for k in present_keys if k], "pov": pov_key}
+        # Periodic consolidation: self-gates to fire ~every 50 turns, deepening character cards + the
+        # running story summary from the recent transcript. Additive; never raises.
+        if key:
+            from . import stage_tools as _ST2
+            _ST2.consolidate_cast(appctx, key, world_state, sid=d.sid)
         save_session(appctx.root, d.sid, {**d.sess, "state": _SE.with_world(d.sess.get("state"), world_state)})
     except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
         pass

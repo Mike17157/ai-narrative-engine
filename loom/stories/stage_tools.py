@@ -1050,6 +1050,159 @@ def generate_dream(ctx, skey: str, world_state: dict, present: list | None = Non
         return ""
 
 
+_CAST_CONSOLIDATE_EVERY = 50   # deepen cards + the running story summary every ~50 turns of play
+
+_SUMMARY_SYS = (
+    "Update the running STORY-SO-FAR: a tight, plain recap of what has actually happened, in order — "
+    "carry the prior summary forward and fold in the recent turns. A few sentences, no drama. Output "
+    "only the recap prose, nothing else."
+)
+_CARDS_SYS = (
+    "For each character below, update its LIVING CARD from what the recent play revealed. Its foundation "
+    "is not editable. CURRENT STATE is mutable: say what is true NOW about their situation, outward "
+    "behavior, changing relationships, and active pressure. HISTORY is one compact, irreversible event "
+    "that explains why the state changed. Do not manufacture growth or resolve an unresolved tension. "
+    "Output ONE "
+    "record per character, records separated by a line of only '---':\n"
+    "NAME: <name>\nCURRENT: <short present-tense card>\nHISTORY: <one evidence-based change, or blank>"
+)
+_ARC_SEGMENT_SYS = (
+    "Read the completed stretch of an interactive story. Decide whether its driving question has "
+    "resolved or clearly shifted enough to close an arc. Be conservative: do not segment merely "
+    "because time passed. Output exactly two lines:\nCLOSE: yes or no\nTITLE: a plain 2-6 word arc title"
+)
+
+
+def consolidate_cast(ctx, skey: str, world_state: dict, sid: str = "") -> dict:
+    """Every ~`_CAST_CONSOLIDATE_EVERY` turns of play: read the recent transcript and (1) update the
+    running STORY-SO-FAR summary, (2) update each active character's card with what play revealed. This is
+    the periodic deepening that lets the runtime keep encounters CHEAP (a sketch) and grow depth in
+    batches. Self-gating (no-op until enough new turns), mutates `world_state` in place, and NEVER raises
+    (a failed consolidation must not sink the turn). Returns a small {summary, cards} report."""
+    out: dict = {"summary": "", "cards": []}
+    try:
+        steps = (world_state or {}).get("transcript")
+        if not isinstance(steps, list) or not steps:
+            return out
+        start = int(world_state.get("cast_consolidated_through") or 0)
+        if len(steps) - start < _CAST_CONSOLIDATE_EVERY:
+            return out                                      # not enough new material yet
+        prov, _p = _as_agent(ctx, "storymaster")
+        if prov is None:
+            return out
+        recent = "\n\n".join(str(s) for s in steps[start:] if str(s).strip())[:9000]
+
+        # 1. the running story summary
+        prior = (world_state.get("story_so_far") or "").strip()
+        try:
+            summary = (prov.generate_text(
+                system=_SUMMARY_SYS,
+                prompt=f"PRIOR SUMMARY:\n{prior or '(none yet)'}\n\nRECENT TURNS:\n{recent}\n\nUpdate it.").text or "").strip()
+            if summary:
+                world_state["story_so_far"] = summary
+                out["summary"] = summary
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 2. update the cards of the characters who actually appeared in the recent window
+        from .labeled import parse_records
+        st = ctx.base_settings.stories.get(skey) if skey else None
+        cards = world_state.setdefault("cards", {})
+        roster: dict[str, str] = {}
+        for m in (getattr(st, "cast", []) or []):
+            k = getattr(m, "character", None)
+            c = ctx.base_settings.characters.get(k) if k else None
+            nm = getattr(c, "name", k) if k else None
+            if nm:
+                roster[nm] = cards.get(nm) or ((getattr(c, "system", "") or "")[:220])
+        for nm, rec in (world_state.get("people") or {}).items():
+            if isinstance(rec, dict):
+                roster[nm] = cards.get(nm) or rec.get("card") or rec.get("note") or ""
+        rlow = recent.lower()
+        roster = {nm: d for nm, d in roster.items() if nm and nm.lower() in rlow}
+        roster = dict(list(roster.items())[:8])
+        if roster:
+            block = "\n\n".join(f"NAME: {nm}\nCURRENT CARD: {d or '(thin sketch)'}" for nm, d in roster.items())
+            try:
+                txt = prov.generate_text(system=_CARDS_SYS,
+                                         prompt=f"CHARACTERS:\n{block}\n\nRECENT TURNS:\n{recent}\n\nUpdate each card.").text or ""
+                for r in parse_records(txt, ["NAME", "CURRENT", "HISTORY", "CARD"]):
+                    nm = (r.get("NAME") or "").strip()
+                    # CARD is accepted for old providers/self-checks during the prompt migration.
+                    card = (r.get("CURRENT") or r.get("CARD") or "").strip()
+                    history = (r.get("HISTORY") or "").strip()
+                    if nm and card:
+                        cards[nm] = card
+                        out["cards"].append(nm)
+                        p = (world_state.get("people") or {}).get(nm)
+                        if isinstance(p, dict):
+                            p.update({"card": card, "born": True, "sketched": True})
+                            world_state.setdefault("log", []).append(f"(a new person was deepened: {nm})")
+                        if sid:
+                            try:
+                                from ..server.services import story_store as _SS
+                                seed = (world_state.get("people") or {}).get(nm) or {}
+                                _SS.apply_play_card_update(
+                                    ctx.root, skey, sid, kind="character", card_key=nm,
+                                    foundation={"appearance_or_role": seed.get("note", ""),
+                                                "archetype": seed.get("archetype", "unknown")},
+                                    current={"card": card}, event=history,
+                                    evidence=[s for s in recent.split("\n\n")[-3:] if s],
+                                    turn=len(steps))
+                            except Exception:  # noqa: BLE001 — DB history must never sink play
+                                pass
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Arc segmentation is deliberately batched with the other reflective work.  It records
+        # chapters without replacing the live StoryMaster arc, which remains authoritative in play.
+        try:
+            from .labeled import parse_labeled
+            marked = int(world_state.get("arc_segmented_through") or 0)
+            segment = "\n\n".join(str(s) for s in steps[marked:] if str(s).strip())[:9000]
+            if segment:
+                decision = parse_labeled(prov.generate_text(system=_ARC_SEGMENT_SYS,
+                    prompt=f"CURRENT ARC: {(world_state.get('arc') or {}).get('name', '')}\n\nRECENT PLAY:\n{segment}").text or "",
+                    ["CLOSE", "TITLE"])
+                if decision.get("CLOSE", "").strip().lower() in {"yes", "true"}:
+                    title = decision.get("TITLE", "").strip() or "Untitled arc"
+                    world_state.setdefault("arcs", []).append({"title": title, "from": marked, "to": len(steps) - 1,
+                                                                "summary": world_state.get("story_so_far", "")})
+                world_state["arc_segmented_through"] = len(steps)
+        except Exception:  # noqa: BLE001
+            pass
+
+        # Store the same evolving projection for the story and the active arc. The mutable
+        # fields are intentionally small: they are a current reading of THIS playthrough, while
+        # the foundation remains the authored premise/arc and the history carries the evidence.
+        if sid:
+            try:
+                from ..server.services import story_store as _SS
+                _SS.apply_play_card_update(
+                    ctx.root, skey, sid, kind="story", card_key=skey,
+                    foundation={"premise": getattr(st, "premise", ""),
+                                "central_question": (getattr(st, "premise_parts", {}) or {}).get("question", "")},
+                    current={"story_so_far": world_state.get("story_so_far", ""),
+                             "active_pressure": ((world_state.get("scene_plan") or {}).get("pressure") or "")},
+                    event=world_state.get("story_so_far", ""),
+                    evidence=[s for s in recent.split("\n\n")[-3:] if s], turn=len(steps))
+                arc = world_state.get("arc") if isinstance(world_state.get("arc"), dict) else {}
+                if arc:
+                    _SS.apply_play_card_update(
+                        ctx.root, skey, sid, kind="arc", card_key=str(arc.get("id") or arc.get("name") or "active"),
+                        foundation={"name": arc.get("name", ""), "question": arc.get("question", "")},
+                        current={"stage": arc.get("stage", 0), "milestone": arc.get("milestone", ""),
+                                 "status": "active"}, event=world_state.get("story_so_far", ""),
+                        evidence=[s for s in recent.split("\n\n")[-3:] if s], turn=len(steps))
+            except Exception:  # noqa: BLE001
+                pass
+
+        world_state["cast_consolidated_through"] = len(steps)
+    except Exception:  # noqa: BLE001 — never sink the turn
+        return out
+    return out
+
+
 def consolidate_on_rest(ctx, skey: str, world_state: dict, status: str) -> dict:
     """The player slept or died → consolidate. This is a CONTEXT-COMPRESSION step: every present
     character compresses the NEW scenes THEY saw (since the last consolidation) into their memory,

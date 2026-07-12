@@ -12,6 +12,8 @@
   let editing = $state(null);      // { kind:'prologue'|'page', i, j? }
   let draft = $state('');
   let saving = $state(false);
+  let baking = $state(false);
+  let illustrating = $state(false);
 
   const hasPro = $derived((doc?.prologue || []).length > 0);
   const entries = $derived([
@@ -48,6 +50,25 @@
       editing = null;
     }
   }
+
+  async function bake() {
+    baking = true;
+    const r = await post(`/stories/${storyKey}/manuscript/bake`, { sid });
+    baking = false;
+    if (r?.chapters?.length) {
+      doc = { prologue: [], scenes: r.chapters.map((c) => ({ loc: c.title, pages: [{ text: c.text, beat: 'Baked chapter' }] })) };
+      sel = 0;
+    }
+  }
+
+  async function illustrate() {
+    illustrating = true;
+    const r = await post(`/stories/${storyKey}/manuscript/illustrate`, { sid });
+    illustrating = false;
+    if (r?.chapters?.length) {
+      doc = { prologue: [], scenes: r.chapters.map((c) => ({ loc: c.title, pages: [{ text: c.text, beat: 'Baked chapter', image: c.image }] })) };
+    }
+  }
 </script>
 
 <div class="msveil" role="dialog" aria-label="Manuscript">
@@ -55,6 +76,8 @@
     <div class="mshead">
       <b>📖 Manuscript</b>
       <span class="hint">click a paragraph block to edit it</span>
+      <button class="soft" onclick={bake} disabled={baking}>{baking ? 'Baking…' : 'Bake prose'}</button>
+      <button class="soft" onclick={illustrate} disabled={illustrating}>{illustrating ? 'Illustrating…' : 'Illustrate'}</button>
       <button class="x" onclick={onclose}>✕</button>
     </div>
     <div class="msbody">
@@ -88,6 +111,7 @@
         {:else if cur}
           <h3>{cur.label}</h3>
           {#each doc.scenes[cur.i].pages as p, j}
+            {#if p.image}<img class="chapterart" src={p.image} alt={`Illustration for ${cur.label}`} />{/if}
             {#if p.beat}<div class="msbeat inpage">— {p.beat}</div>{/if}
             {#if editing?.kind === 'page' && editing.i === cur.i && editing.j === j}
               <textarea bind:value={draft} rows={Math.min(24, draft.split('\n').length + 3)}></textarea>
@@ -132,4 +156,5 @@
     color: inherit; border: 1px solid var(--accent, #7aa2f7); border-radius: 6px; padding: 8px; }
   .msact { display: flex; gap: 8px; margin: 6px 0 14px; }
   .pad { padding: 10px; }
+  .chapterart { display: block; width: min(100%, 720px); max-height: 440px; object-fit: cover; margin: 0 0 18px; border-radius: 8px; }
 </style>

@@ -1,0 +1,404 @@
+{
+  "story": {
+    "name": "Embergloom",
+    "premise": "The kingdoms magic is dying, stolen by a hidden ritual that binds a mages life to the land. Elis father was the last sacrifice. Armed with a journal that maps his fathers unraveling and a vial of luminous elixirs, Eli hunts for proof the Crown is lying. When he discovers his father is still alive, chained beneath the throne, his heartbeat feeding the crops, Eli faces an impossible choice: sever the bond and watch the kingdom starve, or let his father rot to feed strangers and become the next living sacrifice himself.",
+    "tone": "wry and melancholic",
+    "themes": [
+      "Legacy",
+      "sacrifice",
+      "loneliness",
+      "trust",
+      "shared burden"
+    ],
+    "storyboard": {
+      "heart": "Eli discovers that true strength lies not in bearing the weight of the world alone, but in learning to trust and share the burden with others.",
+      "logline": "When Eli uncovers a forgotten elixir tied to his father's mysterious disappearance, he must decide whether to sacrifice himself to save the dying magic of his kingdom or find a way to break the cycle of loneliness and loss.",
+      "beats": [
+        {
+          "title": "Glow in the Journal",
+          "summary": "Eli discovers a mysterious elixir hidden in his father’s journal, its glow eerily familiar.",
+          "location": "The Overgrown Garden",
+          "characters": [
+            "Eli",
+            "His Mother"
+          ],
+          "emotional_core": "A flicker of hope ignites as Eli believes he’s closer to uncovering the truth about his father.",
+          "hook": "The elixir whispers a cryptic message — \"The light is not yours to carry alone.\"",
+          "scene_prompt": "A neglected garden overgrown with wildflowers, the air thick with the scent of damp earth and decay, sunlight filtering weakly through tangled vines.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Crown’s Envoy",
+          "summary": "A Crown envoy arrives, demanding Eli’s services as a \"resource\" for the kingdom.",
+          "location": "The Village Square",
+          "characters": [
+            "Eli",
+            "The Envoy",
+            "Villagers"
+          ],
+          "emotional_core": "Eli’s fear of being trapped like his father resurfaces, fueling his defiance.",
+          "hook": "The envoy leaves a cryptic warning: \"Your father’s fate is not the only one that awaits.\"",
+          "scene_prompt": "A cobblestone square bustling with uneasy chatter, the sky painted in ominous shades of dusk, shadows stretching long across the ground.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Vision in the Fire",
+          "summary": "Eli sees his father’s figure in the flames, pleading for him to \"find the others.\"",
+          "location": "A Clearing in the Woods",
+          "characters": [
+            "Eli"
+          ],
+          "emotional_core": "The vision shakes Eli’s resolve, forcing him to question his solitary path.",
+          "hook": "The fire reveals a map etched into the ashes, pointing to a hidden place.",
+          "scene_prompt": "A circle of charred logs glowing faintly, the forest silent except for the crackle of flames, smoke curling into the starless sky.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The First Cost",
+          "summary": "Eli uses his full power for the first time to save a villager, feeling the toll it takes on him.",
+          "location": "A Fisherman’s Shack",
+          "characters": [
+            "Eli",
+            "A Fisherman"
+          ],
+          "emotional_core": "Eli confronts the reality of sacrifice and realizes he can’t do this alone.",
+          "hook": "The villager’s gratitude sparks a question: \"Why do you bear this alone?\"",
+          "scene_prompt": "A rickety shack by the sea, waves crashing against the rocks, the air salty and sharp, lantern light flickering against the damp walls.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Mother’s Secret",
+          "summary": "Eli’s mother reveals she knew his father’s fate but hid it to protect him.",
+          "location": "The Family Kitchen",
+          "characters": [
+            "Eli",
+            "His Mother"
+          ],
+          "emotional_core": "Betrayal and heartbreak clash with Eli’s growing resolve.",
+          "hook": "His mother hands him a sealed letter from his father, marked \"When you’re ready to know.\"",
+          "scene_prompt": "A dimly lit kitchen filled with the scent of herbs and stale bread, the hearth cold and lifeless, shadows dancing on the walls.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Gathering",
+          "summary": "Eli seeks out the other mages, finding them scattered and wary.",
+          "location": "An Abandoned Chapel",
+          "characters": [
+            "Eli",
+            "Two Other Mages"
+          ],
+          "emotional_core": "Eli begins to understand the shared pain of those who carry magic.",
+          "hook": "The mages agree to meet again, but only if Eli proves himself worthy.",
+          "scene_prompt": "A crumbling chapel with stained glass windows shattered, moonlight streaming in uneven beams, dust motes swirling in the air.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Decision",
+          "summary": "Eli learns his father’s life is bound to the land, keeping the kingdom alive.",
+          "location": "The Royal Archives",
+          "characters": [
+            "Eli",
+            "The Archivist"
+          ],
+          "emotional_core": "Eli faces the impossible choice: free his father or take his place, but neither feels right.",
+          "hook": "The elixir pulses brighter, urging Eli to \"find another way.\"",
+          "scene_prompt": "A vast, dimly lit archive filled with towering shelves, the smell of old parchment and ink heavy in the air, faint candlelight casting long shadows.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Shared Burden",
+          "summary": "Eli proposes tying the burden across all mages and the people themselves.",
+          "location": "The Royal Throne Room",
+          "characters": [
+            "Eli",
+            "The Envoy",
+            "The Queen"
+          ],
+          "emotional_core": "Eli finds peace in trusting others to share the weight.",
+          "hook": "The Crown’s envoy returns, determined to stop Eli’s plan.",
+          "scene_prompt": "A grand throne room bathed in cold, pale light, banners hanging limp, the air thick with tension, the throne itself looming like a silent judge.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "Eli Faces the Crown",
+          "summary": "Eli confronts the Crown, offering a new path but risking his life.",
+          "location": "The High Tower",
+          "characters": [
+            "Eli",
+            "The Queen",
+            "The Envoy"
+          ],
+          "emotional_core": "Eli’s fear of abandonment fades as he embraces the support of others.",
+          "hook": "The Crown agrees — but at a cost Eli hasn’t yet realized.",
+          "scene_prompt": "A windswept tower overlooking the kingdom, clouds churning above, the horizon faintly lit by the first hints of dawn, the air crisp and biting.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        },
+        {
+          "title": "The Light Dims, Shared",
+          "summary": "Eli binds the burden across the mages and the people, allowing his father to finally rest.",
+          "location": "The Sacred Grove",
+          "characters": [
+            "Eli",
+            "The Other Mages",
+            "Villagers"
+          ],
+          "emotional_core": "Eli accepts that letting go doesn’t mean losing everything.",
+          "hook": "The kingdom’s light dims but spreads farther than ever before, a fragile hope alive.",
+          "scene_prompt": "A serene grove bathed in soft, golden light, leaves rustling gently, the air alive with the hum of shared magic, the ground warm underfoot.",
+          "start": "",
+          "what_happened": "",
+          "end": ""
+        }
+      ]
+    },
+    "lorebook": {},
+    "start": null,
+    "background": null,
+    "fields": {
+      "travel": [
+        [
+          "the_village",
+          "n68eb8e",
+          3
+        ]
+      ],
+      "prologue": {
+        "sections": [
+          {
+            "title": "morning",
+            "text": "Eli woke to the sound of rain needling the roof of the cottage, a steady drum on the cedar shakes that meant the morning chores would take twice as long. He lay still for a moment under the quilt his mother had patched with scraps of old linen, listening to the gutters gurgle and spill. The room smelled of dried yarrow and the faint, clean sharpness of the elixir vial he’d left uncorked on the nightstand—just for a breath, just to see the soft green pulse of it in the dark before he’d fallen asleep. He reached for it now, his fingers finding the familiar cool glass, and tucked it into the inner pocket of his vest before swinging his legs over the side of the bed.\n\nIn the kitchen, he lit the stove and set the kettle on the iron grate. The fire caught slowly, the kindling still damp from the wet that had seeped in through the poorly sealed window frame. Eli crouched and blew gently until the flames steadied, then straightened and rubbed the ache from his knees. His mother’s porridge bowl sat rinsed and upturned on the drying rack; she’d already gone to the library, leaving the day’s list pinned under a smooth stone on the table. *Woundwort. Elder bark. Check the snares on the east ridge.* He read it twice, though he’d known what it would say before he looked.\n\nHe ate standing up, spooning the oats without tasting them, his eyes on the window where the rain blurred the garden into smears of green and brown. The garden needed weeding. The goat needed milking. The morning stretched ahead of him in a familiar chain of small, necessary things, and for a little while he let it be enough. He scraped the bowl clean, pulled on his oiled cloak, and stepped out into the wet. The path to the shed was mud already, sucking at his boots, and the goat bleated at him from the lean-to with the particular irritation of an animal who did not care for rain."
+          },
+          {
+            "title": "the people",
+            "text": "The forest floor was softer than the garden path, matted with old needles and the wet pulp of last autumn’s leaves. Eli moved slowly along the deer trail, the basket slung over his shoulder already half-full with woundwort and the pale, papery curls of elder bark. He’d checked the snares first: one empty, one sprung by something that had chewed itself free, leaving only a tuft of grey fur matted with blood. He reset the trap and wiped his fingers on his trousers before handling the plants. The oiled cloth he wrapped them in was worn thin at the folds, and he made a mental note to ask his mother for wax next time she traded at the chandlery.\n\nBy the time he reached the library, the rain had eased to a drizzle that clung to his hair in fine droplets. The building hunched at the edge of the village, a squat stone structure with a door that stuck in the damp. Eli leaned his shoulder against it and pushed until it gave. Inside, the air was dry and still, thick with the smell of old paper and the faint, green sharpness of the drying herbs his mother hung from the rafters. Mara was at her desk by the window, a heavy tome open before her and a half-mended binding laid across a scrap of linen. She didn’t look up when he entered, but her hand stilled on the needle.\n\n“You’re wet,” she said.\n\n“It’s raining.”\n\n“The cloak is for rain, Eli.”\n\nHe hung it on the hook by the door, where it dripped onto the flagstones in a slow, steady rhythm. “The snares were empty. Well, almost. I brought what I could.”\n\nHe set the basket on the corner of her desk, careful not to disturb the pages. Mara glanced at the contents, then at him. Her eyes were the same pale grey as the sky outside, and they took him in the way they always did, reading more than he meant to offer. She wore her hair pinned back simply, the same way she had for as long as he could remember, and there was a smudge of ink on her jaw.\n\n“You ate,” she said. It wasn’t a question, but he nodded anyway. She seemed satisfied. She reached into the basket and lifted a sprig of woundwort, turning it in her thin fingers. “Good. Mrs. Alton’s boy burned his arm on the hearth. I’ll send this up with one of the salves.” She set it aside and picked up her needle again. “There’s bread and cheese in the back if you want it.”\n\n“Later.” Eli pulled the stool from under the counter and sat, his back against the cool stone wall. For a moment there was only the soft scratch of her needle through the binding, the rustle of a page she turned with the heel of her hand. It was an old rhythm between them, a quiet he’d known since he was small enough to sit under her desk and sort the scraps of parchment.\n\n“The goat’s stall needs mucking out,” Mara said without looking up. “I noticed this morning.”\n\n“I’ll do it before supper.”\n\nShe nodded, and the conversation settled into the space between them, complete and comfortable. Outside, the rain began again, a gentle hush against the window glass."
+          },
+          {
+            "title": "the weight",
+            "text": "Eli reached into his pocket and his fingers found the small glass vial, smooth and warm from his own heat. Inside it, the elixir gave off a faint amber glow, barely visible in the daylight that leaked through the rain-streaked window. He rolled it between his thumb and forefinger, a habit he couldn’t seem to break. The cork was still tight. The liquid still held its light.\n\n“I’ll need to go out again this evening,” he said.\n\nMara’s needle paused. Only for a breath, then it resumed its steady path through the spine of the book in her lap. “You went out last night.”\n\n“I know.”\n\n“And the night before that.”\n\nHe didn’t answer. She didn’t look at him, but he felt the weight of her attention all the same, the way she saw the shadows under his eyes and the mud still caked on the heels of his boots. She would have noticed those boots by the door this morning, still damp, the laces stiff with dried muck from the grove.\n\n“Mrs. Alton’s salve is due by noon tomorrow,” she said. “And I’ve six more bindings to finish for the magistrate before the end of the week. If you’re gone, that falls to me.”\n\n“I won’t be long.” He pulled the vial from his pocket and set it on his knee, watching the light pool inside the glass. “There’s a patch of feverfew I’ve been meaning to check, out past the mill. If it’s ready to harvest, we’ll have enough to see the whole village through winter.”\n\nMara tied off a thread and snipped it clean with the small scissors she kept on a chain around her neck. “Feverfew,” she said. “At night.”\n\n“It’s easier to spot the healthy plants by the glow of the moss. You know that.”\n\nShe did know that. She’d taught him that. But she also knew the path to the mill didn’t take two hours in the dark, and it didn’t leave a boy’s hands smelling of old ash and crushed glass. She set the book aside and looked at him full now, her grey eyes steady, and for a long moment neither of them spoke. The rain tapped against the glass like a finger asking to be let in."
+          }
+        ]
+      }
+    },
+    "intended_ending": "Eli learns his father did not die or abandon them — years ago his father bound his own life into the land to slow the kingdom's magic from dying out; the failing 'dying light' IS his father's fading life, spent to keep everyone else alive. Eli's mother has known all along and hid it, terrified the Crown would do the same to her son. The story drives toward Eli's choice: free his father (and let the kingdom die faster) or take his father's place alone. He reaches a THIRD answer earned by his arc (learning he doesn't have to carry it alone): he ties the burden across the last handful of mages and the people themselves, breaking the cycle of one vanished man sacrificing everything — bittersweet, his father finally allowed to die, the light dimmer but shared.",
+    "default_personas": [],
+    "recent_window": 8,
+    "art_style": "Polished 2D anime illustration, clean cel-shaded lineart, defined two-tone shadows with bright highlights, rich saturated-yet-natural colors—high-quality VN sprite, plain light-grey seamless studio background, consistent character-sheet style.",
+    "premise_parts": {},
+    "conditions": [],
+    "world": {
+      "genre": "melancholic low fantasy",
+      "tone": "tender, haunted",
+      "place": "the parish of Thornwick, at the edge of a dying sacred wood; pre-industrial",
+      "pressure": "the wood's animating spirit is thinning into a ghost, no longer able to sustain the crop that depends on its breath — and the land was made to need a beating heart",
+      "forces": [
+        {
+          "name": "Rootbound",
+          "stance": "the binding is a holy exchange — one willing life poured into the soil to feed thousands; to speak of it is to invite famine"
+        },
+        {
+          "name": "Skysworn",
+          "stance": "the ritual is a slow wound and stolen life; the bond must break so the land's own pulse can return, even through a season of ash"
+        }
+      ],
+      "traditions": [
+        {
+          "name": "Red-Ledger",
+          "logic": "blood is the only currency the land still recognises; a vow is sealed with a cut palm"
+        }
+      ],
+      "people": [
+        {
+          "name": "Maris Holk",
+          "life": "once mapped the ley-currents; now keeps the Weather Ledger, writing 'copper' instead of 'rain'"
+        }
+      ],
+      "fragments": [
+        {
+          "kind": "object",
+          "text": "In the chapel undercroft a chain of braided root-fibre runs from a stone chair into a crack no lantern reaches; a harvest-tally on the wall stops at 317."
+        }
+      ],
+      "map": {
+        "n68eb8e": {
+          "x": 91,
+          "y": 41
+        },
+        "the_village": {
+          "x": 310,
+          "y": 40
+        },
+        "eli_s_home": {
+          "x": 100,
+          "y": 160
+        },
+        "mara_s_study": {
+          "x": 310,
+          "y": 160
+        },
+        "lila_s_herb_shop": {
+          "x": 520,
+          "y": 160
+        }
+      }
+    },
+    "cast": [
+      {
+        "character": "eli",
+        "primary": true
+      },
+      {
+        "character": "mara"
+      },
+      {
+        "character": "lila"
+      }
+    ],
+    "relationships": [],
+    "locations": [
+      {
+        "id": "n68eb8e",
+        "name": "The Whispering Grove",
+        "description": "A dense forest where the trees seem to hum with faint, melancholic tunes. The air is thick with the scent of damp earth and decaying leaves. The gnarled roots twist like ancient fingers, and patches of bioluminescent moss cast an eerie glow. Broken glass vials litter the ground, remnants of mages who came before, their labels long since faded. A solitary bench carved from blackened wood sits at the center, worn smooth by years of use, as if waiting for someone to return.",
+        "background_prompt": "",
+        "background": null,
+        "parent": ""
+      },
+      {
+        "id": "the_village",
+        "name": "The Village",
+        "description": "The central inhabited area where the small community dwells, with houses and basic shops.",
+        "background_prompt": "",
+        "background": null,
+        "parent": ""
+      },
+      {
+        "id": "eli_s_home",
+        "name": "Eli's Home",
+        "description": "A modest cottage with a small herb garden outside and a cluttered workbench inside.",
+        "background_prompt": "",
+        "background": null,
+        "parent": "the_village",
+        "scenes": [
+          {
+            "id": "eli_s_home_eli",
+            "name": "Eli's Home",
+            "character": "eli",
+            "backstory": "brewing elixirs and studying his father's journal"
+          }
+        ]
+      },
+      {
+        "id": "mara_s_study",
+        "name": "Mara's Study",
+        "description": "A small, cluttered room filled with ancient tomes and scrolls, serving as the village's library.",
+        "background_prompt": "",
+        "background": null,
+        "parent": "the_village",
+        "scenes": [
+          {
+            "id": "mara_s_study_mara",
+            "name": "Mara's Study",
+            "character": "mara",
+            "backstory": "organizing books and researching magical history"
+          }
+        ]
+      },
+      {
+        "id": "lila_s_herb_shop",
+        "name": "Lila's Herb Shop",
+        "description": "A tidy shop with shelves lined with dried herbs, roots, and handmade remedies.",
+        "background_prompt": "",
+        "background": null,
+        "parent": "the_village",
+        "scenes": [
+          {
+            "id": "lila_s_herb_shop_lila",
+            "name": "Lila's Herb Shop",
+            "character": "lila",
+            "backstory": "preparing herbal remedies and advising customers"
+          }
+        ]
+      }
+    ],
+    "scenes": [],
+    "arcs": [],
+    "connections": [],
+    "wound": "His father disappeared without explanation, and his mother's silence around the loss made the house feel like a held breath—teaching Eli that those you love will leave, and that needing them only makes it worse.",
+    "lie": "He must carry every burden alone; reaching out is a weakness that will only push others away.",
+    "truth": "His father didn't abandon him—he has been carrying the kingdom's burden alone beneath the throne. That solitary suffering is the real chain, and the only way to break it is to trust Mara and Lila enough to share the weight.",
+    "logline": "When Eli uncovers proof that his missing father is still alive, chained beneath the throne and sustaining the kingdom with his heartbeat, he must choose whether to shatter the bond and starve the land, or let his father rot and become the next living sacrifice himself."
+  },
+  "characters": {
+    "eli": {
+      "name": "Eli",
+      "system": "Eli is a 17-year-old herbalist and mage. He keeps a small glass vial of rare, glowing elixirs close at hand, using them to heal and protect. His hands often fiddle with the vial, a habit born from a need to feel connected to his father's memory. Despite his sharp wit and charismatic exterior, he is quietly haunted by visions of his father, which he sees in the fire he builds each night. When afraid, he adopts a cocky demeanor, using humor to deflect. He often says, 'If you can't beat them, join them, but secretly keep the upper hand.' His contradiction is that while he claims to be independent and self-reliant, he secretly yearns for the warmth and protection of a family he no longer has.",
+      "fields": {
+        "role": "mage and herbalist",
+        "appearance": "Eli has messy, dark hair that falls into his intense green eyes. He wears a simple, tattered cloak and carries a small satchel filled with herbs and elixirs. His hands are always clean, a sign of his meticulous care for his craft.",
+        "conflict": "Eli struggles with the responsibility of his rare and powerful magic, which is both a source of pride and a burden. He is torn between using his abilities to help others and the fear of being discovered by those who might misuse or fear his powers.",
+        "growth": "Over the course of the story, Eli learns to accept and embrace his magic, realizing that true strength comes from vulnerability and connection, not isolation and control.",
+        "lie": "Eli believes that he must be self-reliant and independent to survive, but this belief isolates him and prevents him from forming meaningful connections.",
+        "wound": "Eli's father disappeared when he was very young, leaving him with a deep sense of abandonment and a fear of needing others. This wound is exacerbated by the visions of his father he sees in the fire, which remind him of what he has lost.",
+        "want": "Eli wants to protect his mother and the few people he trusts, using his magic to keep them safe. He also wants to uncover the truth about his father's disappearance and the fate of the other TRUE mages.",
+        "need": "Eli needs to learn to trust and rely on others, recognizing that his strength is not diminished by his need for connection and community.",
+        "arc_type": "corruption",
+        "base_prompt": "A seventeen-year-old boy, a mage and herbalist with a striking, guarded beauty—sharp features softened by youth, an intensity that hints at old grief beneath the cocky exterior. His hair is black, thick and perpetually messy, falling in unruly waves that frame his face and sweep across his forehead, a few dark strands tumbling into his eyes as if he's forever too preoccupied to push them back. His face is lean and angular, with high cheekbones and a defined jaw still carrying the last softness of adolescence. His eyes are a vivid, luminous green, almond-shaped and sharp—tsurime eyes that read fierce and clever, always watching, calculating, yet shadowed by a loneliness he won't name. His brows are dark and expressive, often quirked in sardonic humor. His skin is light, smooth with a healthy glow, his hands notably clean and slender, the meticulous hands of someone who treasures his craft. He is slim and of average height, his build lean and wiry, the frame of a young man who spends more time foraging and brewing than sparring. He stands with a subtle, guarded poise, one hand near his chest as if reaching instinctively for the vial he keeps close, the other relaxed, his weight shifted slightly to one side in casual defiance. His gaze meets the viewer directly, that wry half-smile playing at his lips—cocky, disarming, a shield against the fear beneath. He wears a simple grey t-shirt, full body, head to toe, against a plain grey background."
+      },
+      "image": {
+        "checkpoint": null,
+        "loras": [],
+        "stack": null
+      }
+    },
+    "mara": {
+      "name": "Mara",
+      "system": "Mara is a quiet, bookish woman who raised her son Eli alone after her husband vanished. She is the librarian of the small, cluttered study filled with ancient tomes and scrolls. Her hands are ink-stained from constant reading and writing. She often says, 'Knowledge is our only weapon.' When afraid, she retreats into her books, seeking comfort in the familiar pages.",
+      "fields": {
+        "role": "Eli's mother and librarian",
+        "appearance": "Mara has dark hair that she keeps in a loose bun, and her eyes are a deep brown, often hidden behind round spectacles. She wears simple, practical dresses that have seen better days, and her fingers are perpetually ink-stained.",
+        "conflict": "Mara struggles with the burden of knowing the cost of Eli's powers and the danger it brings, while also trying to shield him from the harsh realities of the world.",
+        "growth": "Mara learns to let go of her protective instincts and trust Eli to make his own decisions, even if it means facing the unknown.",
+        "lie": "Mara believes that by keeping Eli isolated and focused on his studies, she can protect him from danger.",
+        "wound": "Her husband's mysterious disappearance left her feeling abandoned and vulnerable, which fuels her overprotective nature.",
+        "want": "Mara wants to shield Eli from the dangers of the world and ensure his safety.",
+        "need": "Mara needs to learn to trust Eli and let him grow into his own person, even if it means facing risks.",
+        "arc_type": "disillusionment",
+        "base_prompt": "An adult woman in her early forties with a gentle, scholarly beauty marked by years of solitary devotion and quiet strength. Her dark brown hair is gathered in a loose, slightly disheveled bun at the nape of her neck, with wisps escaping to frame her face in soft tendrils that she absently tucks behind her ears—a practiced, unconscious gesture born of hours bent over old books. Her face is oval and refined, with warm deep brown eyes behind round wire-frame spectacles that magnify her thoughtful, watchful gaze, giving her an owlish wisdom. Her brows are delicate and often slightly drawn together in concentration or concern. Tareme eye shape lends her a natural warmth and approachability, though fatigue shadows the corners. Light skin with a soft matte complexion, pale from indoor hours among the stacks. Her build is slim and slight, almost fragile, the frame of someone who lives more in the mind than the body, with narrow shoulders and small breasts that suit her delicate proportions. She stands at average height with hands clasped loosely at her waist, shoulders drawn slightly inward in a protective, self-contained posture. Her ink-stained fingers are long and elegant. She meets the viewer's eyes with a gentle, weary smile touched with quiet maternal worry, carrying an air of subdued grace and resilient gentleness. She wears a simple, faded cotton dress in muted grey-blue, practical and worn, full body visible head to toe against a plain grey background."
+      }
+    },
+    "lila": {
+      "name": "Lila",
+      "system": "Lila is a 16-year-old herbalist and childhood friend of Eli. She owns a well-worn, leather-bound book of herbal remedies inherited from her grandmother. She often rubs the cover when deep in thought, and this habit grounds her. She says, 'Sometimes the simplest things can heal the deepest wounds,' revealing her pragmatic approach to both physical and emotional pain. When afraid, she clenches a small amulet of her grandmother's for strength.",
+      "fields": {
+        "role": "Eli's childhood friend and moral compass",
+        "appearance": "Lila has shoulder-length brown hair that she often ties back with a simple ribbon. Her eyes are a warm, inviting green, and she has a small scar above her left eyebrow from a childhood accident. She wears practical, sturdy clothing, often a linen blouse and a woolen skirt. Her hands are calloused from years of herbal work, and she moves with a quiet confidence.",
+        "conflict": "Lila struggles with her own feelings of inadequacy and a sense that her knowledge and skills are not enough to truly help Eli in his dangerous journey.",
+        "growth": "Through her interactions with Eli and the broader challenges they face, Lila learns to value her own worth and the unique contributions she can make, gaining confidence and a deeper sense of purpose.",
+        "lie": "She believes that her knowledge and skills are not enough to truly make a difference in Eli's life and the larger issues they face.",
+        "wound": "Lila's grandmother, a skilled herbalist, died when Lila was young, leaving her with a deep-seated fear of not being good enough to carry on her legacy.",
+        "want": "Lila wants to be a source of strength and support for Eli, helping him navigate the dangers of his quest.",
+        "need": "She needs to recognize her own value and the impact she can have, both on Eli and in the world.",
+        "arc_type": "positive change",
+        "base_prompt": "A sixteen-year-old girl with a wholesome, approachable beauty that speaks of quiet strength and gentle care. Her shoulder-length brown hair is tied back with a simple ribbon, practical yet feminine, with a few soft strands framing her face and catching the light. The hair falls neatly but naturally, showing the discipline of someone who works with her hands. Her face is open and kind, with warm green eyes that hold both compassion and calm wisdom beyond her years. The eyes are soft tareme in shape, reflecting her nurturing nature, and her brows are gently arched. A small scar cuts above her left eyebrow, a visible reminder of childhood adventures and resilience. Her skin is light with a healthy, sun-kissed glow from time spent gathering herbs outdoors. She has a slim, youthful figure still carrying the last traces of adolescence, with a modest chest and the graceful proportions of a teenager who moves with purpose. Her build is sturdy enough to show the practical physical work of an herbalist, hands that know labour. She stands in a quiet, grounded pose with hands clasped loosely in front of her, weight resting on one leg in a natural, unpretentious stance. Her gaze meets the viewer directly with gentle warmth and steady reassurance. She wears a simple white linen blouse and dark woolen skirt, practical clothing for her work. Full body, head to toe, against a plain grey background."
+      }
+    }
+  }
+}
