@@ -185,13 +185,31 @@ def _h_fleshed(sm: StoryMaster, d: dict) -> None:
 
 _SCENE_SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["goal", "pressure", "exit"],
+    "required": ["goal", "pressure", "exit", "theme", "tone", "roles"],
     "properties": {
         "goal": {"type": "string", "description": "what this scene is FOR — the one concrete "
                  "thing it should accomplish for the story"},
         "pressure": {"type": "string", "description": "the tension or complication kept alive "
                      "under the surface of the scene"},
         "exit": {"type": "string", "description": "what would naturally end the scene"},
+        "theme": {"type": "string", "description": "the human tension this scene is REALLY about "
+                  "beneath its surface action (e.g. a lunch-sabotage comedy is about intimacy "
+                  "through conflict, not the food) — '' if the scene has no distinct texture yet"},
+        "tone": {"type": "string", "description": "the register this plays in — comedy, tenderness, "
+                 "dread, awkwardness, relief — '' if unclear"},
+        "roles": {"type": "array", "description": "each present cast member's immediate function "
+                  "in THIS scene — what they're pushing, protecting, or misreading right now. Not "
+                  "a hidden wound or a diagnosis, just their surface stance. Empty if the cast has "
+                  "no distinct functions yet.",
+                  "items": {
+                      "type": "object", "additionalProperties": False,
+                      "required": ["character", "role"],
+                      "properties": {
+                          "character": {"type": "string", "description": "the exact key from CAST"},
+                          "role": {"type": "string", "description": "their function this scene, "
+                                   "e.g. 'well-meaning amplifier who reads deflection as bravado'"},
+                      },
+                  }},
     },
 }
 
@@ -206,26 +224,36 @@ def _h_scene(sm: StoryMaster, d: dict) -> None:
     if old.get("goal"):
         w.setdefault("log", []).append(f"(scene closes at {old.get('loc') or '?'}: {old['goal']})")
     plan = {"space": d.get("loc_id") or "", "loc": sm.location,
-            "opened": int(w.get("step") or 0), "goal": "", "pressure": "", "exit": ""}
+            "opened": int(w.get("step") or 0), "goal": "", "pressure": "", "exit": "",
+            "theme": "", "tone": "", "roles": {}}
     w["scene_plan"] = plan
     if sm.provider is None:
         return
-    from .runtime.narration import generate_guarded
+    from .narration import generate_guarded
     cast_lines = []
+    known_characters = set()
     for m in sm.st.cast:
         c = sm.ctx.base_settings.characters.get(m.character)
         nm = (c.name if c else m.character) or m.character
         desc = ((c.system or "").splitlines()[0] if c else "")[:100]
-        cast_lines.append(f"- {nm}" + (f": {desc}" if desc else ""))
+        cast_lines.append(f"- {m.character} ({nm})" + (f": {desc}" if desc else ""))
+        known_characters.add(m.character)
     cast_block = ("CAST (the people who EXIST in this story — plan the scene with THEM; do NOT "
-                  "invent new named characters or beings):\n" + "\n".join(cast_lines)) \
-        if cast_lines else ""
+                  "invent new named characters or beings. Key any role you assign by the exact "
+                  "key before the parenthesis, e.g. 'shuri', never the display name):\n"
+                  + "\n".join(cast_lines)) if cast_lines else ""
     bits = [b for b in (plot_direction(w, sm.st), cast_block,
                         people_by_location(w, sm.location)) if b]
     system = ("You direct ONE scene of an interactive novel. Decide what the scene is FOR: the "
               "one concrete thing it should accomplish for the story, the tension to keep alive "
               "under its surface, and what would naturally end it. Concrete and causal, never "
-              "atmospheric. One line each."
+              "atmospheric. One line each.\n\n"
+              "Then, if the cast on stage gives the scene a distinct human texture, name its "
+              "theme and tone, and give each present character on stage a role: their immediate "
+              "function in THIS scene (instigator, target, amplifier, witness, mediator...) and "
+              "what they're pushing, protecting, or misreading right now — not a hidden wound, "
+              "not a diagnosis, just their surface stance. Leave theme/tone/roles empty rather "
+              "than force one onto a scene that doesn't have it yet."
               + ("\n\n" + "\n\n".join(bits) if bits else ""))
     prompt = (f"A new scene opens at: {sm.location or plan['space']}.\n"
               + (f"JUST BEFORE IT:\n{d['recent']}\n" if d.get("recent") else "")
@@ -233,8 +261,18 @@ def _h_scene(sm: StoryMaster, d: dict) -> None:
     g = generate_guarded(sm.provider, system=system, prompt=prompt, root=sm.ctx.root,
                          emits=_SCENE_SCHEMA)
     data = g.get("data") or {}
-    for k in ("goal", "pressure", "exit"):
+    for k in ("goal", "pressure", "exit", "theme", "tone"):
         plan[k] = (data.get(k) or "").strip()
+    try:
+        from ..authoring.dramatic_kernel import DramaticKernelError, normalize_scene_kernel
+        kernel = normalize_scene_kernel(
+            {"theme": plan["theme"], "tone": plan["tone"], "roles": data.get("roles") or []},
+            known_characters=known_characters)
+        plan["theme"] = kernel.get("theme", "")
+        plan["tone"] = kernel.get("tone", "")
+        plan["roles"] = kernel.get("roles") or {}
+    except (DramaticKernelError, TypeError, ValueError):
+        plan["theme"], plan["tone"], plan["roles"] = "", "", {}
 
 
 def scene_block(plan: dict) -> str:
@@ -305,7 +343,7 @@ _ARC_SCHEMA = {
 def generate_arc(provider, ctx, st, world: dict, request: str) -> dict:
     """Plan an ARC from a one-line request and install it on the world model (stage 0).
     Returns the arc ({} on failure). The request is the reusable template."""
-    from .runtime.narration import generate_guarded
+    from .narration import generate_guarded
     cast = []
     for m in st.cast:
         c = ctx.base_settings.characters.get(m.character)
@@ -344,7 +382,7 @@ def design_arc(provider, ctx, st, messages: list[dict], draft: dict | None) -> d
     speaks to the writer, the arc is the FULL updated draft (the model maintains it every
     turn, applying what was agreed). Nothing installs until the user keeps it — the draft
     rides the story's pending store so the work queue tracks it. See generate_arc (one-shot)."""
-    from .runtime.narration import generate_guarded
+    from .narration import generate_guarded
     cast = []
     for m in st.cast:
         c = ctx.base_settings.characters.get(m.character)
@@ -409,6 +447,19 @@ def advance_slot(world: dict) -> dict:
     return d
 
 
+def active_entity_periods(st, world: dict) -> list[dict]:
+    """Return the entity activity windows permitted in the current day slot.
+
+    The schedule is authored on the Story card, while the current slot belongs
+    to runtime state. Keeping the boundary here makes time a hard narrative
+    constraint available to both scene suggestions and the narrator.
+    """
+    slot = day_of(world).get("slot", "morning")
+    system = getattr(st, "time_system", None) or (getattr(st, "fields", None) or {}).get("time_system") or {}
+    periods = system.get("entity_periods") if isinstance(system, dict) else []
+    return [p for p in periods if isinstance(p, dict) and slot in (p.get("slots") or [])]
+
+
 def next_day(world: dict) -> dict:
     """Sleep turned the day over: next day, morning slot. Returns {n, slot}."""
     d = day_of(world)
@@ -422,7 +473,7 @@ def suggest_slot_scenes(provider, ctx, st, world: dict) -> dict:
     ignores them and free-plays). Grounded in the arc's current stage, who is where, the
     active setting stages, and the time of day. Returns {day, slot, options} — each option
     {title, location, who, hook} with `location` a real location id."""
-    from .runtime.narration import generate_guarded
+    from .narration import generate_guarded
     d = day_of(world)
     loc_ids = [l.id for l in st.locations] or ["nowhere"]
     locs = "\n".join(f"- {l.id} | {l.name}: {(l.description or '')[:80]}" for l in st.locations)
@@ -433,6 +484,8 @@ def suggest_slot_scenes(provider, ctx, st, world: dict) -> dict:
              if isinstance(k, str) and k.startswith("cond:") and v}
     stage_fx = "; ".join((c.effect or c.name) for c in (getattr(st, "conditions", None) or [])
                          if c.id in conds)
+    entity_fx = "; ".join(f"{p.get('state', 'active')}: {', '.join(p.get('capabilities') or [])}"
+                          for p in active_entity_periods(st, world))
     schema = {"type": "object", "additionalProperties": False, "required": ["options"],
               "properties": {"options": {"type": "array", "minItems": 3, "maxItems": 3, "items": {
                   "type": "object", "additionalProperties": False,
@@ -452,6 +505,7 @@ def suggest_slot_scenes(provider, ctx, st, world: dict) -> dict:
         "never outcomes, never spoilers. Fit the time of day and the world's current stage(s).")
     prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST: {cast}\n"
               f"TIME: day {d['n']}, {d['slot']}\n"
+              + (f"ENTITY ACTIVITY WINDOW: {entity_fx}\n" if entity_fx else "")
               + (f"WORLD STAGE NOW: {stage_fx}\n" if stage_fx else "")
               + f"LOCATIONS:\n{locs}\n"
               + (f"\n{plot_direction(world, st)}\n" if plot_direction(world, st) else "")
@@ -563,7 +617,7 @@ def state_card(world: dict, st) -> str:
     it's for, the arc, who's where, what's established and promised, the hard world state.
     A pure VIEW over the delta-maintained world model, so updating it is FREE: the scribe's
     deltas + the bus handlers keep the model current each turn; no LLM ever rewrites a card."""
-    from .runtime import state as _SE
+    from . import state as _SE
     parts = [f"STATE CARD — {getattr(st, 'name', '') or '?'} · step {int(world.get('step') or 0)}"]
     plan = world.get("scene_plan") if isinstance(world.get("scene_plan"), dict) else {}
     where = plan.get("loc") or world.get("location") or ""

@@ -5,11 +5,10 @@ Route families live in ``loom.stories.api``; this module only registers them.
 
 from __future__ import annotations
 
-from .api import assets, creation, library, runtime
+from .api import assets, library, runtime
 
 
 _ROUTE_FAMILIES = (
-    creation,
     runtime,
     library,
     assets,

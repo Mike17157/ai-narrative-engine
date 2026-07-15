@@ -24,6 +24,39 @@ from ..pipeline import apply_manifest as _apply_manifest, plan_and_apply as _pla
 # The story pipeline runs on pydantic-graph state machines (see graph_pipeline.py).
 from ..authoring.pipeline_graph import StoryState, StoryDeps, run_turn, run_draft
 
+
+def _runtime_readiness(st) -> tuple[dict | None, dict | None]:
+    """Return an activated contract or a safe 409-ready lifecycle report.
+
+    Pre-existing stories without interview lifecycle fields retain their legacy play
+    path.  New/interviewed stories cannot bypass activation by calling the runtime
+    endpoint directly, and an active card whose authoring changed must reactivate.
+    """
+    from ..runtime.compiled import fingerprint
+    from ..runtime.scenario_compiler import compile_authored_scenario
+
+    fields = getattr(st, "fields", None) or {}
+    status = fields.get("status")
+    if status not in {"interviewing", "active"} and not fields.get("runtime_scenario"):
+        return None, None  # legacy stories were never through the interview lifecycle
+    compiled = compile_authored_scenario(st)
+    issues = [issue for issue in (compiled.get("issues") or []) if isinstance(issue, dict)]
+    report = {
+        "ready": bool(compiled.get("ready")),
+        "status": status or "interviewing",
+        "blockers": [issue for issue in issues if issue.get("severity") == "error"],
+        "warnings": [issue for issue in issues if issue.get("severity") != "error"],
+        "opening": compiled.get("opening") if compiled.get("ready") else None,
+    }
+    stored = fields.get("runtime_scenario")
+    if status != "active":
+        return None, {"error": "finish the story interview and activate it before playing", "readiness": report}
+    if not isinstance(stored, dict) or not compiled.get("ready"):
+        return None, {"error": "the active story card is no longer ready for play", "readiness": report}
+    if fingerprint(stored) != fingerprint(compiled):
+        return None, {"error": "the story card changed; reactivate its runtime scenario", "readiness": report}
+    return stored, None
+
 def register(app, ctx):
     @app.post("/api/stories/workshop")
     async def story_workshop(body: dict):
@@ -110,8 +143,8 @@ def register(app, ctx):
             messages = [{"role": "user", "content": f"Read {ch.name}'s character card and give me your opening read. What's the wound? What misbelief are they living by? What kind of change — or refusal to change — does their nature pull toward?"}]
 
         # Retrieve craft principles + world lore (libSQL/Turso store, FTS5 bm25).
-        from ..server.services import lorebook_store as _LS
-        from ..server.services.lorebook import format_lore_block
+        from ...server.services import lorebook_store as _LS
+        from ...server.services.lorebook import format_lore_block
         query_text = " ".join(str(m.get("content", "")) for m in messages)
 
         # World lore (setting, history, established facts). The console may assign
@@ -124,7 +157,7 @@ def register(app, ctx):
         world_hits = _LS.retrieve(ctx.root, query_text, world_scopes, top_k=5,
                                   allow_nsfw=ctx.allow_nsfw()) if world_scopes else []
         # Function-book entries are functions, not world facts — never inject their specs as lore.
-        from .. import graph_ops as _GO
+        from ..records import graph as _GO
         world_hits = [e for e in world_hits if not _GO.is_function_entry(e)]
         if world_hits:
             system = system + "\n\n" + format_lore_block(world_hits)
@@ -158,7 +191,7 @@ def register(app, ctx):
         # graph-ops call offers every tool and the model calls them with params. See graph_ops.py.)
 
         # Context-budget breakdown for the console's usage dial (estimate ~4 chars/token).
-        from ..server.services.lorebook import estimate_tokens
+        from ...server.services.lorebook import estimate_tokens
         craft_text = format_lore_block(craft_hits, header="x") if craft_hits else ""
         world_text = format_lore_block(world_hits) if world_hits else ""
         craft_tok = estimate_tokens(craft_text)
@@ -218,7 +251,7 @@ def register(app, ctx):
     def agent_modes():
         """The selectable agent MODES — defined in configs/story_agent.json. The chat can force one
         explicitly (reliable) instead of relying on keyword trigger detection."""
-        from .. import agent_config as _AC
+        from ..runtime import agent as _AC
         return {"modes": _AC.modes_list(ctx.root)}
 
     @app.post("/api/stories/agent/dump-prompt")
@@ -228,8 +261,8 @@ def register(app, ctx):
         {system, active_modes, label} so you can inspect exactly what the model would see. No persistence,
         no model call, no side effects — pure inspection. Use this to verify prompt edits in
         configs/story_agent.json (edit → reload → dump)."""
-        from .. import agent_config as _AC
-        from .. import agent as _AG
+        from ..runtime import agent as _AC
+        from ..runtime import agent as _AG
         from ..pipeline import grounding as _G
         body = body or {}
         root = ctx.root
@@ -239,7 +272,7 @@ def register(app, ctx):
         req_text = next((str(m.get("content", "")) for m in reversed(messages)
                          if isinstance(m, dict) and m.get("role") == "user"), "")
         agents = cfg.get("agents") or {}
-        from ..agent_modes import translate_key as _translate_key
+        from ..runtime.agent import translate_key as _translate_key
         explicit = _translate_key((body.get("mode") or "").strip())
         active_ids = ([explicit] if (explicit and explicit in agents)
                       else _AC.match_modes(root, req_text))
@@ -269,17 +302,6 @@ def register(app, ctx):
         return {"system": system, "active_modes": active_ids, "label": label,
                 "draft": draft, "propose": bool(body.get("propose")),
                 "length": len(system)}
-
-    @app.post("/api/stories/graph-ops")
-    def story_graph_ops(body: dict):
-        """The story chat agent — single-shot tool-calling for general editing. The caller asks in
-        natural language; the agent resolves the right tools + persona and applies them. For
-        structured story work (spine, beats, arc design) use the explicit /task endpoint instead —
-        it's direct dispatch (no keyword inference, canon-grounded, one call)."""
-        from .. import agent as _AG
-        out = _AG.run_turn(ctx, body or {})
-        st = out.pop("_status", None)
-        return JSONResponse(out, status_code=st) if st else out
 
     @app.post("/api/stories/{key}/task")
     def story_task(key: str, body: dict):
@@ -319,9 +341,9 @@ def register(app, ctx):
         books that reference it (the pipeline wiring)."""
         import inspect
 
-        from ..server.services import lorebook_store as LS
-        from .. import agent_config as AC
-        from .. import graph_ops as GO
+        from ...server.services import lorebook_store as LS
+        from ..runtime import agent as AC
+        from ..records import graph as GO
         from ..authoring import scripts as S
         from ..authoring import stages as ST
 
@@ -451,17 +473,17 @@ def register(app, ctx):
 
     @app.get("/api/stories/session/{sid}")
     def get_story_session(sid: str):
-        from ..server.services.story_sessions import load_session
+        from ...server.services.story_sessions import load_session
         return load_session(ctx.root, sid) or {}
 
     @app.put("/api/stories/session/{sid}")
     def put_story_session(sid: str, body: dict):
-        from ..server.services.story_sessions import save_session
+        from ...server.services.story_sessions import save_session
         return {"ok": True, "session": save_session(ctx.root, sid, body or {})}
 
     @app.delete("/api/stories/session/{sid}")
     def delete_story_session(sid: str):
-        from ..server.services.story_sessions import delete_session
+        from ...server.services.story_sessions import delete_session
         delete_session(ctx.root, sid)
         return {"ok": True}
 
@@ -469,16 +491,23 @@ def register(app, ctx):
 
     @app.get("/api/stories/{key}/state")
     def get_world_state(key: str, sid: str | None = None):
-        from ..server.services.story_sessions import load_session
-        from ..server.services import lorebook_store as _LS
-        from .. import state_engine as _SE
-        from .. import state_doc as _SD
+        from ...server.services.story_sessions import load_session
+        from ...server.services import lorebook_store as _LS
+        # `runtime.state` is the canonical home for both the leveled State
+        # document and its mutable world level.  The old split modules were
+        # folded into it, but these endpoints still imported the removed names
+        # at request time.
+        from ..runtime import state as _SE
         sid = sid or f"play-{key}"
-        doc = _SD.normalize((load_session(ctx.root, sid) or {}).get("state"))
+        doc = _SE.document_normalize((load_session(ctx.root, sid) or {}).get("state"))
         ws = _SE.world_of(doc)
         # The full leveled view for the State viewer: graph/world/sim sizes from the doc,
         # plus the `facts` level (its own libSQL scope) counted from the store.
-        levels = _SD.level_summary(doc)
+        # ``runtime`` contains private compiler/director state; the public
+        # state viewer should describe playable world levels, not hint at a
+        # hidden plan's internal size.
+        levels = {name: value for name, value in _SE.level_summary(doc).items()
+                  if name != "runtime"}
         try:
             facts_n = len(_LS.load_lorebook(ctx.root, _SE.facts_scope(sid)) or [])
             if facts_n:
@@ -491,8 +520,8 @@ def register(app, ctx):
     def put_world_state(key: str, body: dict):
         """Manual override of the world level (the state panel's edits). Body:
         { sid?, state } — replaces the stored world level with the normalized payload."""
-        from ..server.services.story_sessions import load_session, save_session
-        from .. import state_engine as _SE
+        from ...server.services.story_sessions import load_session, save_session
+        from ..runtime import state as _SE
         body = body or {}
         sid = body.get("sid") or f"play-{key}"
         sess = load_session(ctx.root, sid) or {}
@@ -502,8 +531,8 @@ def register(app, ctx):
 
     @app.post("/api/stories/{key}/state/reset")
     def reset_world_state(key: str, body: dict | None = None):
-        from ..server.services.story_sessions import load_session, save_session
-        from .. import state_engine as _SE
+        from ...server.services.story_sessions import load_session, save_session
+        from ..runtime import state as _SE
         sid = (body or {}).get("sid") or f"play-{key}"
         sess = load_session(ctx.root, sid) or {}
         save_session(ctx.root, sid, {**sess, "state": _SE.with_world(sess.get("state"), _SE.empty_state())})
@@ -513,7 +542,7 @@ def register(app, ctx):
 
     @app.get("/api/text-roles")
     def get_text_roles():
-        from ..server.services import config_files as _cf
+        from ...server.services import config_files as _cf
         roles = _cf.load_text_roles(ctx.root)
         # Offer the selectable text models/connections so the UI can build pickers.
         items = [{"value": "", "label": "Active text connection"}]
@@ -523,20 +552,20 @@ def register(app, ctx):
 
     @app.put("/api/text-roles")
     def put_text_roles(body: dict):
-        from ..server.services import config_files as _cf
+        from ...server.services import config_files as _cf
         return {"ok": True, "roles": _cf.save_text_roles(ctx.root, body or {})}
 
     # ── Lorebook CRUD ─────────────────────────────────────────────────────────
 
     @app.get("/api/lorebook/{scope}")
     def get_lorebook(scope: str):
-        from ..server.services import lorebook_store as _LS
+        from ...server.services import lorebook_store as _LS
         safe = re.sub(r"[^\w\-]+", "_", scope)
         return {"entries": [e.model_dump() for e in _LS.load_lorebook(ctx.root, safe)]}
 
     @app.put("/api/lorebook/{scope}")
     def put_lore_entry(scope: str, body: dict):
-        from ..server.services import lorebook_store as _LS
+        from ...server.services import lorebook_store as _LS
         from ..config.schema import LoreEntry
         import uuid
         safe = re.sub(r"[^\w\-]+", "_", scope)
@@ -549,7 +578,7 @@ def register(app, ctx):
 
     @app.delete("/api/lorebook/{scope}/{entry_id}")
     def delete_lore_entry(scope: str, entry_id: str):
-        from ..server.services import lorebook_store as _LS
+        from ...server.services import lorebook_store as _LS
         safe = re.sub(r"[^\w\-]+", "_", scope)
         _LS.delete_entry(ctx.root, safe, entry_id)
         return {"ok": True}
@@ -558,7 +587,7 @@ def register(app, ctx):
     def import_lorebook(scope: str, body: dict):
         """Import a SillyTavern world-info export into a scope. Body: {entries:[...]} or a
         raw array. Safety filters reject prompt-injection entries and strip override lines."""
-        from ..server.services.lorebook_import import import_sillytavern
+        from ...server.services.lorebook_import import import_sillytavern
         safe = re.sub(r"[^\w\-]+", "_", scope)
         entries = (body or {}).get("entries") if isinstance(body, dict) else body
         if not isinstance(entries, list):
@@ -572,34 +601,47 @@ def register(app, ctx):
         player moved to), narrate the next turn AND report the scene state — current
         location, who's present, each one's emotion, and whether the moment invites
         moving to another location (so the UI can offer location choices)."""
-        from ..providers.registry import build_provider
+        from ...providers.registry import build_provider
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
+        contract, lifecycle_error = _runtime_readiness(st)
+        if lifecycle_error:
+            return JSONResponse(lifecycle_error, status_code=409)
         body = body or {}
 
         # This thread's durable state: a dedicated play session holds the mutable world
         # state; `thread-<sid>` is its write-back lorebook scope (engine-established facts).
-        from ..server.services.story_sessions import load_session, save_session
-        from ..server.services import lorebook_store as _LS0
-        from .. import state_engine as _SE0
+        from ...server.services.story_sessions import load_session, save_session
+        from ...server.services import lorebook_store as _LS0
+        from ..runtime import state as _SE0
         sid = body.get("sid") or f"play-{key}"
         _sess = load_session(ctx.root, sid) or {}
         # The thread's mutable record is a State doc; the world-state engine owns its
         # `world` level. Fall back to a client-seeded world_state only when the doc's
         # world level is empty (a brand-new thread).
-        _doc_ws = _SE0.world_of(_sess.get("state"))
-        if not any(_doc_ws.get(k) for k in ("entities", "flags", "inventory", "log", "location")):
-            _doc_ws = _SE0.normalize(_sess.get("world_state") or body.get("world_state") or {})
-        world_state = _doc_ws
+        runtime_state = {}
+        if contract:
+            # Activation compiles an immutable contract.  Its first live use
+            # seeds a State-doc baseline rather than trusting body.world_state.
+            from ..runtime.compiled import ensure_runtime
+            _state_doc, world_state, runtime_state, _fresh = ensure_runtime(_sess.get("state"), contract)
+            if _fresh:
+                save_session(ctx.root, sid, {**_sess, "state": _state_doc})
+                _sess = {**_sess, "state": _state_doc}
+        else:
+            _doc_ws = _SE0.world_of(_sess.get("state"))
+            if not any(_doc_ws.get(k) for k in ("entities", "flags", "inventory", "log", "location")):
+                _doc_ws = _SE0.normalize(_sess.get("world_state") or body.get("world_state") or {})
+            world_state = _doc_ws
         thread_scope = _SE0.facts_scope(sid)          # the `facts` level (engine write-back)
         story_scope = re.sub(r"[^\w\-]+", "_", f"story-{key}")
 
         # One-time migration: a story's legacy inline `lorebook` dict moves into the
         # unified libSQL store as the book `story-<key>` (all lore lives in one place).
         if _LS0.get_book(ctx.root, story_scope) is None and (st.lorebook or {}).get("entries"):
-            from ..server.services import lorebook_import as _LI0
+            from ...server.services import lorebook_import as _LI0
             _LI0.import_sillytavern(ctx.root, story_scope, st.lorebook["entries"])
             _LS0.upsert_book(ctx.root, story_scope, name=st.name, category="story",
                              rating="sfw", description=f"World lore for “{st.name}”.")
@@ -618,7 +660,7 @@ def register(app, ctx):
         # shape of the narrative harness (the bench exercises this same path). The endpoint
         # keeps only HTTP/session concerns; everything else lives in the nodes.
         import asyncio as _aio
-        from ..server.services import config_files as _cf
+        from ...server.services import config_files as _cf
         from ..runtime.engine import run_play_turn, PlayState, PlayDeps
         _roles = _cf.load_text_roles(ctx.root)
         # The WRITER: an explicit body.chat_model wins; else the configured `narrator` role (ONE
@@ -644,10 +686,12 @@ def register(app, ctx):
         pdeps = PlayDeps(ctx=ctx, st=st, key=key, sid=sid, sess=_sess,
                          provider=provider, scribe_provider=scribe_prov,
                          consequence_provider=director_prov, fallback=fallback,
-                         story_scope=story_scope, thread_scope=thread_scope)
+                         story_scope=story_scope, thread_scope=thread_scope,
+                         scenario=contract or {}, runtime_state=runtime_state)
         _aio.run(run_play_turn(pstate, pdeps))
         if pstate.error:
-            return JSONResponse({"error": pstate.error}, status_code=500)
+            code = 400 if pstate.error.startswith("scenario transition:") else 500
+            return JSONResponse({"error": pstate.error}, status_code=code)
         return pstate.result
 
     @app.post("/api/stories/{key}/prologue")
@@ -658,11 +702,14 @@ def register(app, ctx):
         — stored on the story itself (st.fields.prologue), never per-session. Body:
         { sid?, model?, regenerate? } → { sections:[{title,text}], cached }."""
         from ..worldgen import generate_prologue
-        from ..server.services.story_sessions import load_session, save_session
+        from ...server.services.story_sessions import load_session, save_session
 
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
+        _contract, lifecycle_error = _runtime_readiness(st)
+        if lifecycle_error:
+            return JSONResponse(lifecycle_error, status_code=409)
         body = body or {}
         sid = body.get("sid") or f"play-{key}"
         stored = (st.fields or {}).get("prologue") or {}
@@ -684,7 +731,7 @@ def register(app, ctx):
         # The prologue is plain prose — non-thinking writer (thinking would be ~8x slower for the
         # four sections). Passed model wins, else the `narrator` role (the same model that will
         # narrate play — the prologue is its opening pages), else the premise-stage provider.
-        from ..server.services import config_files as _cf
+        from ...server.services import config_files as _cf
         _narr = _cf.load_text_roles(ctx.root).get("narrator")
         if (body.get("model") or "").strip():
             provider = ctx.text_provider_for(body["model"], {"reasoning_effort": "none"})
@@ -735,8 +782,8 @@ def register(app, ctx):
     @app.get("/api/stories/{key}/arc")
     def story_arc_get(key: str, sid: str = ""):
         """The ACTIVE arc on this thread's world model (null if none planned)."""
-        from ..server.services.story_sessions import load_session
-        from .. import state_engine as _SE
+        from ...server.services.story_sessions import load_session
+        from ..runtime import state as _SE
         if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
         sess = load_session(ctx.root, sid or f"play-{key}") or {}
@@ -749,9 +796,9 @@ def register(app, ctx):
         `request` IS the template ("a village romance: he draws up his courage…"). The
         per-scene director + consequence step steer toward the current stage; the scribe
         advances stages when milestones land. Body: { sid?, request } → { arc }."""
-        from ..server.services.story_sessions import load_session, save_session
-        from ..server.services import config_files as _cf
-        from .. import state_engine as _SE
+        from ...server.services.story_sessions import load_session, save_session
+        from ...server.services import config_files as _cf
+        from ..runtime import state as _SE
         from ..runtime.director import generate_arc
 
         st = ctx.base_settings.stories.get(key)
@@ -806,7 +853,7 @@ def register(app, ctx):
         the current draft rides the story's pending store (fields.pending.arc), so design
         survives navigation and shows in the work queue until kept (POST /arc {sid, arc}).
         Returns {reply, arc}."""
-        from ..server.services import config_files as _cf
+        from ...server.services import config_files as _cf
         from ..runtime.director import design_arc
         from ..queue import set_pending
         st = ctx.base_settings.stories.get(key)
@@ -840,16 +887,42 @@ def register(app, ctx):
         night), grounded in the arc + whereabouts + world stage. Body {sid?, advance?: bool} —
         advance moves to the NEXT slot first (night never advances here; sleeping in play is
         the only door out of night). Returns {day, slot, options}."""
-        from ..server.services.story_sessions import load_session, save_session
-        from ..server.services import config_files as _cf
-        from .. import state_engine as _SE
+        from ...server.services.story_sessions import load_session, save_session
+        from ..runtime import state as _SE
         from ..runtime.director import suggest_slot_scenes, advance_slot, day_of
         st = ctx.base_settings.stories.get(key)
         if st is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
+        contract, lifecycle_error = _runtime_readiness(st)
+        if lifecycle_error:
+            return JSONResponse(lifecycle_error, status_code=409)
         body = body or {}
         sid = body.get("sid") or f"play-{key}"
         sess = load_session(ctx.root, sid) or {}
+        if contract:
+            from ..runtime.compiled import ensure_runtime, persist_runtime, scene_options
+
+            _doc, ws, runtime_state, _fresh = ensure_runtime(sess.get("state"), contract)
+            if body.get("advance"):
+                if day_of(ws)["slot"] == "night":
+                    return JSONResponse({"error": "night ends by sleeping, not by moving on"},
+                                        status_code=400)
+                advance_slot(ws)
+            else:
+                day_of(ws)
+            runtime_state.setdefault("scenario_state", {})["time"] = ws["day"]["slot"]
+            options = scene_options(contract, ws, runtime_state)
+            # The runtime consumes stable keys; the Player renders human names.
+            for option in options:
+                option["who"] = [
+                    ((ctx.base_settings.characters.get(k).name if ctx.base_settings.characters.get(k) else k) or k)
+                    for k in option.get("who") or []
+                ]
+            save_session(ctx.root, sid, {**sess, "state": persist_runtime(_doc, ws, runtime_state)})
+            return {"day": ws["day"].get("n", 1), "slot": ws["day"]["slot"], "options": options,
+                    "deterministic": True}
+
+        from ...server.services import config_files as _cf
         ws = _SE.world_of(sess.get("state"))
         if body.get("advance"):
             if day_of(ws)["slot"] == "night":
@@ -875,7 +948,7 @@ def register(app, ctx):
     def story_manuscript(key: str, sid: str = ""):
         """Return the prologue and play narration grouped into scenes."""
         from ...server.services.story_sessions import load_session
-        from .. import state_engine as state
+        from ..runtime import state
 
         story = ctx.base_settings.stories.get(key)
         if story is None:
@@ -895,7 +968,7 @@ def register(app, ctx):
     def story_manuscript_bake(key: str, body: dict):
         """Convert canonical play material into clean, standalone chapter prose."""
         from ...server.services.story_sessions import load_session, save_session
-        from .. import state_engine as state
+        from ..runtime import state
 
         story = ctx.base_settings.stories.get(key)
         if story is None:
@@ -977,7 +1050,7 @@ OUTPUT
         """Render one lead illustration for each baked chapter."""
         from ...server.services.batch_images import render_batch
         from ...server.services.story_sessions import load_session, save_session
-        from .. import state_engine as state
+        from ..runtime import state
 
         story = ctx.base_settings.stories.get(key)
         if story is None:
@@ -1018,7 +1091,7 @@ OUTPUT
     def story_manuscript_edit(key: str, body: dict):
         """Edit either a constant prologue section or a single play page."""
         from ...server.services.story_sessions import load_session, save_session
-        from .. import state_engine as state
+        from ..runtime import state
 
         if ctx.base_settings.stories.get(key) is None:
             return JSONResponse({"error": "no such story"}, status_code=404)
@@ -1056,7 +1129,7 @@ OUTPUT
     def story_state_card(key: str, sid: str = ""):
         """Return the derived state card and the session's live card evolution."""
         from ...server.services.story_sessions import load_session
-        from .. import state_engine as state
+        from ..runtime import state
         from ..runtime.director import state_card
 
         story = ctx.base_settings.stories.get(key)

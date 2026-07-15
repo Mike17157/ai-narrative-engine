@@ -27,9 +27,17 @@ from typing import Any, Callable
 
 from pydantic_graph import GraphBuilder, StepContext
 
+from ..workflows import WorkflowTrace
+
 
 def _noop_event(_: dict) -> None: ...
 def _never_cancel() -> bool: return False
+
+
+def _emit(deps, node: str, **data) -> None:
+    """Keep legacy UI events while adding the shared workflow trace envelope."""
+    deps.on_event({"type": "node", "node": node, **data})
+    deps.trace.emit("node", node=node, status="completed", **data)
 
 
 @dataclass
@@ -46,8 +54,14 @@ class PlayDeps:
     fallback: Any = None        # refusal-guard fallback model
     story_scope: str = ""
     thread_scope: str = ""
+    # Activated stories carry a model-free compiled contract plus a private
+    # runtime level.  Keeping it out of ``world_state`` prevents hidden plans
+    # from being accidentally rendered into narrator context.
+    scenario: dict = field(default_factory=dict)
+    runtime_state: dict = field(default_factory=dict)
     on_event: Callable[[dict], None] = _noop_event
     cancel: Callable[[], bool] = _never_cancel
+    trace: WorkflowTrace = field(default_factory=lambda: WorkflowTrace("play"))
 
 
 @dataclass
@@ -69,15 +83,147 @@ async def _thread(fn, *a, **kw):
     return await asyncio.to_thread(lambda: fn(*a, **kw))
 
 
+def _compiled_live_beat(deps: PlayDeps, scene: dict) -> dict:
+    """Project the current compiled scene into one public Director beat.
+
+    The executable runtime contains private event status and author-only plan
+    material.  This adapter reads only the scenario's structural clock/turn
+    counters plus public card fields, then hands those narrow values to the
+    pure selector.  In particular, it never reads a character ``system`` or
+    the compiled ``director_plan``.
+    """
+    from .live_beat import select_live_beat
+
+    if not isinstance(scene, dict):
+        return {}
+    fields = getattr(deps.st, "fields", None)
+    fields = fields if isinstance(fields, dict) else {}
+    cores = fields.get("character_cores")
+    cores = cores if isinstance(cores, dict) else {}
+
+    roles = scene.get("roles")
+    if not isinstance(roles, dict):
+        roles = scene.get("participant_roles")
+    roles = dict(roles) if isinstance(roles, dict) else {}
+    # Legacy cards may have the public role beside the reusable character
+    # card rather than on the authored scene.  It is a narrow, safe fallback;
+    # never use the character's free-form system prompt as a substitute.
+    characters = getattr(getattr(deps.ctx, "base_settings", None), "characters", {})
+    if isinstance(characters, dict):
+        for key in scene.get("participants") or []:
+            if key in roles:
+                continue
+            char = characters.get(key)
+            char_fields = getattr(char, "fields", None)
+            if isinstance(char_fields, dict) and isinstance(char_fields.get("role"), str):
+                roles[key] = char_fields["role"]
+
+    scenario_state = deps.runtime_state.get("scenario_state") \
+        if isinstance(deps.runtime_state, dict) else {}
+    scenario_state = scenario_state if isinstance(scenario_state, dict) else {}
+    turns = scenario_state.get("turns")
+    turns = turns if isinstance(turns, list) else []
+    scene_id = str(scene.get("id") or "")
+    scene_turn_count = sum(
+        1 for turn in turns
+        if isinstance(turn, dict) and str(turn.get("scene") or "") == scene_id
+    )
+    return select_live_beat(
+        scene,
+        participant_roles=roles,
+        character_cores=cores,
+        recent_state={
+            "turn_count": len(turns),
+            "scene_turn_count": scene_turn_count,
+            "time": scenario_state.get("time"),
+            "location": scenario_state.get("location"),
+        },
+        player_id=str(fields.get("player_id") or "player"),
+    )
+
+
+def _freeplay_live_beat(deps: PlayDeps, world_state: dict) -> dict:
+    """Project the free-play StoryMaster's ``scene_plan`` into one public Director beat.
+
+    Mirrors ``_compiled_live_beat``'s narrow adapter shape, but the source is the
+    StoryMaster's own per-scene plan (director.py's ``_h_scene``) instead of an
+    authored scenario. Only the plan's public ``theme``/``tone``/``roles`` and who
+    is currently on stage ever reach the selector — never its private
+    ``goal``/``pressure``/``exit`` agenda, which stays ``scene_block``'s job.
+    """
+    from .live_beat import select_live_beat
+
+    plan = world_state.get("scene_plan") if isinstance(world_state, dict) else None
+    if not isinstance(plan, dict):
+        return {}
+    fields = getattr(deps.st, "fields", None)
+    fields = fields if isinstance(fields, dict) else {}
+    cores = fields.get("character_cores")
+    cores = cores if isinstance(cores, dict) else {}
+    members = (world_state.get("scene") or {}).get("members")
+    members = [str(m) for m in members if m] if isinstance(members, list) else []
+    step = int(world_state.get("step") or 0)
+    scene = {
+        "id": str(plan.get("space") or ""),
+        "location": str(plan.get("loc") or ""),
+        "theme": plan.get("theme") or "",
+        "tone": plan.get("tone") or "",
+        "roles": plan.get("roles") if isinstance(plan.get("roles"), dict) else {},
+        "participants": members,
+    }
+    return select_live_beat(
+        scene,
+        participant_roles=scene["roles"],
+        character_cores=cores,
+        recent_state={
+            "turn_count": step,
+            "scene_turn_count": max(0, step - int(plan.get("opened") or 0)),
+            "time": "",
+            "location": scene["location"],
+        },
+        player_id=str(fields.get("player_id") or "player"),
+    )
+
+
 # ── Nodes ────────────────────────────────────────────────────────────────────────────
 
 async def step_compile(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     """Assemble both passes' contexts — pure, deterministic, no LLM call."""
-    from .runtime.context import build_turn_context
+    from .context import build_turn_context
     s, d = ctx.state, ctx.deps
+    scenario_scene = {}
+    if d.scenario:
+        from .compiled import ScenarioTransitionError, prepare_turn
+        try:
+            scenario_scene = prepare_turn(d.scenario, s.world_state, d.runtime_state, s.body)
+        except ScenarioTransitionError as exc:
+            s.error = f"scenario transition: {exc}"
+            return {}
     s.tc = await _thread(build_turn_context, d.ctx, d.st, d.key, s.body, s.world_state,
-                         story_scope=d.story_scope, thread_scope=d.thread_scope)
-    d.on_event({"type": "node", "node": "compile", "lanes": s.tc.get("lanes")})
+                         story_scope=d.story_scope, thread_scope=d.thread_scope,
+                         scenario=d.scenario, runtime_state=d.runtime_state,
+                         scenario_scene=scenario_scene)
+    # Compiled stories intentionally skip the free-form StoryMaster scene
+    # planner.  Give their consequence pass one deterministic *public* scene
+    # anchor instead: it establishes a playable pressure but cannot reveal a
+    # private director event or overrule the player's action.
+    # Free play reads the StoryMaster's own scene_plan here — this is the
+    # STANDING plan for every mid-scene turn (zero extra cost). On a scene
+    # boundary this turn, step_scene overwrites it below with the fresh plan,
+    # the same two-tier pattern context.py already uses for scene_block.
+    live_beat = _compiled_live_beat(d, scenario_scene) if d.scenario else _freeplay_live_beat(d, s.world_state)
+    if live_beat:
+        from .live_beat import director_live_beat_block
+        live_block = director_live_beat_block(live_beat)
+        if live_block and s.tc.get("consequence_system"):
+            s.tc["consequence_system"] += "\n\n" + live_block
+            s.tc["director_live_beat"] = live_beat
+            lanes = s.tc.get("lanes")
+            if isinstance(lanes, dict):
+                lanes["live_beat"] = len(live_block)
+                lanes["consequence"] = len(s.tc["consequence_system"])
+    _emit(d, "compile", lanes=s.tc.get("lanes"),
+          live_beat=(live_beat.get("kind") if isinstance(live_beat, dict) else ""))
     return s.tc
 
 
@@ -87,13 +233,19 @@ async def step_scene(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     exit → world.scene_plan) and the fresh plan is injected into THIS turn's consequence
     context. Mid-scene turns skip entirely (no LLM call, no latency; compile already
     surfaced the standing plan)."""
-    from .runtime.director import StoryMaster, scene_block
+    from .director import StoryMaster, scene_block
     s, d = ctx.state, ctx.deps
     if s.error or d.cancel():
         return {}
+    # The activated contract already chose the scene and its eligibility.
+    # A free-form StoryMaster call here could see private authored material and
+    # invent a conflicting agenda, so it remains a legacy-only affordance.
+    if d.scenario:
+        _emit(d, "scene", boundary=False, compiled=True)
+        return {}
     cur = s.tc.get("cur") or ""
     if not StoryMaster(d.ctx, d.st, s.world_state).scene_boundary(cur):
-        d.on_event({"type": "node", "node": "scene", "boundary": False})
+        _emit(d, "scene", boundary=False)
         return s.world_state.get("scene_plan") or {}
     loc_name = next((l.name for l in d.st.locations if l.id == cur), cur)
     sm = StoryMaster(d.ctx, d.st, s.world_state,
@@ -104,8 +256,20 @@ async def step_scene(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     blk = scene_block(plan)
     if blk and s.tc.get("consequence_system"):
         s.tc["consequence_system"] += "\n\n" + blk
-    d.on_event({"type": "node", "node": "scene", "boundary": True,
-                "goal": plan.get("goal", "")})
+    # The fresh plan's theme/tone/roles supersede whatever compile saw before
+    # this boundary fired — same reason scene_block is re-injected above.
+    fresh_beat = _freeplay_live_beat(d, s.world_state)
+    if fresh_beat:
+        from .live_beat import director_live_beat_block
+        fresh_block = director_live_beat_block(fresh_beat)
+        if fresh_block and s.tc.get("consequence_system"):
+            s.tc["consequence_system"] += "\n\n" + fresh_block
+            s.tc["director_live_beat"] = fresh_beat
+            lanes = s.tc.get("lanes")
+            if isinstance(lanes, dict):
+                lanes["live_beat"] = len(fresh_block)
+                lanes["consequence"] = len(s.tc["consequence_system"])
+    _emit(d, "scene", boundary=True, goal=plan.get("goal", ""))
     return plan
 
 
@@ -113,21 +277,66 @@ async def step_consequence(ctx: StepContext[PlayState, PlayDeps, None]) -> str:
     """The LOGIC step (reasoning model): work out what the player's action ACTUALLY causes —
     cause→effect, how each present character reacts, what changes, the new cost/choice. The
     prose pass renders this; without it the narrator produces atmosphere, not events."""
-    from .runtime.narration import generate_guarded
+    from .narration import generate_guarded
     s, d = ctx.state, ctx.deps
     if s.error or d.cancel() or not s.tc.get("consequence_system"):
         return ""
     hist = s.body.get("history") or []
     last_user = next((m.get("text", "") for m in reversed(hist) if m.get("role") == "user"), "")
-    recent = "\n".join((("Player" if m.get("role") == "user" else "Narrator")
-                        + f": {m.get('text', '')}") for m in hist[-4:])
+    if d.scenario:
+        recent = s.tc.get("shared_recent") or "(no shared prior scene yet)"
+    else:
+        recent = "\n".join((("Player" if m.get("role") == "user" else "Narrator")
+                            + f": {m.get('text', '')}") for m in hist[-4:])
     prompt = (f"RECENT:\n{recent}\n\nTHE PLAYER JUST DID / SAID:\n{last_user}\n\n"
               f"Work out what actually happens next, step by step.")
     prov = d.consequence_provider or d.provider
     g = await _thread(generate_guarded, prov, system=s.tc["consequence_system"], prompt=prompt,
                       root=d.ctx.root, emits=None, fallback=d.fallback)
     s.beat = (g.get("text") or "").strip()
-    d.on_event({"type": "node", "node": "consequence", "chars": len(s.beat)})
+    # A pressure beat is not a revelation permit.  Reasoning models are
+    # particularly prone to treating a pointed player question as a satisfying
+    # answer, then handing that payoff to the prose pass as "what happens".
+    # Repair that boundary here before it can become a narrative instruction.
+    from .arc_guard import breaks_resistance, fallback_beat, retry_instruction
+    _locks = s.tc.get("arc_resistance_locks") or []
+    _arc_repaired = False
+    if _locks and s.beat and breaks_resistance(s.beat, _locks):
+        _repair = await _thread(
+            generate_guarded, prov,
+            system=s.tc["consequence_system"],
+            prompt=prompt + retry_instruction("director beat", s.beat),
+            root=d.ctx.root, emits=None, fallback=d.fallback,
+        )
+        _candidate = (_repair.get("text") or "").strip()
+        if _candidate and not breaks_resistance(_candidate, _locks):
+            s.beat = _candidate
+        else:
+            s.beat = fallback_beat(_locks)
+        _arc_repaired = True
+    # A player assertion is not an ability grant.  Keep this guard after the
+    # arc repair so an otherwise safe pressure beat cannot smuggle in a fake
+    # spell on its way to the prose writer.
+    from .player_guard import (breaks_player_reality, fallback_beat as player_fallback_beat,
+                               retry_instruction as player_retry_instruction)
+    _player_guard = s.tc.get("player_action_guard") or {}
+    _player_repaired = False
+    if _player_guard.get("blocked") and s.beat and breaks_player_reality(s.beat, _player_guard):
+        _repair = await _thread(
+            generate_guarded, prov,
+            system=s.tc["consequence_system"],
+            prompt=prompt + player_retry_instruction("director beat", s.beat),
+            root=d.ctx.root, emits=None, fallback=d.fallback,
+        )
+        _candidate = (_repair.get("text") or "").strip()
+        if _candidate and not breaks_player_reality(_candidate, _player_guard):
+            s.beat = _candidate
+        else:
+            s.beat = player_fallback_beat(_player_guard)
+        _player_repaired = True
+    s.tc["player_action_repaired"] = _player_repaired
+    _emit(d, "consequence", chars=len(s.beat), arc_repaired=_arc_repaired,
+          player_repaired=_player_repaired)
     return s.beat
 
 
@@ -135,7 +344,7 @@ async def step_prose(ctx: StepContext[PlayState, PlayDeps, None]) -> str:
     """The WRITER: free-text narration under the minimal register (no schema). When a
     consequence beat exists, it renders THAT — the beat is the scene's truth (scaffold),
     not a script: flowing narration, change no facts, add no new events."""
-    from .runtime.narration import generate_guarded
+    from .narration import generate_guarded
     s, d = ctx.state, ctx.deps
     if s.error or d.cancel():
         return ""
@@ -147,18 +356,56 @@ async def step_prose(ctx: StepContext[PlayState, PlayDeps, None]) -> str:
     g = await _thread(generate_guarded, d.provider, system=s.tc["system"], prompt=prompt,
                       root=d.ctx.root, emits=None, fallback=d.fallback)
     s.narration = (g.get("text") or "").strip()
-    s.prose_guard = {"tripped": g.get("tripped"), "used_fallback": g.get("used_fallback")}
+    # Keep the writer behind the same hard boundary as the director.  The
+    # first repair normally preserves the model's voice; the deterministic
+    # fallback exists only so a repeatedly noncompliant model cannot make a
+    # hidden recognition canon just by writing it beautifully.
+    from .arc_guard import breaks_resistance, fallback_narration, retry_instruction
+    _locks = s.tc.get("arc_resistance_locks") or []
+    _arc_repaired = False
+    if _locks and s.narration and breaks_resistance(s.narration, _locks):
+        _repair = await _thread(
+            generate_guarded, d.provider,
+            system=s.tc["system"],
+            prompt=prompt + retry_instruction("narration", s.narration),
+            root=d.ctx.root, emits=None, fallback=d.fallback,
+        )
+        _candidate = (_repair.get("text") or "").strip()
+        if _candidate and not breaks_resistance(_candidate, _locks):
+            s.narration = _candidate
+        else:
+            s.narration = fallback_narration(_locks)
+        _arc_repaired = True
+    from .player_guard import (breaks_player_reality, fallback_narration as player_fallback_narration,
+                               retry_instruction as player_retry_instruction)
+    _player_guard = s.tc.get("player_action_guard") or {}
+    _player_repaired = False
+    if _player_guard.get("blocked") and s.narration and breaks_player_reality(s.narration, _player_guard):
+        _repair = await _thread(
+            generate_guarded, d.provider,
+            system=s.tc["system"],
+            prompt=prompt + player_retry_instruction("narration", s.narration),
+            root=d.ctx.root, emits=None, fallback=d.fallback,
+        )
+        _candidate = (_repair.get("text") or "").strip()
+        if _candidate and not breaks_player_reality(_candidate, _player_guard):
+            s.narration = _candidate
+        else:
+            s.narration = player_fallback_narration(_player_guard)
+        _player_repaired = True
+    s.prose_guard = {"tripped": g.get("tripped"), "used_fallback": g.get("used_fallback"),
+                     "arc_repaired": _arc_repaired, "player_repaired": _player_repaired}
     if not s.narration:
         s.error = g.get("error") or "the narrator returned nothing"
-    d.on_event({"type": "node", "node": "prose", "chars": len(s.narration)})
+    _emit(d, "prose", chars=len(s.narration))
     return s.narration
 
 
 async def step_scribe(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     """The SCRIBE: read the fresh narration, emit the structured scene report + deltas."""
-    from .runtime.narration import generate_guarded
-    from ..server.services.prompts import PLAY_SCHEMA
-    from .runtime import state as _SE
+    from .narration import generate_guarded
+    from ...server.services.prompts import PLAY_SCHEMA
+    from . import state as _SE
     s, d = ctx.state, ctx.deps
     if s.error or d.cancel():
         return {}
@@ -181,7 +428,7 @@ async def step_scribe(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
         + ["state_deltas", "player_status", "people", "arc_milestone"]
     # VN/webnovel LINES: code cuts the narration into verbatim segments; the scribe (already
     # reading this turn) only LABELS them — speaker per quote, narrator/thought per narration.
-    from .runtime.narration import segment_prose, lines_prompt
+    from .narration import segment_prose, lines_prompt
     _segs = segment_prose(s.narration)
     _pname = ((s.body.get("player") or {}).get("name") or "Player").strip() or "Player"
     _cnames = [getattr(d.ctx.base_settings.characters.get(m.character), "name", m.character)
@@ -208,7 +455,7 @@ async def step_scribe(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
                       fallback=d.provider if d.scribe_provider is not d.provider else d.fallback)
     s.report = g["data"] or {}
     s.scribe_guard = {"tripped": g.get("tripped"), "used_fallback": g.get("used_fallback")}
-    d.on_event({"type": "node", "node": "scribe", "ok": bool(s.report)})
+    _emit(d, "scribe", ok=bool(s.report))
     return s.report
 
 
@@ -220,15 +467,14 @@ async def step_apply(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
     if s.error:
         return {}
     s.result = await _thread(_apply_turn, d, s)
-    d.on_event({"type": "node", "node": "apply",
-                "present": s.result.get("present"), "pov": s.result.get("pov")})
+    _emit(d, "apply", present=s.result.get("present"), pov=s.result.get("pov"))
     return s.result
 
 
 def _vn_lines(d, s, data: dict) -> list[dict]:
     """The narration re-cut as VN lines (segments are code-verbatim; the scribe's `lines`
     labels attribute them). Pure; [] when there's nothing to split."""
-    from .runtime.narration import segment_prose, assemble_lines
+    from .narration import segment_prose, assemble_lines
     pname = ((s.body.get("player") or {}).get("name") or "Player").strip() or "Player"
     cnames = {getattr(d.ctx.base_settings.characters.get(m.character), "name", m.character)
               or m.character for m in d.st.cast}
@@ -271,9 +517,9 @@ def _player_particulars(text: str) -> list[str]:
 
 
 def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
-    from ..server.services.story_sessions import save_session
-    from ..server.services.emotions import EMOTION_KEYS
-    from .runtime import state as _SE
+    from ...server.services.story_sessions import save_session
+    from ...server.services.emotions import EMOTION_KEYS
+    from . import state as _SE
 
     appctx, st, key = d.ctx, d.st, d.key
     world_state, data, tc = s.world_state, s.report, s.tc
@@ -289,6 +535,7 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
             "emotions": {}, "movement": False, "player_status": "active",
             "consolidation": None, "state": _SE.summary(world_state),
             "lanes": tc.get("lanes"),
+            "live_beat": tc.get("director_live_beat") or {},
             "guard": {**s.prose_guard, "scribe_failed": True},
         }
 
@@ -301,10 +548,23 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     # near-dupe guard makes re-capture idempotent.
     hist = s.body.get("history") or []
     last_user = next((m.get("text", "") for m in reversed(hist) if m.get("role") == "user"), "")
-    for ph in _player_particulars(last_user):
-        data.setdefault("state_deltas", []).append(
-            {"op": "detail", "name": "", "key": "", "value": f"the player carries {ph}",
-             "title": "", "keywords": []})
+    from .player_guard import sanitize_state_deltas
+    _player_action_guard = tc.get("player_action_guard") or {}
+    # Apply the state boundary before any write path.  A scribe may still report
+    # that someone looked worried, but it cannot turn "I cast a spell" into an
+    # inventory item, a fact, a flag, travel, or a future permission.
+    data["state_deltas"] = sanitize_state_deltas(data.get("state_deltas"), _player_action_guard)
+    if _player_action_guard.get("blocked"):
+        data["player_status"] = "active"
+        data["movement"] = False
+        data["location"] = cur
+        data["arc_milestone"] = False
+    else:
+        for ph in _player_particulars(last_user):
+            data.setdefault("state_deltas", []).append(
+                {"op": "detail", "name": "", "key": "", "value": f"the player carries {ph}",
+                 "title": "", "keywords": []})
+    _safe_last_user = _player_action_guard.get("safe_action") or last_user
 
     # map present/emotion names -> character keys for the UI's sprite lookup
     name_to_key = {(appctx.base_settings.characters[m.character].name
@@ -319,7 +579,7 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     # THE STORYMASTER owns the character network: `people` report → records pinned to locations
     # (mention → thin record; static), and fleshes anyone in the authoritative roster who isn't a
     # known character (a controlled entrance → full card, one per turn). Slice 1 of the coordinator.
-    from .runtime.director import StoryMaster, state_card as _sm_card
+    from .director import StoryMaster, state_card as _sm_card
     loc_name = next((l.name for l in st.locations if l.id == loc), loc)
     _sm = StoryMaster(appctx, st, world_state, provider=d.provider, location=loc_name)
     born_now = _sm.ingest(people=data.get("people") or [], present=roster, narration=s.narration)
@@ -327,7 +587,7 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     # ARC advancement: the scribe watched this turn's narration against the current stage's
     # milestone; on a hit, the stage advances deterministically (no LLM).
     if data.get("arc_milestone"):
-        from .runtime.director import advance_arc
+        from .director import advance_arc
         advance_arc(world_state)
 
     emotions = {}
@@ -341,8 +601,8 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     # Evolve + persist the world state. `fact` deltas write back into the thread's lorebook
     # scope; `move` deltas pass the geography gate (on-screen = canon, off-screen rate-limited).
     try:
-        from .world.creation import make_move_validator
-        from .runtime import state as _PC
+        from ..world.creation import make_move_validator
+        from . import state as _PC
         on_names = {str(n) for n in (data.get("present") or []) if n} | {
             (appctx.base_settings.characters[k].name if k in appctx.base_settings.characters else k)
             for k in ((world_state.get("scene") or {}).get("members") or [])}
@@ -354,9 +614,9 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         _turn_step = _PC.record_step(world_state, [k for k in present_keys if k])
         world_state.setdefault("transcript", []).append(data.get("reply", ""))
         _PC.record_raw_turn(world_state, step=_turn_step, present=[k for k in present_keys if k],
-                            location=loc, text=data.get("reply", ""), player_input=last_user)
+                            location=loc, text=data.get("reply", ""), player_input=_safe_last_user)
         # The MANUSCRIPT: the same prose, grouped by scene for the reading/editing pane.
-        from .runtime.director import record_page
+        from .director import record_page
         _beat_line = next((str(dd.get("value", "")) for dd in (data.get("state_deltas") or [])
                            if dd.get("op") == "log"), "")
         record_page(world_state, loc=loc_name, text=data.get("reply", ""),
@@ -368,33 +628,77 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         # Periodic consolidation: self-gates to fire ~every 50 turns, deepening character cards + the
         # running story summary from the recent transcript. Additive; never raises.
         if key:
-            from .authoring import stages as _ST2
+            from ..authoring import stages as _ST2
             _ST2.consolidate_cast(appctx, key, world_state, sid=d.sid)
-        save_session(appctx.root, d.sid, {**d.sess, "state": _SE.with_world(d.sess.get("state"), world_state)})
+        if d.scenario:
+            from .compiled import persist_runtime, record_observation
+            record_observation(d.runtime_state, text=data.get("reply", ""),
+                               player_input=_safe_last_user, present=[k for k in present_keys if k])
+            saved_state = persist_runtime(d.sess.get("state"), world_state, d.runtime_state)
+        else:
+            saved_state = _SE.with_world(d.sess.get("state"), world_state)
+        save_session(appctx.root, d.sid, {**d.sess, "state": saved_state})
     except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
         pass
 
     # Lifecycle: ONLY sleep/death consolidates memory (dream/rest pass; death also rewinds).
     consolidation = None
+    loop_reset = None
     status = (data.get("player_status") or "active").strip().lower()
     if status in ("sleeping", "dead") and key:
-        from .authoring import stages as _ST
-        consolidation = _ST.consolidate_on_rest(appctx, key, world_state, status)
+        from ..authoring import stages as _ST
+        if status == "dead" and d.scenario:
+            # A loop is an executable state transition, not a narrator suggestion.
+            # Restore the baseline and delete loop-local fact retrieval so a fresh
+            # loop cannot receive last loop's knowledge through a side channel.
+            from .compiled import persist_runtime, reset_loop
+            reset = reset_loop(d.scenario, world_state, d.runtime_state)
+            if reset is not None:
+                world_state, loop_reset = reset
+                try:
+                    from ...server.services import lorebook_store as _LS
+                    _LS.delete_book(appctx.root, d.thread_scope)
+                except Exception:  # noqa: BLE001 — a stale fact book must not break reset
+                    pass
+                save_session(appctx.root, d.sid, {
+                    **d.sess,
+                    "state": persist_runtime(d.sess.get("state"), world_state, d.runtime_state),
+                })
+            else:
+                consolidation = _ST.consolidate_on_rest(appctx, key, world_state, status)
+                save_session(appctx.root, d.sid, {**d.sess, "state": _SE.with_world(d.sess.get("state"), world_state)})
+        else:
+            consolidation = _ST.consolidate_on_rest(appctx, key, world_state, status)
         if status == "sleeping":                       # sleep is the only door out of night:
-            from .runtime.director import next_day          # the day turns over to the next morning
+            from .director import next_day          # the day turns over to the next morning
             next_day(world_state)
-        save_session(appctx.root, d.sid, {**d.sess, "state": _SE.with_world(d.sess.get("state"), world_state)})
+        if status == "sleeping":
+            if d.scenario:
+                from .compiled import persist_runtime
+                # Keep the private scenario clock in lockstep with the public day
+                # progression before the next deterministic offer is requested.
+                # Sleeping closes the prior slot's authored scene; otherwise an
+                # old night could silently carry into the next morning.
+                _ss = d.runtime_state.setdefault("scenario_state", {})
+                _ss["time"] = world_state["day"]["slot"]
+                _ss["active_scene"] = None
+                saved_state = persist_runtime(d.sess.get("state"), world_state, d.runtime_state)
+            else:
+                saved_state = _SE.with_world(d.sess.get("state"), world_state)
+            save_session(appctx.root, d.sid, {**d.sess, "state": saved_state})
 
     return {
-        "reply": data.get("reply", ""), "location": loc,
+        "reply": data.get("reply", ""), "location": world_state.get("location") or loc,
         # VN/webnovel LINES: the same narration as speaker-attributed lines (dialogue /
         # narration / the player's inner-voice thoughts). Flat `reply` stays the source of truth.
         "lines": _vn_lines(d, s, data),
         "beat": s.beat,                 # the consequence reasoning (what-happens), for the UI
+        "live_beat": tc.get("director_live_beat") or {},  # public deterministic scene anchor
         "scene_plan": world_state.get("scene_plan") or {},   # the per-scene director's agenda
         "card": _sm_card(world_state, st),   # the STATE CARD: derived view, free every turn
         "born": born_now,               # characters created on the fly this turn (gradual)
-        "present": [k for k in present_keys if k],
+        "present": ((world_state.get("scene") or {}).get("members") if loop_reset
+                    else [k for k in present_keys if k]),
         "pov": (world_state.get("scene") or {}).get("pov", ""),
         "step": world_state.get("step"),
         "emotions": emotions,
@@ -402,11 +706,16 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         "player_status": status,
         "day": world_state.get("day") or None,   # the slot rhythm (None before the day model)
         "consolidation": consolidation,
+        "loop_reset": loop_reset,
+        "reset_history": bool(loop_reset),
         "state": _SE.summary(world_state),
         "lanes": tc.get("lanes"),
         "guard": {"tripped": s.prose_guard.get("tripped") or s.scribe_guard.get("tripped"),
                   "used_fallback": bool(s.prose_guard.get("used_fallback")
-                                        or s.scribe_guard.get("used_fallback"))},
+                                        or s.scribe_guard.get("used_fallback")),
+                  "player_claim_blocked": bool(_player_action_guard.get("blocked")),
+                  "player_repaired": bool(s.prose_guard.get("player_repaired")
+                                           or tc.get("player_action_repaired"))},
     }
 
 
