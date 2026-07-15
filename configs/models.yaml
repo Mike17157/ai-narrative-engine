@@ -4,15 +4,13 @@
 # Images → Configure tab).
 #
 # This is where the SillyTavern decoupling becomes concrete: `opus` (the chat
-# brain, a cloud LLM) and `anima` (an image workflow, a local ComfyUI graph)
-# are independent entries. Swap either without touching the other or any
-# character.
+# brain, a cloud LLM) and `krea2_turbo` (an image workflow, a local ComfyUI
+# graph) are independent entries. Swap either without touching the other or
+# any character.
 #
-# The image pipeline is Anima-only (Qwen-Image natural-language DiT). All three
-# `anima*` entries share ONE central workflow — the flattened Anima All-In-One
-# master graph (workflows/anima_master_api.json) — and differ only by
-# output_variant (full vs cutout). Prompts are natural-language prose (see
-# loom/server/services/prompts.py), injected at the primary CLIPTextEncode.
+# The image pipeline is Krea2-only (Qwen-Image arch, Gemma-optimized prompts).
+# LoRA customization is applied at render time via configs/image_presets.json
+# (see loom/comfy/stack.py) — independent of which krea2 workflow variant runs.
 models:
   opus:
     provider: anthropic
@@ -41,151 +39,35 @@ models:
       max_tokens: 1024
       thinking: disabled
 
-  # --------------------------------------------------------------------------- #
-  # Anima — fractured into single-function workflows.
-  #
-  # The old "All-In-One" master (anima_master_api.json) ran every role through one
-  # switch-gated rgthree Context bus and had accreted dead branches (the detailer
-  # routed to EmptySegs; TorchCompile/LLLite/DCW/Spectrum were vestigial). Per the
-  # project principle — workflows are cheap and should each be ONE clear, contained
-  # function — it's split into the clean linear graphs below (scripts/build_anima_
-  # workflows.py is the reproducible authoring aid). Each shares the master's live
-  # render config (UNet novaAnimeAM_v25, CLIP qwen_3_06b, er_sde/24/cfg4, AuraFlow
-  # shift 1.73, AnimaModGuidance) and carries an `easy loraStackApply` anchor so
-  # the image-preset LoRA look injects exactly as before (inject_models / neutralize
-  # _baked_stack). Cutout (Inspyrenet bg-remove) and the face detailer are now BAKED
-  # into the graphs that need them — no runtime output_variant / flag toggling.
-  #
-  # Role wiring lives in configs/image_roles.json:
-  #   base → anima_character · sprite → anima_sprite · scene → anima_scene · chat → anima_txt2img
-  #
-  # The legacy `anima` master entry is KEPT so presets/chat that still reference
-  # "anima" keep working; it can be retired once nothing points at it.
-  # --------------------------------------------------------------------------- #
-  anima:
-    provider: comfyui
-    kind: image
+  # The high-level Story Agent has a named gateway profile rather than passing
+  # this provider-qualified ID through whichever chat connection is active.
+  # `deepseek/deepseek-v4-pro` is the configured OpenRouter model identifier;
+  # it therefore requires OPENROUTER_API_KEY (or an explicit api_key option),
+  # not a direct DeepSeek connection.  story_builder.json may fall back to the
+  # active text connection when that gateway credential is absent.
+  story_agent_deepseek_v4_pro:
+    provider: openrouter
+    kind: text
     options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_master_api.json
-      inputs:
-        positive: { node: "s1284__1325", field: "text" }
-      output_node: "775"        # Image Saver (full pipeline: refine + detail + upscale)
-      timeout_s: 1700           # cold-start model load from the network volume + heavy 29-step er_sde pipeline; stay under the 30-min worker/exec ceiling
+      base_url: https://openrouter.ai/api/v1
+      model: deepseek/deepseek-v4-pro
+      max_tokens: 8192
+      # The interactive Architect must return before its browser surface gives
+      # up.  No automatic retry means one author action is one model attempt;
+      # an explicit retry or model change remains the author's choice.
+      request_timeout_s: 32
+      max_retries: 0
 
-  # ── Generators (prompt → image) ───────────────────────────────────────────── #
-  anima_scene:                  # txt2img, full background (no character/cutout), landscape default
-    provider: comfyui
-    kind: image
+  # Direct DeepSeek is a separate route with its native model id.  It is kept
+  # as an intentional swap target; OpenAICompatProvider reads DEEPSEEK_API_KEY
+  # when this base URL is used.
+  story_agent_deepseek_chat:
+    provider: deepseek
+    kind: text
     options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_scene_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "15"         # SaveImage
-      timeout_s: 1700
-
-  anima_character:              # txt2img + FaceDetailer + Inspyrenet cutout, tall default
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_character_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "20"         # easy imageRemBg (transparent cutout)
-      timeout_s: 1700
-
-  anima_sprite:                 # as character, portrait default (emotion/outfit sprites)
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_sprite_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "20"         # easy imageRemBg (transparent cutout)
-      timeout_s: 1700
-
-  anima_txt2img:                # plain txt2img, full output (general / chat surface)
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_txt2img_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "15"         # SaveImage
-      timeout_s: 1700
-
-  anima_img2img:                # image + text → image (init image via LoadImage, denoise 0.5)
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_img2img_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "15"         # SaveImage
-      timeout_s: 1700
-
-  # ── Utilities (image → image) ─────────────────────────────────────────────── #
-  anima_upscale:                # UltimateSDUpscale 1.5× (RealESRGAN + tiled refine) — "make it larger"
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_upscale_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "15"         # SaveImage
-      timeout_s: 1700
-
-  anima_detailer:               # standalone FaceDetailer pass (refine faces on an existing image)
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_detailer_api.json
-      inputs:
-        positive: { node: "10", field: "text" }
-      output_node: "15"         # SaveImage
-      timeout_s: 1700
-
-  anima_rembg:                  # pure background removal (Inspyrenet) — no prompt
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/anima_rembg_api.json
-      output_node: "20"         # easy imageRemBg
-      timeout_s: 1700
-
-  # --------------------------------------------------------------------------- #
-  # Flux — a second image family (decoupling from Anima-only).
-  #
-  # FLUX.2 [klein] (4B distilled DiT, Apache-licensed) renders with markedly
-  # stronger physical/anatomical coherence than the SDXL-lineage Anima graph,
-  # at the cost of natural-language (not booru-tag) prompting. The graph is the
-  # canonical Flux2 SamplerCustomAdvanced flow: UNETLoader (the .safetensors
-  # diffusion model) + CLIPLoaderGGUF type=flux2 (the q8 text encoder) +
-  # flux2-vae, FluxGuidance(4.0), Flux2Scheduler -> KSamplerSelect(euler) ->
-  # SamplerCustomAdvanced. Distilled -> no negative (BasicGuider). Prompt ->
-  # node 4 (Positive); output -> node 13 (SaveImage). Model paths use forward
-  # slashes; the provider's localize_model_paths() converts to the host
-  # separator. Validated end-to-end against the local ComfyUI (8-step render,
-  # ~37s on the RTX 5070; 20 steps is the workflow default).
-  # --------------------------------------------------------------------------- #
-  flux:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/flux2_klein_api.json
-      inputs:
-        positive: { node: "4", field: "text" }
-      output_node: "13"         # SaveImage
-      timeout_s: 600
+      base_url: https://api.deepseek.com
+      model: deepseek-chat
+      max_tokens: 8192
 
   # --------------------------------------------------------------------------- #
   # Krea2 — Gemma-optimized prompt pipeline. A built-in TextGenerate node runs the
@@ -345,48 +227,6 @@ models:
         positive: { node: "4", field: "text" }
       output_node: "13"         # SaveImage
       timeout_s: 600
-
-  # --------------------------------------------------------------------------- #
-  # Wan — video-model family used as an image generator (reliable physics).
-  #
-  # ComfyUI-WanVideoWrapper pipeline (Wan 2.1 T2V 1.3B, fits the 12 GB 5070 with
-  # tons of headroom — ~2.7 GB peak). num_frames=1 in WanVideoEmptyEmbeds (node 5)
-  # makes it a single still; raise it (4n+1) + swap SaveImage→VHS_VideoCombine for
-  # actual video (the planned image/video flag toggle). NL prompts (not booru tags),
-  # injected at WanVideoTextEncode.positive_prompt (node 4); output SaveImage (node 8).
-  # Models live in ComfyUI: diffusion_models/Wan2_1-T2V-1_3B_bf16, text_encoders/
-  # umt5-xxl-enc-fp8_e4m3fn, vae/Wan2_1_VAE_bf16 (all from HF Kijai/WanVideo_comfy).
-  # The 14B I2V variant is RunPod-bound (won't fit locally). Validated: 512² still
-  # ~12 s; 256²×13-frame clip ~15 s.
-  # --------------------------------------------------------------------------- #
-  wan:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/wan_t2v_api.json
-      inputs:
-        positive: { node: "4", field: "positive_prompt" }
-      output_node: "8"          # SaveImage
-      timeout_s: 600
-
-  # --------------------------------------------------------------------------- #
-  # Wan I2V 14B — the heavy image-to-video MoE, RunPod-only (won't fit the local
-  # 12 GB card). provider:comfyui, but flagged in configs/runpod_models.json so the
-  # per-workflow toggle routes it to the serverless endpoint. 2-expert MoE: HIGH
-  # (Snatch Kiss v11) then LOW (Kijai A14B) via a step-split; init image →
-  # WanVideoImageToVideoEncode; output mp4 via VHS_VideoCombine (node 12).
-  # --------------------------------------------------------------------------- #
-  wan_i2v:
-    provider: comfyui
-    kind: image
-    options:
-      base_url: http://127.0.0.1:8188
-      workflow: ./workflows/wan_i2v_14b_api.json
-      inputs:
-        positive: { node: "7", field: "positive_prompt" }
-      output_node: "12"         # VHS_VideoCombine (mp4)
-      timeout_s: 900
 
   # krea2_turbo_sprite_i2i — EXPRESSION sprites via img2img FROM THE OUTFIT BASE + Inspyrenet
   # cutout. The base image is the style/identity anchor (text alone plateaued at ~5% style

@@ -40,7 +40,7 @@
     { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
     { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories', home: true },
     { id: 'library',    label: 'Library',    icon: '🗂', href: '/library/presets' },
-    { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/graph' },
+    { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/models' },
     { id: 'training',   label: 'Training',   icon: '🎓', href: '/training' },
     { id: 'settings',   label: 'Settings',   icon: '⚙',  href: '/settings/system' },
   ];

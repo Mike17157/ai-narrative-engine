@@ -48,6 +48,6 @@ steps:
 
   - id: picture
     type: image
-    model: anima             # overridden by the active image model
+    model: krea2_turbo        # overridden by the active image model
     when: "{{ reply.data.wants_image }}"
     image_prompt: "{{ describe.data.image_prompt }}"

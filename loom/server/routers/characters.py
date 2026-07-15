@@ -1054,11 +1054,10 @@ def register(app, ctx):
                       "url": f"{img_base}/{oid}/{emo}.png"})
 
             render_batch(
-                provider, batch_prompts, ctx=ctx, out_prefix_template=oprefix,
+                provider, batch_prompts, out_prefix_template=oprefix,
                 cancel=cancelled, seed=SPRITE_SEED,   # fixed seed → consistent set
                 on_progress=lambda d, t: emit({"type": "progress", "done": d, "total": t}),
                 on_result=_on_result,
-                force_local=True,   # the krea2 sprite detailer lives only on local ComfyUI
             )
             return {"ok": True, "rendered": saved["n"], "outfits": len(outfits)}
 

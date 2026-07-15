@@ -130,8 +130,8 @@ class TriageJob(BaseJob):
                     base_url = self._base_url
                     out_node = "9"
                 else:
-                    # Inject into a real workflow (supports split-loaders, Flux, etc.).
-                    model_key = cell.get("model") or "anima"
+                    # Inject into a real workflow (supports split-loaders, etc.).
+                    model_key = cell.get("model") or "krea2_turbo"
                     md = self._ctx.base_settings.models.get(model_key)
                     if md is None or md.kind != "image":
                         self._emit({"type": "cell_error", "key": key,

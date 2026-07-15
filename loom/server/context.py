@@ -6,7 +6,6 @@ The facade owns shared process state; focused mixins own provider selection and 
 from __future__ import annotations
 
 import json
-import os
 import re
 from pathlib import Path
 
@@ -37,39 +36,6 @@ class AppContext(ProviderContextMixin, StorageContextMixin):
         self.base_settings = base_settings
         self.user = user
         self.comfy_url = comfy_url
-        # RunPod config for dynamic GPU scaling
-        rp = user.runpod if hasattr(user, 'runpod') else None
-        self.runpod_config = {
-            # Env var wins so the secret can live in .env (gitignored) rather than user.yaml.
-            "enabled": rp.enabled if rp else True,
-            "api_key": os.environ.get("RUNPOD_API_KEY", "") or (rp.api_key if rp else ""),
-            "serverless_endpoint_id": os.environ.get("RUNPOD_ENDPOINT_ID", "") or (rp.serverless_endpoint_id if rp else ""),
-            "min_instances": rp.min_instances if rp else 0,
-            "max_instances": rp.max_instances if rp else 2,
-            "idle_timeout_s": rp.idle_timeout_s if rp else 5,
-            "queue_delay_s": rp.queue_delay_s if rp else 4,
-            "template_id": rp.template_id if rp else None,
-        }
-
-    def gpu_info(self, refresh: bool = False) -> dict:
-        """The local GPU sampled once at runtime (name/vram_gb/compute_cap). Drives
-        local-vs-cloud workflow placement; pass refresh=True to re-probe."""
-        from ..comfy.hardware import probe_gpu
-        return probe_gpu(refresh=refresh)
-
-    def set_runpod_enabled(self, enabled: bool) -> None:
-        """Toggle RunPod routing on/off and persist to user.yaml."""
-        self.update_runpod_settings(enabled=enabled)
-
-    def update_runpod_settings(self, **changes) -> None:
-        """Persist non-secret RunPod settings and keep the live context in sync."""
-        allowed = {"enabled", "min_instances", "max_instances", "idle_timeout_s", "queue_delay_s"}
-        changes = {key: value for key, value in changes.items() if key in allowed}
-        self.runpod_config.update(changes)
-        user_path = self.root / "user.yaml"
-        raw: dict = yaml.safe_load(user_path.read_text(encoding="utf-8")) if user_path.is_file() else {}
-        raw.setdefault("runpod", {}).update(changes)
-        user_path.write_text(yaml.safe_dump(raw, allow_unicode=True, sort_keys=False), encoding="utf-8")
 
     def reload_settings(self) -> None:
         self.base_settings = load_settings(self.root)

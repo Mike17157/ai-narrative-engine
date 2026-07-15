@@ -435,7 +435,7 @@ def register(app, ctx):
         if loras is None and body.get("lora"):  # single-lora shorthand
             loras = [{"name": body["lora"], "weight": float(body.get("weight", 1.0))}]
         loras = [l for l in (loras or []) if l.get("name")]
-        model_key = body.get("model") or "anima"
+        model_key = body.get("model") or "krea2_turbo"
         prompt = body.get("prompt") or "masterpiece, best quality, 1girl, portrait, detailed"
         negative = body.get("negative")
 

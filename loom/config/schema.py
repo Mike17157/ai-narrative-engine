@@ -678,28 +678,10 @@ class ComfyUISettings(BaseModel):
     console: bool = False
 
 
-class RunPodSettings(BaseModel):
-    """RunPod GPU scaling configuration for dynamic image generation."""
-    enabled: bool = True
-    api_key: str = ""
-    # Serverless endpoint id. When set, batch rendering fans jobs out to this
-    # auto-scaling ComfyUI endpoint instead of managing whole GPU pods.
-    serverless_endpoint_id: str = ""
-    # Scale-to-zero is the cost-safe Serverless default. ``max_instances`` maps
-    # directly to the endpoint's workersMax and to the client batch fan-out cap.
-    min_instances: int = 0
-    max_instances: int = 2
-    idle_timeout_s: int = 5
-    queue_delay_s: int = 4
-    # Optional: specific RunPod template ID for new instances
-    template_id: str | None = None
-
-
 class UserConfig(BaseModel):
     profile: dict[str, Any] = Field(default_factory=dict)
     defaults: dict[str, Any] = Field(default_factory=dict)
     comfyui: ComfyUISettings = Field(default_factory=ComfyUISettings)
-    runpod: RunPodSettings = Field(default_factory=RunPodSettings)
     paths: dict[str, Any] = Field(default_factory=dict)
 
 

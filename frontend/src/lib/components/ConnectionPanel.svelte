@@ -118,7 +118,7 @@
 
 {#if baseEditable}
   <label>{kind === 'image' ? 'ComfyUI URL' : 'Base URL'}</label>
-  <input bind:value={baseUrl} placeholder={kind === 'image' ? 'http://127.0.0.1:8188 or a RunPod URL' : ''} />
+  <input bind:value={baseUrl} placeholder={kind === 'image' ? 'http://127.0.0.1:8188' : ''} />
 {/if}
 
 {#if needsKey}

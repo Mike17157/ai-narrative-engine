@@ -183,22 +183,7 @@ def register(app, ctx):
             from ...comfy.scan import invalidate_scan_cache
             invalidate_scan_cache()
 
-            # Auto-push to RunPod network volume if creds are configured.
-            runpod_job_id = None
-            try:
-                from ...runpod.volume import VolumeConfig
-                from ..routers.runpod import VolumeUploadJob
-                vcfg = VolumeConfig()
-                if vcfg.configured:
-                    models_rel = f"{base_folder}/{rel}"
-                    job = VolumeUploadJob([(models_rel, target)], vcfg)
-                    job.start()
-                    runpod_job_id = job.id
-            except Exception:  # noqa: BLE001
-                pass
-
-            return {"ok": True, "kind": kind, "arch": arch, "family": family, "rel": rel, "name": base,
-                    "runpod_job_id": runpod_job_id}
+            return {"ok": True, "kind": kind, "arch": arch, "family": family, "rel": rel, "name": base}
         except Exception as exc:  # noqa: BLE001
             return JSONResponse({"error": str(exc)}, status_code=500)
         finally:

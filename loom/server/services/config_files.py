@@ -50,31 +50,6 @@ def save_app_flags(root: Path, data: dict) -> dict:
     return cfg
 
 
-# -- per-workflow RunPod inference toggle ------------------------------------
-# Which image models (models.yaml keys) run on the RunPod serverless endpoint instead
-# of local ComfyUI. A flexible "run this workflow on RunPod" switch — the worker image
-# bundles every node pack, so any registered workflow can be flipped to the cloud GPU.
-def load_runpod_models(root: Path) -> list[str]:
-    path = root / "configs" / "runpod_models.json"
-    if path.is_file():
-        try:
-            d = json.loads(path.read_text(encoding="utf-8")) or {}
-            m = d.get("models")
-            if isinstance(m, list):
-                return [str(x) for x in m]
-        except (ValueError, OSError):
-            pass
-    return []
-
-
-def save_runpod_models(root: Path, models: list[str]) -> list[str]:
-    out = sorted({str(x) for x in (models or []) if x})
-    path = root / "configs" / "runpod_models.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps({"models": out}, indent=2), encoding="utf-8")
-    return out
-
-
 # -- story builder -----------------------------------------------------------
 STORY_BUILDER_DEFAULT = {"model": "", "models": {}, "systems": {}, "inventions": {}}
 

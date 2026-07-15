@@ -1001,7 +1001,7 @@ OUTPUT
         outdir = ctx.story_bg_dir(key)
         outdir.mkdir(parents=True, exist_ok=True)
         for index, png in enumerate(render_batch(
-            provider, prompts, ctx=ctx,
+            provider, prompts,
             out_prefix_template=ctx.output_prefix_for(model_id, "story", key),
         )):
             if not png:

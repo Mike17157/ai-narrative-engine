@@ -2,12 +2,9 @@
   import { onMount } from 'svelte';
   import { get, del } from '$lib/api.js';
   import { askConfirm } from '$lib/confirm.svelte.js';
-  import WorkflowImport from '$lib/components/image/WorkflowImport.svelte';
 
-  // The image-model surface, focused on the active pipeline: Anima + the support
-  // models (VAE / CLIP / upscalers / ControlNet) it depends on. The full
-  // cross-family library + organizer lives behind the Graph pane's "Model
-  // library" modal — see ModelLibraryModal.svelte.
+  // The image-model surface, focused on the active pipeline: Krea2 + the support
+  // models (VAE / CLIP / upscalers) it depends on.
   let scan = $state({ items: [], counts: {} });
   let loading = $state(true);
   let err = $state(null);
@@ -63,10 +60,9 @@
   }
 
   const KINDS = ['all', 'checkpoint', 'diffusion', 'lora', 'vae', 'clip', 'controlnet', 'upscale'];
-  // Show only the active pipeline's models: the Anima family + support models (VAE/CLIP/
-  // upscalers/ControlNet, which carry no family). Other families are managed in the
-  // Graph pane's Model library modal.
-  const inScope = (i) => i.family === 'anima' || !i.family;
+  // Krea2 (and its VAE/CLIP/upscaler support models) carry no family tag; everything
+  // else is a leftover from a removed pipeline and stays out of this list.
+  const inScope = (i) => !i.family;
   let items = $derived((scan.items || []).filter((i) =>
     inScope(i) &&
     (kindFilter === 'all' || i.kind === kindFilter) &&
@@ -87,9 +83,7 @@
   }
 </script>
 
-<WorkflowImport onimported={load} />
-
-<div class="hint">The image models for the active pipeline — <b>Anima</b> plus the support models (VAE, CLIP, upscalers, ControlNet) it depends on. Browse other families and file misfiled / loose downloads from the <b>Graph</b> pane's <b>⊞ Model library</b>.</div>
+<div class="hint">The image models for the active pipeline — <b>Krea2</b> plus the support models (VAE, CLIP, upscalers) it depends on.</div>
 
 {#if loading}
   <div class="center">Scanning model tree…</div>

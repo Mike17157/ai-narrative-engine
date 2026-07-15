@@ -1,14 +1,12 @@
 """Shared ComfyUI workflow graph manipulation.
 
-The local ComfyUI provider and the RunPod Serverless provider both send the same
-API-format workflow JSON to a ComfyUI backend; only the transport differs (a
-direct HTTP call to a local server vs. a serverless endpoint that runs ComfyUI in
-a worker). The graph-mutation rules — prompt-token substitution, output-prefix
-and latent-size overrides, and BREAK-region conditioning — must stay *identical*
-between the two, so they live here as pure functions over a graph dict rather
-than being duplicated (and inevitably drifting) in each provider.
+The ComfyUI provider sends an API-format workflow JSON to a ComfyUI backend
+(local or remote). The graph-mutation rules — prompt-token substitution,
+output-prefix and latent-size overrides, and BREAK-region conditioning — live
+here as pure functions over a graph dict rather than being duplicated in the
+provider.
 
-Nothing here touches the network: a provider deep-copies its workflow, calls
+Nothing here touches the network: the provider deep-copies its workflow, calls
 :func:`inject` to prepare the graph, then ships it however it likes.
 """
 

@@ -23,10 +23,8 @@ export function charactersTree() {
 // is gone; everything here renders in the unified subnav bar.
 export function imagesTree() {
   return [
-    { id: 'workflows',   label: 'Workflows',  href: '/images/workflows' },
-    { id: 'graph',       label: 'Graph',      href: '/images/graph' },
-    { id: 'lora',        label: 'Preset Lab', href: '/images/lora/library' },
     { id: 'models',      label: 'Models',     href: '/images/models' },
+    { id: 'lora',        label: 'Preset Lab', href: '/images/lora/library' },
     { id: 'poses',       label: 'Poses',      href: '/images/poses' },
   ];
 }

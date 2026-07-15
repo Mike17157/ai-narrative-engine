@@ -6,7 +6,7 @@ defaults:
   pipeline: chat
   character: aria
   chat_model: opus
-  image_model: anima
+  image_model: krea2_turbo
 comfyui:
   base_url: http://127.0.0.1:8188
   managed: true
@@ -15,20 +15,6 @@ comfyui:
   base_directory: C:\Users\micha\Documents\ComfyUI
   startup_timeout_s: 180
   models_path: C:\Users\micha\Documents\ComfyUI\models
-runpod:
-  api_key: ''
-  serverless_endpoint_id: ''
-  min_instances: 0
-  max_instances: 2
-  idle_timeout_s: 5
-  queue_delay_s: 4
-  template_id: null
-  python: null
-  main_py: null
-  base_directory: null
-  startup_timeout_s: 180
-  models_path: C:\Users\micha\Documents\ComfyUI\models
-  enabled: false
 paths:
   workflows: ./workflows
   models: ./models

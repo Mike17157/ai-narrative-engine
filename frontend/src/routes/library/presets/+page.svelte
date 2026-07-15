@@ -55,15 +55,10 @@
     modelsLoading = false;
   }
 
-  // Image WORKFLOWS (a preset bundles one — not an image "model"). Each runs local or cloud.
+  // Image WORKFLOWS (a preset bundles one — not an image "model").
   let imageWorkflows = $state([]);
   let imageWfItems = $derived([{ value: '', label: 'None — use the active image connection' },
     ...imageWorkflows.map((m) => ({ value: m.key, label: m.key }))]);
-  const IMG_PROVIDERS = [
-    { v: '', label: 'Auto', hint: 'Use the global per-workflow default' },
-    { v: 'local', label: 'Local', hint: 'Run on local ComfyUI' },
-    { v: 'cloud', label: 'Cloud', hint: 'Run on RunPod serverless' },
-  ];
 
   // Which lorebooks bind to each preset (the reverse of the binding) — shown so you can see
   // at a glance what a preset drives.
@@ -265,7 +260,7 @@
     <button class="row" class:on={p.id === selId} onclick={() => pick(p)}>
       <span class="nm">{p.name || p.id}</span>
       <span class="tags">
-        {#if p.image_workflow}<span class="mtag img" title="renders with {p.image_workflow}{p.image_provider ? ' · ' + p.image_provider : ''}">🖼</span>{/if}
+        {#if p.image_workflow}<span class="mtag img" title="renders with {p.image_workflow}">🖼</span>{/if}
         {#if (connections.find((c) => c.id === p.connection)?.provider) === 'ollama'}<span class="mtag local" title="runs on a local model">local</span>{/if}
         <span class="mtag" class:assist={(p.mode || '') === 'assist'} class:rp={(p.mode || '') === 'roleplay'}>
           {p.mode || 'auto'}
@@ -341,16 +336,6 @@
         <label title="The image WORKFLOW this preset renders with (not an image model — a workflow already carries its checkpoints/LoRAs).">Image workflow</label>
         <Combobox items={imageWfItems} value={sel.image_workflow || ''} placeholder="None — active image connection" onpick={(v) => (sel.image_workflow = v)} />
       </div>
-      {#if sel.image_workflow}
-        <div class="erow">
-          <label title="Where this workflow runs.">Run on</label>
-          <div class="seg">
-            {#each IMG_PROVIDERS as p}
-              <button class="segbtn" class:on={(sel.image_provider || '') === p.v} title={p.hint} onclick={() => (sel.image_provider = p.v)}>{p.label}</button>
-            {/each}
-          </div>
-        </div>
-      {/if}
 
       <div class="erow">
         <label title="How the model is framed.">Address</label>

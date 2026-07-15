@@ -56,7 +56,7 @@ class ComfyUIProvider:
                 latent: tuple[int, int] | None = None,
                 flags: dict[str, bool] | None = None) -> tuple[dict, str | None]:
         # Pure graph prep (prompt token, out_prefix, latent, negative, trigger suffix, BREAK
-        # regions) is shared with the RunPod serverless provider; see loom/providers/_workflow.py.
+        # regions) lives in loom/providers/_workflow.py.
         graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix,
                                  latent, flags, prompt_suffix=self.prompt_suffix)
         # Same-OS ComfyUI: model names must use the host separator (backslash on Windows),

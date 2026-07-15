@@ -13,13 +13,8 @@ def register(app, ctx):
         server = get_server(ctx.comfy_url)
         text_conn = ctx.store.active("text")
         image_conn = ctx.store.active("image")
-        rp = ctx.runpod_config
         return {
             "comfyui": {"base_url": server.base_url, "up": server.is_up(), "managed": server.managed},
-            "runpod": {
-                "enabled": rp.get("enabled", True),
-                "configured": bool(rp.get("serverless_endpoint_id") and rp.get("api_key")),
-            },
             "characters": list(ctx.base_settings.characters),
             "pipelines": list(ctx.base_settings.pipelines),
             "profile": ctx.user.profile,
@@ -28,12 +23,6 @@ def register(app, ctx):
             "active_chat_model": (text_conn.model if text_conn else None),
             "active_image_model": (image_conn.model if image_conn else ctx.user.defaults.get("image_model")),
         }
-
-    @app.post("/api/runpod/enabled")
-    def set_runpod_enabled(body: dict) -> dict:
-        enabled = bool(body.get("enabled", True))
-        ctx.set_runpod_enabled(enabled)
-        return {"enabled": enabled}
 
     @app.get("/api/server/info")
     def server_info() -> dict:

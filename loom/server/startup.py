@@ -4,7 +4,6 @@ Each hook is isolated: a failure in one never blocks the others or the server bo
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
@@ -86,124 +85,7 @@ def warm_comfyui(ctx) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 3. models_manifest.json regeneration
-# ---------------------------------------------------------------------------
-
-# Mirrors LOADER_INPUTS from runpod/worker/gen_worker.py — which folders each
-# (class_type, input_key) pair belongs under on the volume.
-_LOADER_INPUTS: dict[tuple[str, str], str] = {
-    ("CheckpointLoaderSimple", "ckpt_name"): "checkpoints",
-    ("CheckpointLoader", "ckpt_name"): "checkpoints",
-    ("UNETLoader", "unet_name"): "diffusion_models",
-    ("UNet loader with Name (Image Saver)", "unet_name"): "diffusion_models",
-    ("LoraLoader", "lora_name"): "loras",
-    ("LoraLoaderModelOnly", "lora_name"): "loras",
-    ("VAELoader", "vae_name"): "vae",
-    ("CLIPLoader", "clip_name"): "text_encoders",
-    ("DualCLIPLoader", "clip_name1"): "text_encoders",
-    ("DualCLIPLoader", "clip_name2"): "text_encoders",
-    ("CLIPVisionLoader", "clip_name"): "clip_vision",
-    ("ControlNetLoader", "control_net_name"): "controlnet",
-    ("UpscaleModelLoader", "model_name"): "upscale_models",
-    ("IPAdapterModelLoader", "ipadapter_file"): "ipadapter",
-    ("SAMLoader", "model_name"): "sams",
-    ("UltralyticsDetectorProvider", "model_name"): "ultralytics",
-}
-_MODEL_EXTS = (".safetensors", ".ckpt", ".pt", ".pth", ".bin", ".onnx", ".gguf", ".sft")
-_PLACEHOLDER = "REPLACE_WITH"
-_SUBDIR_TO_VOLUME = {
-    "checkpoints": "models/checkpoints",
-    "diffusion_models": "models/diffusion_models",
-    "loras": "models/loras",
-    "vae": "models/vae",
-    "text_encoders": "models/text_encoders",
-    "clip_vision": "models/clip_vision",
-    "embeddings": "models/embeddings",
-    "ipadapter": "models/ipadapter",
-    "controlnet": "models/controlnet",
-    "upscale_models": "models/upscale_models",
-    "sams": "models/sams",
-}
-
-
-def _volume_key(subdir: str, name: str) -> str:
-    prefix = _SUBDIR_TO_VOLUME.get(subdir, f"models/{subdir}")
-    return f"{prefix}/{name}"
-
-
-def _preset_lora_manifest_rows(root: Path, models_dir: Path) -> list[dict]:
-    """Manifest rows for every image-preset LoRA that has a Civitai mapping AND is present
-    locally under models/loras. Shared by the startup regen and gen_worker.py."""
-    from ..comfy.civitai import resolve_preset_loras
-    rows: list[dict] = []
-    for item in resolve_preset_loras(root):
-        local = models_dir / "loras" / Path(*item["rel"].split("/"))
-        if local.is_file():
-            rel = f"loras/{item['rel']}"
-            rows.append({"local": rel, "key": _volume_key("loras", item["rel"]),
-                         "bytes": local.stat().st_size})
-    return rows
-
-
-def regenerate_manifest(ctx) -> None:
-    """Scan all workflow JSONs and rewrite runpod/worker/models_manifest.json
-    with every model that is both referenced by a workflow AND present locally.
-
-    This keeps the manifest accurate as workflows and local files evolve, so
-    ``upload_models.py --check`` always reflects the current state."""
-    try:
-        workflows_dir = ctx.root / "workflows"
-        manifest_path = ctx.root / "runpod" / "worker" / "models_manifest.json"
-        bd = ctx.comfy_base_dir()
-        models_dir = (bd / "models") if bd else None
-
-        if not workflows_dir.is_dir() or not manifest_path.parent.is_dir():
-            return
-        if not models_dir or not models_dir.is_dir():
-            return
-
-        model_refs: dict[str, str] = {}  # forward-slash name -> subdir
-        for wf in sorted(workflows_dir.glob("*.json")):
-            try:
-                graph = json.loads(wf.read_text(encoding="utf-8"))
-            except Exception:  # noqa: BLE001
-                continue
-            for node in graph.values():
-                if not isinstance(node, dict):
-                    continue
-                ct = node.get("class_type") or ""
-                for k, v in (node.get("inputs") or {}).items():
-                    if not (isinstance(v, str) and v.lower().endswith(_MODEL_EXTS)):
-                        continue
-                    if _PLACEHOLDER in v:
-                        continue
-                    subdir = _LOADER_INPUTS.get((ct, k))
-                    if subdir:
-                        model_refs[v.replace("\\", "/")] = subdir
-
-        manifest: dict[str, dict] = {}  # volume key -> row (dedupes preset/workflow overlap)
-        for name, subdir in sorted(model_refs.items()):
-            local = models_dir / subdir / Path(*name.split("/"))
-            if local.is_file():
-                key = _volume_key(subdir, name)
-                manifest[key] = {"local": f"{subdir}/{name}", "key": key,
-                                 "bytes": local.stat().st_size}
-
-        # Image-preset LoRAs are injected at RENDER time (not in any workflow JSON), so the
-        # workflow scan above never sees them. Fold them in explicitly — that's what carries
-        # the preset stacks to the runpod volume via upload_models.py.
-        for item in _preset_lora_manifest_rows(ctx.root, models_dir):
-            manifest[item["key"]] = item
-
-        rows = [manifest[k] for k in sorted(manifest)]
-        manifest_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
-        log.info("startup: manifest regenerated — %d model(s)", len(rows))
-    except Exception:  # noqa: BLE001
-        log.exception("startup: manifest regeneration failed")
-
-
-# ---------------------------------------------------------------------------
-# 4. LoRA stack validation
+# 3. LoRA stack validation
 # ---------------------------------------------------------------------------
 
 def validate_lora_stacks(ctx) -> None:
@@ -240,14 +122,13 @@ def validate_lora_stacks(ctx) -> None:
 
 
 # ---------------------------------------------------------------------------
-# 5. Image-preset LoRA auto-download (Civitai)
+# 4. Image-preset LoRA auto-download (Civitai)
 # ---------------------------------------------------------------------------
 
 def download_preset_loras(ctx) -> None:
     """Fetch any image-preset LoRA missing locally from Civitai (configs/civitai_loras.json),
     in a background thread so large downloads never block boot. No-op without a managed
-    ComfyUI loras dir or a CIVITAI_API_TOKEN. On success, refreshes the scan cache and the
-    runpod manifest so the new files are immediately uploadable."""
+    ComfyUI loras dir or a CIVITAI_API_TOKEN. On success, refreshes the scan cache."""
     try:
         from ..comfy.civitai import ensure_preset_loras
         bd = ctx.comfy_base_dir()
@@ -262,7 +143,6 @@ def download_preset_loras(ctx) -> None:
                     from ..comfy.scan import invalidate_scan_cache
                     invalidate_scan_cache()
                     ctx._loras_cache = None
-                    regenerate_manifest(ctx)
                     log.info("startup: civitai preset-LoRA download complete — %d new file(s)",
                              len(summary["downloaded"]))
             except Exception:  # noqa: BLE001

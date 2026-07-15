@@ -6,9 +6,9 @@ every machine — they live on Civitai in the public "Anima base v1.0" artist-st
 ecosystem. ``configs/civitai_loras.json`` maps each bare name to the Civitai model
 *version* that provides it.
 
-This module is the single resolver both the app (startup auto-download) and the
-runpod tooling (manifest inclusion) use, so "which LoRAs does a preset need and
-where does each come from" lives in exactly one place.
+This module is the single resolver the app's startup auto-download uses, so
+"which LoRAs does a preset need and where does each come from" lives in
+exactly one place.
 
 Downloads require a Civitai API token (``CIVITAI_API_TOKEN`` / ``CIVITAI_TOKEN``);
 the public download endpoint returns 401 without one. With no token set, the

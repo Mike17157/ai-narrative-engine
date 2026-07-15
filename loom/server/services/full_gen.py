@@ -168,7 +168,7 @@ def generate_full_character(ctx, key: str, emit=None, cancelled=None) -> dict:
         "latent": ctx.pose_latent(emo),
     } for emo in EMOTION_KEYS]
     results = render_batch(
-        sprov, sprite_prompts, ctx=ctx,
+        sprov, sprite_prompts,
         out_prefix_template=ctx.output_prefix_for(smid, "sprite", key),
         cancel=cancelled,
         on_progress=lambda d, t: emit({"type": "progress", "done": d, "total": t}),

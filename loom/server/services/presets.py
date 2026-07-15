@@ -60,9 +60,8 @@ def _default_preset() -> dict:
             "connection": "", "model": "", "mode": "",
             # Image side — the unified preset bundles the IMAGE WORKFLOW too (not an image
             # "model"; a workflow already encodes its checkpoints/LoRAs). `image_workflow` is a
-            # models.yaml image key; `image_provider` picks where it runs ("" = global default,
-            # "local" = ComfyUI, "cloud" = RunPod serverless); `image_preset` is the LoRA "look".
-            "image_workflow": "", "image_provider": "", "image_preset": "",
+            # models.yaml image key; `image_preset` is the LoRA "look".
+            "image_workflow": "", "image_preset": "",
             # Lorebooks this preset composes (the universal container — world info, sprites,
             # functions/scripts). A list of book ids.
             "lorebooks": [],
@@ -251,7 +250,7 @@ def _clean_preset(raw: dict) -> dict:
     p = _default_preset()
     p.update({k: v for k, v in (raw or {}).items()
               if k in ("id", "name", "description", "group", "order", "connection", "model",
-                       "mode", "image_workflow", "image_provider", "image_preset", "lorebooks",
+                       "mode", "image_workflow", "image_preset", "lorebooks",
                        "system", "author_note", "author_depth", "post_history",
                        "params", "stop", "reasoning_effort")})
     p["id"] = str(p.get("id") or "").strip() or "preset"
@@ -266,7 +265,6 @@ def _clean_preset(raw: dict) -> dict:
     p["model"] = str(p.get("model") or "").strip()
     p["mode"] = p["mode"] if p.get("mode") in _MODES else ""
     p["image_workflow"] = str(p.get("image_workflow") or "").strip()
-    p["image_provider"] = p["image_provider"] if p.get("image_provider") in ("", "local", "cloud") else ""
     p["image_preset"] = str(p.get("image_preset") or "").strip()
     p["lorebooks"] = [str(b).strip() for b in (p.get("lorebooks") or []) if str(b).strip()]
     p["system"] = str(p.get("system") or "")

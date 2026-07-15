@@ -3,7 +3,7 @@
 // workflow + test-render state survives navigating between Image sub-routes.
 import { get, post } from './api.js';
 import { consumeSse } from './sse.js';
-import { app, setActiveImage } from './app.svelte.js';
+import { app } from './app.svelte.js';
 
 // Persisted test prompt + a suite of camera angles for evaluating a model/LoRA
 // from every side. Each is SFW (rating `safe`) with quality anchors; swap the
@@ -62,74 +62,14 @@ const _testCells = () =>
 
 export const img = $state({
   workflow: null,
-  injects: {},
-  sections: {},     // { prefix: { name, color, order, desc } } from meta.json — drives NodeTree grouping
-  keyNodes: [],     // node IDs pinned to the Essentials section (checkpoint, LoRA anchor, samplers)
-  activeSection: null, // currently focused section key (null = all visible)
-  description: '',  // workflow-level prose (meta.json description) shown in the graph pane
-  recipes: {},      // { id: { label, desc, flags, variant, latent, sections } } — Compose presets
-  activeRecipe: null, // selected Compose preset id (dims non-active sections, drives the info panel)
   choices: {},
-  objectInfo: {}, // slim ComfyUI node schema (class_type -> {inputs, outputs})
-  embeddings: [], // textual-inversion embedding names (for the text-encode picker)
+  objectInfo: {}, // slim ComfyUI node schema (class_type -> {inputs, outputs}) — feeds combo-type sweep params
   loading: false,
   msg: null,
   test: null, // { phase, progress, node, images, error }
   testInitImage: null, // data-URL source image for testing an img2img workflow
   testPrompt: _lsGet() || 'rio \\(blue archive\\), 1girl, safe, masterpiece, best quality, detailed background', // your subject; persisted globally, rendered from every angle
-  nodeSizes: {}, // per-block size overrides: { [nodeId]: { nodeW } }
-  layoutNonce: 0, // bump to request a graph relayout (e.g. after a prompt box grew)
-  familyMap: {}, // { relForwardSlash: family } for ckpt/diffusion/lora — strict node-dropdown filtering
-  wfFamily: ''   // the active workflow's family (its node model pickers show only this family's files)
 });
-
-// Load the family data the graph editor needs: a file→family map (from the scan) and the active
-// workflow's own family (from /loras/bases), so node model dropdowns can be scoped to that family.
-export async function loadGraphFamilies() {
-  try {
-    const scan = await get('/comfy/models');
-    img.familyMap = Object.fromEntries((scan.items || [])
-      .filter((i) => i.family && ['lora', 'checkpoint', 'diffusion'].includes(i.kind))
-      .map((i) => [(i.rel || '').replace(/\\/g, '/'), i.family]));
-  } catch { /* scan unavailable */ }
-  try {
-    const bases = await get('/loras/bases');
-    img.wfFamily = bases.find((b) => b.key === app.activeImage)?.family || '';
-  } catch { /* none */ }
-}
-
-// Strict family filter for a node's model-picker options. Non-model widgets pass through unchanged;
-// model widgets keep only files of the active workflow's family. No-op when the family is unknown.
-const _MODEL_WIDGETS = new Set(['ckpt_name', 'unet_name', 'lora_name']);
-const _folderFam = (n) => { const p = (n || '').replace(/\\/g, '/').split('/'); return p.length > 1 ? p[0].toLowerCase() : ''; };
-const _famOfFile = (rel) => img.familyMap[(rel || '').replace(/\\/g, '/')] || _folderFam(rel);
-export function familyFilteredOptions(widgetName, options) {
-  if (!_MODEL_WIDGETS.has(widgetName) || !img.wfFamily || img.wfFamily === 'unknown' || !Array.isArray(options)) return options;
-  return options.filter((o) => _famOfFile(o) === img.wfFamily);
-}
-
-export async function loadObjectInfo() {
-  try { img.objectInfo = await get('/comfy/object_info'); } catch { img.objectInfo = {}; }
-  try { img.embeddings = await get('/comfy/embeddings'); } catch { img.embeddings = []; }
-}
-
-// Toggle `embedding:NAME` in a text-encode node's text field (the lazy-embedding
-// picker). Prepends when off, strips when on.
-export function hasEmbedding(id, field, name) {
-  const t = String(img.workflow?.[id]?.inputs?.[field] ?? '');
-  return new RegExp(`(^|[\\s,])embedding:${name}([\\s,]|$)`).test(t);
-}
-export function toggleEmbedding(id, field, name) {
-  const n = img.workflow?.[id];
-  if (!n?.inputs) return;
-  let t = String(n.inputs[field] ?? '');
-  if (hasEmbedding(id, field, name)) {
-    t = t.replace(new RegExp(`embedding:${name}\\s*,?\\s*`, 'g'), '').replace(/^\s*,\s*/, '').trim();
-  } else {
-    t = `embedding:${name}, ${t}`.trim();
-  }
-  n.inputs[field] = t;
-}
 
 // True when the active workflow is img2img — it has a LoadImage node that needs a
 // source image fed in. The test grid must supply one (and so does the chat flow).
@@ -146,297 +86,18 @@ export async function loadWorkflow() {
   const r = await get('/workflow?model=' + encodeURIComponent(app.activeImage));
   img.loading = false;
   if (r.error) { img.workflow = null; img.msg = { err: true, text: r.error }; return; }
-  img.workflow = r.json; img.injects = r.injects || {};
-  img.sections = r.sections || {};
-  img.keyNodes = r.key_nodes || [];
-  img.description = r.description || '';
-  img.recipes = r.recipes || {};
-  img.activeRecipe = null;
-  img.activeSection = null;
-}
-
-// Map a Compose recipe's boolean flags onto the live workflow's ComfySwitchNode
-// gates, located by their _meta.title (mirrors loom/providers/_workflow.apply_flags
-// so the editor and the backend agree on what each flag toggles). Mutates img.workflow.
-const FLAG_TITLES = {
-  detailer: ['Use Detailer'],
-  upscale: ['Using USDU'],
-  highrez: ['Use HighRez'],
-};
-export function applyRecipeFlags(recipe) {
-  const wf = img.workflow;
-  if (!wf || !recipe?.flags) return;
-  const titleFlag = {};
-  for (const [flag, titles] of Object.entries(FLAG_TITLES))
-    for (const t of titles) titleFlag[t] = flag;
-  for (const n of Object.values(wf)) {
-    if (n?.class_type !== 'ComfySwitchNode') continue;
-    const flag = titleFlag[n._meta?.title];
-    if (flag && flag in recipe.flags) (n.inputs ||= {}).switch = !!recipe.flags[flag];
-  }
-  img.layoutNonce = (img.layoutNonce || 0) + 1;
+  img.workflow = r.json;
 }
 
 export async function loadChoices() { img.choices = await get('/comfy/choices'); }
 
-// Set + persist the selection; routes/images/+layout.svelte reacts and loads it. Refresh the active
-// workflow's family so node model dropdowns re-scope to it.
-export function selectWorkflow(v) {
-  setActiveImage(v);
-  get('/loras/bases').then((bases) => { img.wfFamily = bases.find((b) => b.key === v)?.family || ''; }).catch(() => {});
+export async function loadObjectInfo() {
+  try { img.objectInfo = await get('/comfy/object_info'); } catch { img.objectInfo = {}; }
 }
 
-// --- topology edits (operate on the live workflow; caller rebuilds the graph) ---
-export function connectLink(targetId, inputName, sourceId, slot = 0) {
-  const t = img.workflow?.[targetId];
-  if (!t || !inputName) return;
-  (t.inputs ||= {})[inputName] = [String(sourceId), Number(slot) || 0];
-}
-// Map each OUTPUT slot of a node to its own same-typed INPUT link (model->model, clip->clip, …)
-// using objectInfo, so the node can be SPLICED out: a consumer of one of its outputs gets rewired
-// to that input's source. Falls back to {} for nodes with no matching passthrough.
-function passthroughSources(node) {
-  const def = (img.objectInfo || {})[node?.class_type];
-  const outs = def?.outputs || [];
-  const src = {};
-  outs.forEach((o, slot) => {
-    for (const f in (node.inputs || {})) {
-      const v = node.inputs[f];
-      if (!Array.isArray(v)) continue;
-      const di = def?.inputs?.find((x) => x.name === f);
-      if (di && o && di.type === o.type) { src[slot] = v; break; }
-    }
-  });
-  return src;
-}
-
-export function deleteNode(id) {
-  if (!img.workflow) return;
-  // SPLICE, don't sever: before removing the node, wire each consumer of its outputs to the node's
-  // matching-typed input source (deleting a LoRA bridges prev model/clip -> next). No match -> unset.
-  const pass = passthroughSources(img.workflow[id]);
-  delete img.workflow[id];
-  for (const n of Object.values(img.workflow)) {
-    for (const [k, v] of Object.entries(n.inputs || {})) {
-      if (Array.isArray(v) && String(v[0]) === String(id)) {
-        const repl = pass[v[1]];
-        if (repl) n.inputs[k] = [String(repl[0]), Number(repl[1]) || 0];
-        else delete n.inputs[k];
-      }
-    }
-  }
-}
-export function deleteLink(targetId, inputName) {
-  const n = img.workflow?.[targetId];
-  if (n?.inputs && inputName in n.inputs) delete n.inputs[inputName];
-}
-
-// Toggle a node's bypass flag. Bypassed nodes are kept in the graph (so it's
-// reversible + saved) but skipped at render time — their consumers are rerouted
-// to the same-typed input source (passthrough), like ComfyUI's mute/bypass.
-export function toggleBypass(id) {
-  const n = img.workflow?.[id];
-  if (!n) return;
-  (n._meta ||= {}).bypassed = !n._meta.bypassed;
-}
-export function isBypassed(id) {
-  return !!img.workflow?.[id]?._meta?.bypassed;
-}
-
-// A deep clone of the workflow with every bypassed node rewired out: for each of
-// its outputs, consumers are repointed to the node's same-typed input source.
+// A deep clone of the workflow snapshotted for a test render.
 function executableWorkflow() {
-  const g = structuredClone($state.snapshot(img.workflow) || {});
-  for (const id of Object.keys(g)) {
-    if (!g[id]?._meta?.bypassed) continue;
-    // map each output slot -> the node's matching-typed input link (same splice as deleteNode)
-    const passSrc = passthroughSources(g[id]);
-    // reroute consumers of this node, then drop it
-    for (const cid in g) {
-      const ins = g[cid]?.inputs;
-      if (!ins) continue;
-      for (const f in ins) {
-        const v = ins[f];
-        if (Array.isArray(v) && v[0] === id) {
-          if (passSrc[v[1]]) ins[f] = passSrc[v[1]];  // passthrough
-          else delete ins[f];                          // no match → leave unset
-        }
-      }
-    }
-    delete g[id];
-  }
-  return g;
-}
-
-export function addNode(classType) {
-  if (!img.workflow) img.workflow = {};
-  const ids = Object.keys(img.workflow).map(Number).filter((n) => !Number.isNaN(n));
-  const id = String((ids.length ? Math.max(...ids) : 0) + 1);
-  const def = img.objectInfo?.[classType];
-  const inputs = {};
-  for (const di of def?.inputs || []) {
-    if (di.widget && di.default != null) inputs[di.name] = di.default; // seed widget defaults
-  }
-  img.workflow[id] = { class_type: classType, inputs, _meta: { title: classType } };
-  return id;
-}
-
-// Append a LoRA to the model/clip chain (bundled checkpoint or split UNet+CLIP),
-// repointing whatever consumed the old tail onto the new loader. Mirrors the
-// backend inject_models, but adds one node interactively. lora_name is left blank
-// to fill in on the canvas.
-export function chainLora() {
-  const g = img.workflow;
-  if (!g) return;
-  const first = (types) => Object.keys(g).find((id) => types.includes(g[id].class_type));
-  const ckpt = first(['CheckpointLoaderSimple', 'CheckpointLoader', 'CheckpointLoaderSimpleShared']);
-  const unet = first(['UNETLoader', 'UnetLoaderGGUF']);
-  const clip = first(['CLIPLoader', 'DualCLIPLoader', 'TripleCLIPLoader', 'CLIPLoaderGGUF', 'DualCLIPLoaderGGUF']);
-  let baseModel, baseClip;
-  if (ckpt) { baseModel = [ckpt, 0]; baseClip = [ckpt, 1]; }
-  else if (unet) { baseModel = [unet, 0]; baseClip = clip ? [clip, 0] : null; }
-  else { img.msg = { err: true, text: 'no checkpoint / UNet to chain a LoRA from' }; return; }
-
-  const loaders = Object.keys(g).filter((id) => ['LoraLoader', 'LoraLoaderModelOnly'].includes(g[id].class_type));
-  const referenced = new Set(loaders.map((id) => (Array.isArray(g[id].inputs?.model) ? g[id].inputs.model[0] : null)));
-  let tailModel, tailClip;
-  if (loaders.length) {
-    const tail = loaders.find((id) => !referenced.has(id)) || loaders[loaders.length - 1];
-    tailModel = [tail, 0]; tailClip = [tail, 1];
-  } else { tailModel = baseModel; tailClip = baseClip; }
-
-  const ids = Object.keys(g).map(Number).filter((n) => !Number.isNaN(n));
-  const id = String((ids.length ? Math.max(...ids) : 0) + 1);
-  const hasClip = !!tailClip;
-  g[id] = hasClip
-    ? { class_type: 'LoraLoader', inputs: { lora_name: '', strength_model: 1, strength_clip: 1, model: tailModel, clip: tailClip }, _meta: { title: 'LoRA' } }
-    : { class_type: 'LoraLoaderModelOnly', inputs: { lora_name: '', strength_model: 1, model: tailModel }, _meta: { title: 'LoRA' } };
-
-  for (const [nid, n] of Object.entries(g)) {
-    if (nid === id) continue;
-    for (const [k, v] of Object.entries(n.inputs || {})) {
-      if (!Array.isArray(v) || v.length !== 2) continue;
-      if (v[0] === tailModel[0] && v[1] === tailModel[1]) n.inputs[k] = [id, 0];
-      else if (hasClip && v[0] === tailClip[0] && v[1] === tailClip[1]) n.inputs[k] = [id, 1];
-    }
-  }
-  img.layoutNonce++;
-}
-
-// Drop a model file onto a graph node → file it in the right folder (if not
-// already installed) and set that node's model field to it. class_type tells us
-// the field + kind.
-const NODE_MODEL = {
-  CheckpointLoaderSimple: ['ckpt_name', 'checkpoint'], CheckpointLoader: ['ckpt_name', 'checkpoint'],
-  UNETLoader: ['unet_name', 'diffusion'], UnetLoaderGGUF: ['unet_name', 'diffusion'],
-  VAELoader: ['vae_name', 'vae'], LoraLoader: ['lora_name', 'lora'], LoraLoaderModelOnly: ['lora_name', 'lora'],
-  CLIPLoader: ['clip_name', 'clip'], DualCLIPLoader: ['clip_name1', 'clip'],
-  ControlNetLoader: ['control_net_name', 'controlnet'], UpscaleModelLoader: ['model_name', 'upscale'],
-  SAMLoader: ['model_name', 'sam'], UltralyticsDetectorProvider: ['model_name', 'ultralytics'],
-};
-
-// Multi-slot LoRA nodes (easy loraStack) hold up to 10 lora_N_name slots instead of a single
-// lora_name, so a dropped file goes into the next free slot rather than one fixed field.
-const LORA_STACK_NODES = new Set(['easy loraStack']);
-
-export function nodeTakesModel(classType) { return !!NODE_MODEL[classType] || LORA_STACK_NODES.has(classType); }
-
-// Place a resolved LoRA into the next empty slot of an `easy loraStack`, activating it.
-// Returns the slot's name-field (for the status message), or null if full.
-function dropLoraIntoStack(n, rel) {
-  n.inputs ||= {};
-  let slot = 0;
-  for (let k = 1; k <= 10; k++) {
-    const v = n.inputs[`lora_${k}_name`];
-    if (v === undefined || v === null || v === '' || v === 'None') { slot = k; break; }
-  }
-  if (!slot) return null;                                   // all 10 slots taken
-  n.inputs[`lora_${slot}_name`] = rel;
-  if (n.inputs[`lora_${slot}_strength`] == null) n.inputs[`lora_${slot}_strength`] = 1.0;
-  const num = Number(n.inputs.num_loras || 1);
-  if (slot > num) n.inputs.num_loras = slot;               // grow the visible slot count
-  if (n.inputs.toggle === false) n.inputs.toggle = true;   // the stack is off by default — turn it on so the drop applies
-  return `lora_${slot}_name`;
-}
-
-// Heuristic CLIP/text-encoder ↔ model-architecture check. Best-effort by filename
-// — catches the clear mismatches (Anima needs Qwen, Flux needs t5/clip_l).
-function clipFamily(name) {
-  const n = (name || '').toLowerCase();
-  if (n.includes('qwen')) return 'qwen';
-  if (n.includes('t5') || n.includes('umt5')) return 't5';
-  if (n.includes('gemma')) return 'gemma';
-  if (n.includes('clip_l') || n.includes('clip-l') || n.includes('clip_g') || n.includes('clip-g') || n.includes('vit-l') || n.includes('vit-g')) return 'clip';
-  if (n.includes('llava') || n.includes('llama')) return 'llama';
-  return null;
-}
-function diffusionModelName(wf) {
-  for (const node of Object.values(wf || {})) {
-    if (['UNETLoader', 'UnetLoaderGGUF'].includes(node.class_type)) return node.inputs?.unet_name || '';
-    if (['CheckpointLoaderSimple', 'CheckpointLoader'].includes(node.class_type)) return node.inputs?.ckpt_name || '';
-  }
-  return '';
-}
-export function clipCompatWarning(wf, clipName) {
-  const model = diffusionModelName(wf).toLowerCase();
-  if (!model || !clipName) return null;
-  const fam = clipFamily(clipName);
-  const n = clipName.toLowerCase();
-  if (model.includes('anima') || model.includes('anisnuff')) {
-    // Anima needs a Qwen text encoder; anything else (incl. embeddings files) fails to load.
-    if (!n.includes('qwen')) return `Anima needs a Qwen text encoder (e.g. qwen_3_06b_base) — “${clipName}” isn't one and will fail to load.`;
-  } else if (model.includes('flux')) {
-    if (fam && fam !== 't5' && fam !== 'clip') return `Flux expects t5xxl + clip_l — “${clipName}” looks like ${fam}.`;
-  }
-  return null;
-}
-
-export async function dropModelOnNode(nodeId, file) {
-  const n = img.workflow?.[nodeId];
-  if (!n || !file) return;
-  const isStack = LORA_STACK_NODES.has(n.class_type);
-  const map = NODE_MODEL[n.class_type];
-  if (!map && !isStack) { img.msg = { err: true, text: `“${n.class_type}” doesn't take a model file` }; return; }
-  const kind = isStack ? 'lora' : map[1];
-  img.msg = { text: `Adding ${file.name}…` };
-  try {
-    // already installed for this kind? reference it instead of re-uploading.
-    const res = await post('/comfy/models/resolve', { kind, filename: file.name });
-    let rel = res.data?.found ? res.data.rel : null;
-    if (!rel) {
-      const fd = new FormData();
-      fd.append('file', file);
-      const up = await fetch(`/api/comfy/models/upload?kind=${encodeURIComponent(kind)}`, { method: 'POST', body: fd });
-      const d = await up.json().catch(() => ({}));
-      if (!d.ok) { img.msg = { err: true, text: d.error || 'upload failed' }; return; }
-      rel = d.rel;
-    }
-    let field;
-    if (isStack) {
-      field = dropLoraIntoStack(n, rel);
-      if (!field) { img.msg = { err: true, text: 'LoRA stack is full (10 slots)' }; return; }
-    } else {
-      field = map[0];
-      (n.inputs ||= {})[field] = rel;
-    }
-    await loadObjectInfo();   // refresh the combo so the new file is selectable
-    img.layoutNonce++;
-    const warn = kind === 'clip' ? clipCompatWarning(img.workflow, rel) : null;
-    img.msg = warn ? { err: true, text: '⚠ ' + warn + ' (set anyway)' }
-                   : { ok: true, text: `${rel} → ${n.class_type} · ${field}` };
-  } catch (e) { img.msg = { err: true, text: String(e) }; }
-}
-
-export async function saveWorkflow(jsonFromEditor) {
-  const payload = jsonFromEditor ?? $state.snapshot(img.workflow);
-  img.msg = { text: 'Saving…' };
-  const r = await post('/workflow', { model: app.activeImage, json: payload });
-  if (r.data?.ok) {
-    if (jsonFromEditor) img.workflow = jsonFromEditor;
-    img.msg = { ok: true, text: '✓ Saved' };
-  } else {
-    img.msg = { err: true, text: r.data?.error || 'save failed' };
-  }
+  return structuredClone($state.snapshot(img.workflow) || {});
 }
 
 export function openTest() {
@@ -459,7 +120,7 @@ export async function cancelTest() {
 export async function runTest() {
   _testCancelled = false;
   const base = (img.testPrompt || '').trim();
-  const graph = executableWorkflow();  // bypassed nodes rerouted out
+  const graph = executableWorkflow();
   img.test = { phase: 'running', mode: 'tags', cells: _testCells() };  // fresh random tags each run
   for (const cell of img.test.cells) {
     if (_testCancelled || !img.test) break;
@@ -486,7 +147,7 @@ export async function composeTestCells(mode, src) {
   }
   const cells = (r.data?.cells || []).map((c) => ({ ...c, view: c.label, pct: null, image: null, error: null }));
   if (!cells.length) { img.msg = { err: true, text: 'no cells composed — pick a subject or character' }; return; }
-  const graph = executableWorkflow();  // bypassed nodes rerouted out
+  const graph = executableWorkflow();
   img.test = { phase: 'running', mode, cells };
   for (const cell of img.test.cells) {
     if (_testCancelled || !img.test) break;
@@ -536,7 +197,7 @@ export function sweepValues(min, max, count) {
 export async function runSweep(param, values) {
   _testCancelled = false;
   const base = (img.testPrompt || '').trim();
-  const snap = executableWorkflow();  // bypassed nodes rerouted out
+  const snap = executableWorkflow();
   img.test = {
     phase: 'running', mode: 'sweep', param: param.label,
     cells: values.map((v) => ({ label: `${param.field} = ${v}`, value: v, pct: null, image: null, error: null }))

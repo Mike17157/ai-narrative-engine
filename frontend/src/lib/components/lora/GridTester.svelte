@@ -42,7 +42,7 @@
   let importOpen  = $state(false);
   let importKind  = $state('checkpoint'); // which importer is active: 'checkpoint' | 'lora'
   let importDrop  = $state(false);  // dragging over the modal drop zone
-  let importFiles = $state([]);     // [{name, status, kind, family, rel, err, runpod}]
+  let importFiles = $state([]);     // [{name, status, kind, family, rel, err}]
   let dropKind    = $state(null);   // which inline import button is being dragged over
 
   // --- pools (scoped to the chosen family) ---
@@ -65,8 +65,6 @@
   let availCkpts = $derived(famCkpts.filter((v) => !selCkpts.includes(v)));
   let availLoras = $derived(famLoras);
   let extraCkpts = $derived(selCkpts.filter((v) => !famCkpts.includes(v)));
-  // Every distinct LoRA referenced by any stack — for sync/reconcile + ext-badge detection.
-  let allLoraNames = $derived([...new Set(selStacks.flatMap((s) => s.layers.map((l) => l.name).filter(Boolean)))]);
   const stackIsExt = (s) => s.layers.some((l) => l.name && !famLoras.includes(l.name));
 
   // --- toggle helpers ---
@@ -220,7 +218,7 @@
     presetMsg = null;
     syncMsg = null;
     try { localStorage.removeItem(CACHE_KEY); } catch {}
-    // The $effect re-persists the now-empty selection to localStorage + /api/runpod/grid-config.
+    // The $effect re-persists the now-empty selection to localStorage.
   }
 
   async function renderAll() {
@@ -311,22 +309,7 @@
         const res = await fetch('/api/comfy/models/smart-upload', { method: 'POST', body: fd });
         const data = await res.json();
         if (data.ok) {
-          importFiles[idx] = { ...importFiles[idx], status: 'done', kind: data.kind, family: data.family, rel: data.rel,
-                               runpod: data.runpod_job_id ? 'syncing' : null };
-          if (data.runpod_job_id) {
-            const es = new EventSource(`/api/jobs/${data.runpod_job_id}/stream`);
-            es.onmessage = (e) => {
-              let ev; try { ev = JSON.parse(e.data); } catch { return; }
-              if (ev.type === 'done') {
-                importFiles[idx] = { ...importFiles[idx], runpod: ev.status === 'done' ? 'synced' : 'err' };
-                es.close();
-              } else if (ev.type === 'file_error') {
-                importFiles[idx] = { ...importFiles[idx], runpod: 'err', runpodErr: ev.error };
-                es.close();
-              }
-            };
-            es.onerror = () => { importFiles[idx] = { ...importFiles[idx], runpod: 'err' }; es.close(); };
-          }
+          importFiles[idx] = { ...importFiles[idx], status: 'done', kind: data.kind, family: data.family, rel: data.rel };
         } else {
           importFiles[idx] = { ...importFiles[idx], status: 'err', err: data.error || 'upload failed' };
         }
@@ -364,21 +347,9 @@
         if (typeof saved.cfgOpen === 'boolean') cfgOpen = saved.cfgOpen;
       }
     } catch {}
-    // Server config is the authoritative selection (survives clearing localStorage / other browsers).
-    try {
-      const r = await fetch('/api/runpod/grid-config');
-      if (r.ok) {
-        const cfg = await r.json();
-        if (cfg.checkpoints?.length) selCkpts = cfg.checkpoints;
-        // Server stores flat LoRA names; reconstruct single-layer stacks only if nothing local.
-        if (cfg.loras?.length && !selStacks.length)
-          selStacks = cfg.loras.map((n) => ({ id: uid(), layers: [{ name: n, weights: [0.8] }] }));
-      }
-    } catch {}
   });
 
   let _saveTimer;
-  let _gridSaveTimer;
   $effect(() => {
     // Touch reactive state to establish tracking
     const snap = { fam, selCkpts: [...selCkpts], selStacks: $state.snapshot(selStacks), cells: { ...cells }, cfgOpen };
@@ -386,17 +357,6 @@
     _saveTimer = setTimeout(() => {
       try { localStorage.setItem(CACHE_KEY, JSON.stringify(snap)); } catch {}
     }, 600);
-
-    // Also persist checkpoint + flattened lora selection server-side so startup reconcile knows what to sync.
-    const ckpts = [...selCkpts];
-    const loras = [...allLoraNames];
-    clearTimeout(_gridSaveTimer);
-    _gridSaveTimer = setTimeout(() => {
-      fetch('/api/runpod/grid-config', {
-        method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ checkpoints: ckpts, loras }),
-      }).catch(() => {});
-    }, 1200);
   });
 
   // Build a triage cell dict. Diffusion models (split UNet) use the model-based path so
@@ -542,7 +502,6 @@
     {/if}
     {#if running}<span class="m pulse">generating…</span>{/if}
     <div class="runbar-sep"></div>
-    <span class="m">Cloud volume sync is managed in Settings → System → RunPod</span>
     <button class="ghost save-preset" onclick={saveAsPreset} disabled={savingPreset || !selCell}
       title="Save the selected cell — its checkpoint + the column's full LoRA stack — as an image preset">
       {savingPreset ? 'Saving…' : '＋ Save preset'}
@@ -634,10 +593,6 @@
               {:else if f.status === 'done'}
                 <span class="ftag done">{f.kind} · {f.family}</span>
                 <span class="frel">{f.rel}</span>
-                {#if f.runpod === 'syncing'}<span class="ftag rp-sync">RunPod ↑</span>
-                {:else if f.runpod === 'synced'}<span class="ftag rp-ok">RunPod ✓</span>
-                {:else if f.runpod === 'err'}<span class="ftag rp-err" title={f.runpodErr || 'upload failed'}>RunPod ✗</span>
-                {/if}
               {:else if f.status === 'err'}
                 <span class="ftag err" title={f.err}>error</span>
                 <span class="ferr">{f.err}</span>
@@ -876,9 +831,6 @@
   .ftag.uploading { background: rgba(255,200,0,.12); color: #e6b800; }
   .ftag.done { background: rgba(80,200,120,.14); color: var(--good); }
   .ftag.err { background: rgba(255,60,60,.12); color: var(--bad); }
-  .ftag.rp-sync { background: rgba(109,140,255,.12); color: var(--accent); animation: pulse 1.2s ease-in-out infinite; }
-  .ftag.rp-ok   { background: rgba(80,200,120,.14); color: var(--good); }
-  .ftag.rp-err  { background: rgba(255,60,60,.12); color: var(--bad); }
   .frel { font-size: 11px; color: var(--faint); font-family: ui-monospace, monospace; }
   .ferr { font-size: 11px; color: var(--bad); }
   .modal-foot { margin-top: 16px; display: flex; justify-content: flex-end; }

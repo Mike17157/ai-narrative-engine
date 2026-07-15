@@ -38,18 +38,12 @@ def _register_defaults() -> None:
 
         return ComfyUIProvider(options)
 
-    def _runpod_serverless(options: dict[str, Any]) -> ImageProvider:
-        from .runpod_serverless_provider import RunPodServerlessProvider
-
-        return RunPodServerlessProvider(options)
-
     # Anthropic uses its own SDK; every other text provider is OpenAI-compatible
     # and goes through one adapter (the base_url distinguishes them).
     _TEXT_PROVIDERS["anthropic"] = _anthropic
     global _TEXT_DEFAULT
     _TEXT_DEFAULT = _openai_compat
     _IMAGE_PROVIDERS["comfyui"] = _comfyui
-    _IMAGE_PROVIDERS["runpod_serverless"] = _runpod_serverless
 
 
 def build_provider(model: ModelDef) -> TextProvider | ImageProvider:

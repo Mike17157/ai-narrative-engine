@@ -116,7 +116,7 @@ export function startPruneTimer(ms = 5000) {
 }
 
 // --- Bounded-concurrency render queue --------------------------------------
-// Image renders hit the GPU / RunPod; firing many in parallel overloads it. This semaphore
+// Image renders hit the local GPU; firing many in parallel overloads it. This semaphore
 // caps total in-flight renders across ALL jobs at MAX_CONCURRENT. Text/streaming generation
 // (storyboard, scene/character extraction) bypasses it — those are CPU-light on the server
 // and stream over SSE, so they don't compete for render slots. Use limitedPost() in render

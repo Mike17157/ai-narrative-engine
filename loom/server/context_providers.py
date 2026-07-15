@@ -131,15 +131,10 @@ class ProviderContextMixin:
             return None
         return build_provider(ModelDef(provider=conn.provider, kind="text", options=conn.to_model_options()))
 
-    def image_provider(self, model_id: str | None = None, output_variant: str | None = None,
-                       provider_override: str | None = None):
+    def image_provider(self, model_id: str | None = None, output_variant: str | None = None):
         """A provider for an image WORKFLOW — an explicit workflow id if given, else the active
         image connection, plus the resolved model id. (provider, id) or (None, error_message).
-        output_variant ('full'|'cutout') overrides whatever the model definition says.
-
-        `provider_override` picks where the workflow runs (a preset's `image_provider`):
-          'cloud' → force RunPod serverless · 'local' → force local ComfyUI ·
-          '' / None → the global default (configs/runpod_models.json flags it per workflow)."""
+        output_variant ('full'|'cutout') overrides whatever the model definition says."""
         from ..providers.comfyui_provider import ComfyUIProvider
 
         conn = self.store.active("image")
@@ -151,46 +146,10 @@ class ProviderContextMixin:
         if output_variant:
             opts["output_variant"] = output_variant
 
-        # Where does this workflow run? Explicit override wins; otherwise the per-workflow
-        # global default (runpod_models.json). 'cloud' needs the serverless endpoint + key.
-        rp = self.runpod_config
-        # The header's cloud toggle is a global circuit breaker.  A model may be
-        # RunPod-flagged, but it must still resolve locally when the user turns
-        # cloud inference off for this session.
-        cloud_ready = bool(rp.get("enabled", True) and rp.get("api_key") and rp.get("serverless_endpoint_id"))
-        want_cloud = (provider_override == "cloud") or \
-            (provider_override in (None, "") and model_id in self.runpod_models())
-        # Hardware fallback: if the caller didn't force a target and this workflow's models
-        # aren't installed locally, it literally can't run on this machine — prefer cloud
-        # rather than failing on a missing-model error. Probe is cached; guarded so any
-        # hiccup falls back to the prior (local) behaviour.
-        if not want_cloud and provider_override in (None, "") and cloud_ready:
-            try:
-                from ..comfy.hardware import estimate_vram_need
-                wf_path = self.workflow_path(model_id)
-                bd = self.comfy_base_dir()
-                if wf_path and wf_path.is_file() and bd:
-                    graph = json.loads(wf_path.read_text(encoding="utf-8"))
-                    if estimate_vram_need(graph, bd / "models")["missing"]:
-                        want_cloud = True
-            except Exception:  # noqa: BLE001
-                pass
-        if want_cloud and cloud_ready:
-            from ..providers.runpod_serverless_provider import RunPodServerlessProvider
-            ropts = dict(opts)
-            ropts["endpoint_id"] = rp["serverless_endpoint_id"]
-            ropts["api_key"] = rp["api_key"]
-            return RunPodServerlessProvider(ropts), model_id
-
         if conn and conn.base_url:
             opts["base_url"] = conn.base_url
         opts["flags"] = {**opts.get("flags", {}), **self.image_flags()}
         return ComfyUIProvider(opts), model_id
-
-    def runpod_models(self) -> set[str]:
-        """Image-model keys flagged to run on RunPod serverless (configs/runpod_models.json)."""
-        from .services import config_files as _cf
-        return set(_cf.load_runpod_models(self.root))
 
     def image_flags(self) -> dict:
         """Global pipeline toggles for renders (configs/app.json) → the workflow's switch
@@ -225,39 +184,33 @@ class ProviderContextMixin:
         The active (or per-render `image_preset`) LoRA stack is injected before return — the
         single chokepoint every normal render path funnels through.
 
-        Chat-surface roles ('chat'/'scene') take the ACTIVE preset's image WORKFLOW + provider
-        (local/cloud) + look — the unified preset bundles them. Pipeline roles (base/sprite/
-        style) keep using image_roles.json. Backward-compatible: a preset with no
-        image_workflow falls straight through to the legacy role resolution."""
-        prov_override = ""
+        Chat-surface roles ('chat'/'scene') take the ACTIVE preset's image WORKFLOW + look —
+        the unified preset bundles them. Pipeline roles (base/sprite/style) keep using
+        image_roles.json. Backward-compatible: a preset with no image_workflow falls
+        straight through to the legacy role resolution."""
         if not override and role in ("chat", "scene"):
             from .services import presets as _P
             ap = _P.active_preset(self.root)
             if (ap.get("image_workflow") or "") in self.base_settings.models:
                 override = ap["image_workflow"]
-                prov_override = ap.get("image_provider") or ""
                 if image_preset is None and ap.get("image_preset"):
                     image_preset = ap["image_preset"]
         model_id = self.role_model(role, override)
         variant = None if override else self.role_extra_opts(role).get("output_variant")
-        provider, mid = self.image_provider(model_id, output_variant=variant,
-                                            provider_override=prov_override)
+        provider, mid = self.image_provider(model_id, output_variant=variant)
         if provider is not None:
             self._apply_image_preset(provider, image_preset)
         return provider, mid
 
     def preset_image_provider(self, preset: dict | None, override: str | None = None,
                               output_variant: str | None = None):
-        """The unified image entry: a PRESET's image workflow + provider (local/cloud) + look.
-        `preset.image_workflow` is the workflow (override wins); `preset.image_provider` routes
-        local⇄cloud; `preset.image_preset` is the LoRA stack. Falls back to the active image
-        connection when the preset names no workflow. The single chokepoint, same as
-        role_image_provider, so the LoRA look is always injected."""
+        """The unified image entry: a PRESET's image workflow + look. `preset.image_workflow`
+        is the workflow (override wins); `preset.image_preset` is the LoRA stack. Falls back
+        to the active image connection when the preset names no workflow. The single
+        chokepoint, same as role_image_provider, so the LoRA look is always injected."""
         preset = preset or {}
         workflow = override or (preset.get("image_workflow") or None)
-        provider, mid = self.image_provider(
-            workflow, output_variant=output_variant,
-            provider_override=preset.get("image_provider") or "")
+        provider, mid = self.image_provider(workflow, output_variant=output_variant)
         if provider is not None:
             self._apply_image_preset(provider, preset.get("image_preset") or None)
         return provider, mid

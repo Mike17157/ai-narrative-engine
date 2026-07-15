@@ -36,7 +36,6 @@ from .routers import (
     models_conn,
     personas,
     presets,
-    runpod,
     server,
     stt,
     tags,
@@ -97,7 +96,6 @@ _ROUTERS = (
     (comfy, "images"),
     (personas, "profiles"),
     (jobs, "jobs"),
-    (runpod, "admin"),
     (lorebooks, "stories"),
     (presets, "models"),
     (image_presets, "images"),
@@ -226,15 +224,7 @@ def create_app(root: str | Path = ".") -> FastAPI:
     startup.warm_scan_cache(ctx)
     startup.reap_stale_jobs()
     startup.warm_comfyui(ctx)            # background; launches managed ComfyUI so it's ready
-    startup.download_preset_loras(ctx)   # background; refreshes the manifest when done
-    startup.regenerate_manifest(ctx)
+    startup.download_preset_loras(ctx)   # background
     startup.validate_lora_stacks(ctx)
-
-    # Reconcile the RunPod volume against the saved LoRA grid selection so the remote
-    # worker always matches what's configured here without any manual sync step.
-    try:
-        runpod.start_reconcile_if_configured(ctx)
-    except Exception:  # noqa: BLE001 — never block startup on sync
-        pass
 
     return app

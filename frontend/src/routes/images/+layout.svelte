@@ -1,7 +1,7 @@
 <script>
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
-  import { img, loadWorkflow, loadChoices, runTest, cancelTest, saveTestPrompt, TEST_COUNT,
+  import { img, loadWorkflow, loadChoices, loadObjectInfo, runTest, cancelTest, saveTestPrompt, TEST_COUNT,
            workflowNeedsInit, sweepParams, sweepValues, runSweep, composeTestCells } from '$lib/images.svelte.js';
   import { app } from '$lib/app.svelte.js';
   import { chars, loadChars } from '$lib/characters.svelte.js';
@@ -73,9 +73,9 @@
 
   let path = $derived($page.url.pathname);
   // Full-bleed pages own their own scroll/layout (graph canvas, LoRA grid tester).
-  let fullBleed = $derived(path === '/images/graph' || path.startsWith('/images/lora'));
+  let fullBleed = $derived(path.startsWith('/images/lora'));
 
-  onMount(() => { loadChoices(); loadChars(); });
+  onMount(() => { loadChoices(); loadObjectInfo(); loadChars(); });
 
   let loadedFor = $state(null);
   $effect(() => {
@@ -84,9 +84,9 @@
   });
 </script>
 
-<!-- Images section: the Graph / LoRA / Models / Poses / Connection subnav is now
-     rendered by the root layout from imagesTree() (lib/nav.svelte.js). This
-     layout just wraps the content and hosts the shared test-render modal. -->
+<!-- Images section: the Models / LoRA / Poses subnav is now rendered by the
+     root layout from imagesTree() (lib/nav.svelte.js). This layout just
+     wraps the content and hosts the shared test-render modal. -->
 <div class="page">
   <div class="col" class:full={fullBleed}>
     {#if img.msg}<div class="status" class:ok={img.msg.ok} class:err={img.msg.err}>{img.msg.text}</div>{/if}
