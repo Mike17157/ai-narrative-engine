@@ -1,6 +1,5 @@
 {
- "narrator": "deepseek/deepseek-v4-pro",
- "scribe": "deepseek/deepseek-v4-pro",
- "fallback": "openai/gpt-4.1-mini",
- "director": "deepseek/deepseek-v4-pro"
+ "narrator": "story_glm52",
+ "scribe": "story_glm52",
+ "director": "story_glm52"
 }

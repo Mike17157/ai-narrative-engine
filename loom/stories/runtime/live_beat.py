@@ -239,6 +239,9 @@ def director_live_beat_block(beat: Mapping[str, Any] | None) -> str:
     ]
     if pressure:
         lines.append(f"- Immediate pressure: {pressure}")
+    tone = _text(beat.get("tone"), limit=60)
+    if tone:
+        lines.append(f"- Register this plays in: {tone}")
     if focus_key:
         focus_line = focus_key + (f" ({focus_role})" if focus_role else "")
         if focus_surface:

@@ -58,6 +58,74 @@ models:
       request_timeout_s: 32
       max_retries: 0
 
+  # Hermes 4 70B — narrative-tuned (Nous Research), the narrator role's prose voice.
+  # Hybrid reasoner; the play endpoint pins reasoning_effort: none for prose.
+  story_hermes4_70b:
+    provider: openrouter
+    kind: text
+    options:
+      base_url: https://openrouter.ai/api/v1
+      model: nousresearch/hermes-4-70b
+      max_tokens: 8192
+      request_timeout_s: 45
+      max_retries: 1
+
+  # Narrator shootout candidates (same guards; bench A/Bs them on the same scenario).
+  story_glm52:
+    provider: openrouter
+    kind: text
+    options:
+      base_url: https://openrouter.ai/api/v1
+      model: z-ai/glm-5.2
+      max_tokens: 8192
+      request_timeout_s: 45
+      max_retries: 1
+  story_kimi_k3:
+    provider: openrouter
+    kind: text
+    options:
+      base_url: https://openrouter.ai/api/v1
+      model: moonshotai/kimi-k3
+      max_tokens: 8192
+      request_timeout_s: 45
+      max_retries: 1
+  story_sonnet45:
+    provider: openrouter
+    kind: text
+    options:
+      base_url: https://openrouter.ai/api/v1
+      model: anthropic/claude-sonnet-4-5
+      max_tokens: 8192
+      request_timeout_s: 45
+      max_retries: 1
+  # DeepSeek V4 Pro — cheap long-context narrative model (~$0.44/M in, $0.87/M out),
+  # multimodal on this OpenRouter route (also serves vision_describer).
+  # THE BASE: every text surface (narrator/scribe/director roles, pipeline stage
+  # presets, story_builder models) points here unless explicitly overridden.
+  story_deepseek_v4p:
+    provider: openrouter
+    kind: text
+    options:
+      base_url: https://openrouter.ai/api/v1
+      model: deepseek/deepseek-v4-pro
+      max_tokens: 8192
+      request_timeout_s: 45
+      max_retries: 1
+
+  # MiniMax M3 — fast reasoning MoE via OpenRouter, kept as a bench/swap candidate.
+  # The timeout/retry guards matter: OpenRouter routes m3 to backends of wildly
+  # varying speed, and an unguarded call can hang a turn for minutes (observed
+  # 201s on one turn).
+  story_minimax_m3:
+    provider: openrouter
+    kind: text
+    options:
+      base_url: https://openrouter.ai/api/v1
+      model: minimax/minimax-m3
+      max_tokens: 8192
+      request_timeout_s: 45
+      max_retries: 1
+
   # Direct DeepSeek is a separate route with its native model id.  It is kept
   # as an intentional swap target; OpenAICompatProvider reads DEEPSEEK_API_KEY
   # when this base URL is used.

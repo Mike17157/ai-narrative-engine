@@ -1,8 +1,8 @@
 {
   "model": "",
   "story_agent": {
-    "label": "Kimi K3 via OpenRouter",
-    "model": "moonshotai/kimi-k3",
+    "label": "DeepSeek V4 Pro via OpenRouter",
+    "model": "story_agent_deepseek_v4_pro",
     "connection": "openai",
     "fallback": "active",
     "fallback_connection": "openai",
@@ -15,16 +15,16 @@
     }
   },
   "models": {
-    "workshop": "qwen/qwen-2.5-72b-instruct",
-    "spine": "qwen/qwen-2.5-72b-instruct",
-    "storyboard": "qwen/qwen-2.5-72b-instruct",
-    "sim_director": "deepseek/deepseek-chat",
-    "sim_actor": "z-ai/glm-4.7-flash",
-    "characters": "qwen/qwen-2.5-72b-instruct",
-    "locations": "qwen/qwen-2.5-72b-instruct",
-    "wardrobe": "qwen/qwen-2.5-72b-instruct",
-    "base_image": "anthropic/claude-sonnet-4-5",
-    "emotion": "anthropic/claude-haiku-4-5"
+    "workshop": "story_deepseek_v4p",
+    "spine": "story_deepseek_v4p",
+    "storyboard": "story_deepseek_v4p",
+    "sim_director": "story_deepseek_v4p",
+    "sim_actor": "story_deepseek_v4p",
+    "characters": "story_deepseek_v4p",
+    "locations": "story_deepseek_v4p",
+    "wardrobe": "story_deepseek_v4p",
+    "base_image": "story_deepseek_v4p",
+    "emotion": "story_deepseek_v4p"
   },
   "systems": {},
   "creation_profiles": {

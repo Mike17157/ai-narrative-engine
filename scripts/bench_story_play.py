@@ -64,6 +64,33 @@ SCENARIOS = {
             "I follow wherever she leads.",
         ],
     },
+    # Original school-arc ensemble (see scripts/gen_school_arc.py) — same continuity-probe shape,
+    # pointed at a fresh 7-character cast to A/B the director/engine fixes against.
+    "school": {
+        "story": "undergrowth",
+        "allowed_present": {"kaito", "kuroda_aoi", "koharu_yamane", "sera_kiyomi", "minami_yui",
+                            "hana_asai", "rina"},
+        "plants": [
+            {"token": "whistle", "check_from": 8},
+            {"token": "clover", "check_from": 9},
+        ],
+        "turns": [
+            "I walk into the classroom, turning my late grandmother's tin whistle over in my "
+            "pocket, and go find Kaito.",
+            "I ask Kaito if he's heard anything odd about the grove at night.",
+            "Kuroda Aoi, will you show me the clover patch you always disappear into, after "
+            "school today?",
+            "I ask Koharu what her fieldwork notebook says about the fence line.",
+            "I mention I should get to homeroom before the bell rings.",
+            "I ask Sera if her family's office keeps old maps of the grove.",
+            "I help Minami sort the lunch schedule for a while.",
+            "I watch the clock and wonder how much longer the day will drag.",
+            "I reach into my pocket and feel the small ridged shape there, turning it over "
+            "without looking at it.",
+            "The school day is ending. I look toward the back fence and ask if it's time to go.",
+            "I follow wherever Aoi leads.",
+        ],
+    },
 }
 
 # ── Critic rubric — the scene-loop axes + the two harness axes ───────────────────────
@@ -107,7 +134,7 @@ CRITIC_SYS = (
 )
 
 
-def _post(url: str, body: dict, timeout: int = 300) -> dict:
+def _post(url: str, body: dict, timeout: int = 900) -> dict:
     req = urllib.request.Request(url, data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:

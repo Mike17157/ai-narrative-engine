@@ -265,6 +265,14 @@ def _h_scene(sm: StoryMaster, d: dict) -> None:
             "opened": int(w.get("step") or 0), "goal": "", "pressure": "", "exit": "",
             "theme": "", "tone": "", "roles": {}}
     w["scene_plan"] = plan
+    # The StoryMaster orchestrator refreshes the whole-story doctrine BEFORE this scene is
+    # planned, so the local plan below is informed by it. No-op (and no latency added) when
+    # the master model has no active connection — see storymaster.direct_scene.
+    from .storymaster import direct_scene, doctrine_block
+    try:
+        direct_scene(sm)
+    except Exception:  # noqa: BLE001 — orchestration is an enhancement, never a blocker
+        pass
     if sm.provider is None:
         return
     from .narration import generate_guarded
@@ -282,7 +290,7 @@ def _h_scene(sm: StoryMaster, d: dict) -> None:
                   + "\n".join(cast_lines)) if cast_lines else ""
     loc_history = _location_history(sm.st, d.get("loc_id") or "")
     protagonist_surface = _protagonist_surface(sm.st, present=known_characters)
-    bits = [b for b in (plot_direction(w, sm.st), cast_block,
+    bits = [b for b in (plot_direction(w, sm.st), doctrine_block(w), cast_block,
                         people_by_location(w, sm.location),
                         (f"LOCATION HISTORY: {loc_history}" if loc_history else ""),
                         protagonist_surface) if b]
@@ -327,6 +335,10 @@ def scene_block(plan: dict) -> str:
            f"- what the scene is for: {plan['goal']}"]
     if plan.get("pressure"):
         out.append(f"- keep alive: {plan['pressure']}")
+    if plan.get("tone"):
+        out.append(f"- register this plays in: {plan['tone']}")
+    if plan.get("theme"):
+        out.append(f"- the human tension beneath the surface: {plan['theme']}")
     if plan.get("exit"):
         out.append(f"- it ends when: {plan['exit']}")
     return "\n".join(out)
@@ -633,9 +645,17 @@ def plot_direction(world: dict, st) -> str:
             out.append("- planned moments to weave in: " + "; ".join(sg["events"]))
         if i + 1 < len(stages):
             out.append(f"- after that: {stages[i + 1]['title']}")
+        doctrine = world.get("doctrine") if isinstance(world.get("doctrine"), dict) else {}
+        if doctrine.get("target_tone"):
+            out.append(f"- pacing calls for this stretch to play in: {doctrine['target_tone']}"
+                      + (" (tension should be rising)" if doctrine.get("escalate") else ""))
         return "\n".join(out)
+    doctrine = world.get("doctrine") if isinstance(world.get("doctrine"), dict) else {}
     plot = world.get("plot") if isinstance(world.get("plot"), dict) else {}
-    q = plot.get("question") or getattr(st, "premise", "") or ""
+    # The StoryMaster orchestrator's reconciled question wins when it has run; it was
+    # synthesized FROM premise_parts/world.pressure/arc_design, not invented fresh — see
+    # storymaster.direct_scene. Falls back to the cheap per-turn derivation otherwise.
+    q = doctrine.get("central_question") or plot.get("question") or getattr(st, "premise", "") or ""
     if not q and not plot.get("focus"):
         return ""
     out = ["STORY (the arc — advance the story TOWARD this; escalate, complicate, or pay off a "
@@ -647,6 +667,9 @@ def plot_direction(world: dict, st) -> str:
         out.append(f"- press toward: {plot['focus']}")
     if plot.get("threads"):
         out.append("- open threads: " + "; ".join(plot["threads"]))
+    if doctrine.get("target_tone"):
+        out.append(f"- pacing calls for this stretch to play in: {doctrine['target_tone']}"
+                  + (" (tension should be rising)" if doctrine.get("escalate") else ""))
     return "\n".join(out)
 
 

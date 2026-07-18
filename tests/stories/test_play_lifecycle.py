@@ -83,6 +83,51 @@ def test_activated_contract_controls_scene_and_loop_reset():
     assert doc["levels"]["runtime"]["loop"]["iteration"] == 2
 
 
+def test_free_text_scene_follow_moves_player_and_clock():
+    contract = compile_authored_scenario(_ready_loop_story())
+    assert contract["ready"], contract["issues"]
+    _doc, world, runtime, fresh = ensure_runtime({}, contract)
+    assert fresh
+    opening = prepare_turn(contract, world, runtime, {})
+    assert opening["id"] == "crossing"
+    # The opening scene has never been narrated: turn one gets the establishing beat.
+    assert runtime["scene_just_opened"]
+    record_observation(runtime, text="The ferry horn sounds.", player_input="I listen.", present=[])
+    assert not runtime["scene_just_opened"]
+
+    def say(text):
+        return prepare_turn(contract, world, runtime,
+                            {"history": [{"role": "user", "text": text}]})
+
+    # Text naming no authored place leaves the scene, roster, and clock alone.
+    scene = say("I look around at the sea.")
+    assert scene["id"] == "crossing"
+    assert world["day"]["slot"] == "morning"
+    assert world["location"] == "ferry"
+    assert not runtime["scene_just_opened"]
+
+    # Mentioning two candidate scenes is a tie: the matcher stays put.
+    scene = say("I think about the ferry and the harbor.")
+    assert scene["id"] == "crossing"
+    assert world["day"]["slot"] == "morning"
+
+    # A unique destination match moves the player, and the clock advances
+    # forward to the scene's declared slot.
+    scene = say("I get off and walk down to the harbor.")
+    assert scene["id"] == "ambush"
+    assert world["location"] == "harbor"
+    assert world["day"]["slot"] == "night"
+    assert world["scene"]["members"] == ["player"]
+    # The transition re-arms the establishing beat for the new scene.
+    assert runtime["scene_just_opened"]
+
+    # The clock never rewinds: the morning-only ferry scene is out of reach.
+    scene = say("I go back to the ferry.")
+    assert scene["id"] == "ambush"
+    assert world["location"] == "harbor"
+    assert world["day"]["slot"] == "night"
+
+
 def test_interview_story_cannot_play_until_explicit_activation():
     client = _isolated_client()
     key = client.post("/api/stories/new", json={"name": "Lifecycle test"}).json()["key"]
@@ -129,5 +174,6 @@ def test_interview_story_cannot_play_until_explicit_activation():
 
 if __name__ == "__main__":
     test_activated_contract_controls_scene_and_loop_reset()
+    test_free_text_scene_follow_moves_player_and_clock()
     test_interview_story_cannot_play_until_explicit_activation()
     print("ok — interview play lifecycle")

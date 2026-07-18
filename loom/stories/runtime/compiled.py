@@ -17,6 +17,7 @@ from __future__ import annotations
 from copy import deepcopy
 import hashlib
 import json
+import re
 from typing import Any
 
 from . import scenario as _scenario
@@ -118,6 +119,100 @@ def _scene_by_id(contract: dict[str, Any], scene_id: str) -> dict[str, Any] | No
     return next((scene for scene in scene_catalog(contract) if scene["id"] == scene_id), None)
 
 
+_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _scene_alias_tokens(scene: dict[str, Any]) -> set[str]:
+    """Words a player would naturally type to name this scene's place or title."""
+    tokens: set[str] = set()
+    for value in (scene.get("id"), _scene_location(scene), scene.get("title") or scene.get("name")):
+        for token in _WORD_RE.findall(str(value or "").lower()):
+            if len(token) >= 4:
+                tokens.add(token)
+    return tokens
+
+
+def _alias_score(tokens: set[str], text: str, words: list[str]) -> int:
+    """Distinct alias tokens found in the player's text.
+
+    A token scores when it appears at a word boundary (``club`` matches
+    "clubroom" and "garden" matches "gardens" via the free right edge) or when
+    a typed word is a close prefix of it (``roof`` → "rooftop").  The loose
+    right edge plus the ≤3-letter prefix window keeps "home" from ever
+    matching "homeroom".
+    """
+    score = 0
+    for token in tokens:
+        if re.search(r"\b" + re.escape(token), text):
+            score += 1
+        elif any(token.startswith(word) and len(token) - len(word) <= 3 for word in words):
+            score += 1
+    return score
+
+
+def _free_text_scene_follow(contract: dict[str, Any], runtime: dict[str, Any],
+                            body: dict[str, Any]) -> str | None:
+    """Let ordinary free-text movement open an authored scene.
+
+    Compiled play used to transition only through explicit scene offers, so a
+    player typing "I walk up to the rooftop garden" stayed frozen in the
+    opening scene (and its roster) forever.  Here the latest player message is
+    matched against scene id/location/title tokens.  A transition happens only
+    on a strictly unique best match, the clock may move forward (never
+    backward) to reach the scene's declared slot, and the scene must pass the
+    same eligibility gates an explicit offer would.  Any ambiguity leaves the
+    current scene, roster, and clock untouched.
+    """
+    history = body.get("history") or []
+    text = next((str(message.get("text") or "") for message in reversed(history)
+                 if isinstance(message, dict) and message.get("role") == "user"), "")
+    if not text.strip():
+        text = str(body.get("text") or "")
+    text = text.lower()
+    if not text.strip():
+        return None
+    words = [word for word in _WORD_RE.findall(text) if len(word) >= 4]
+
+    scenario_state = _scenario.normalize(runtime.get("scenario_state"))
+    active = str(scenario_state.get("active_scene") or "")
+    # The current scene scores too: "I think about the ferry and the harbor"
+    # said while standing on the ferry is a tie, and a tie must stay put.
+    best: dict[str, Any] | None = None
+    best_score = 0
+    tied = False
+    for scene in scene_catalog(contract):
+        score = _alias_score(_scene_alias_tokens(scene), text, words)
+        if score > best_score:
+            best, best_score, tied = scene, score, False
+        elif score == best_score and score > 0:
+            tied = True
+    if best is None or tied or best["id"] == active:
+        return None
+
+    # The clock may advance to meet the scene's slot, but never rewinds: a
+    # scene whose day has already passed simply stays out of reach.
+    slots = [slot for slot in (best.get("slots") or []) if slot in DAY_SLOTS]
+    tentative = deepcopy(scenario_state)
+    if slots and tentative["time"] not in slots:
+        later = sorted((slot for slot in slots
+                        if DAY_SLOTS.index(slot) > DAY_SLOTS.index(tentative["time"])),
+                       key=DAY_SLOTS.index)
+        if not later:
+            return None
+        tentative["time"] = later[0]
+    eligible = {scene["id"] for scene in eligible_scenes(contract, tentative,
+                                                         allow_travel=True)}
+    if best["id"] not in eligible:
+        return None
+    runtime["scenario_state"] = tentative
+    try:
+        _open_scene(contract, runtime, best["id"], allow_travel=True)
+    except ScenarioTransitionError:
+        runtime["scenario_state"] = scenario_state
+        return None
+    return best["id"]
+
+
 def arm_director_events(contract: dict[str, Any], runtime: dict[str, Any]) -> list[str]:
     """Arm private authored events whose time/scene/entity gates now hold.
 
@@ -167,6 +262,9 @@ def _open_scene(contract: dict[str, Any], runtime: dict[str, Any], scene_id: str
     if isinstance(participants, list):
         scenario_state["present"] = [str(k) for k in participants if k]
     runtime["scenario_state"] = scenario_state
+    # A freshly opened scene has not been narrated yet: the next prose pass gets
+    # the establishing-beat length budget instead of the mid-scene one.
+    runtime["scene_just_opened"] = True
     return scene
 
 
@@ -203,6 +301,8 @@ def _fresh_runtime(contract: dict[str, Any]) -> tuple[dict[str, Any], dict[str, 
         "baseline_world": deepcopy(baseline),
         "loop": {"iteration": 1, "returner_memory": []},
         "event_status": {},
+        # The opening scene has never been narrated: turn one establishes it.
+        "scene_just_opened": True,
     }
     return baseline, runtime
 
@@ -265,6 +365,13 @@ def prepare_turn(contract: dict[str, Any], world: dict, runtime: dict, body: dic
             raise ScenarioTransitionError("that move is not an available authored scene right now")
         _open_scene(contract, runtime, candidates[0]["id"], allow_travel=True)
         scenario_state = _scenario.normalize(runtime.get("scenario_state"))
+    elif scenario_state.get("active_scene"):
+        # Free-text play: the player's own words can move them between authored
+        # scenes.  The matcher is deliberately conservative — it fires only on
+        # a strictly unique location/title match and otherwise leaves the
+        # standing scene, roster, and clock exactly as they were.
+        _free_text_scene_follow(contract, runtime, body)
+        scenario_state = _scenario.normalize(runtime.get("scenario_state"))
     elif not scenario_state.get("active_scene"):
         opening_id = str(_opening(contract).get("scene_id") or "")
         if opening_id:
@@ -321,6 +428,9 @@ def record_observation(runtime: dict, *, text: str, player_input: str, present: 
     if (player_input or "").strip():
         _scenario.record_turn(scenario_state, player_input, speaker="player", addressed="")
     runtime["scenario_state"] = scenario_state
+    # The active scene has now been narrated at least once; later turns in the
+    # same scene stay on the tighter mid-scene budget until a scene opens again.
+    runtime["scene_just_opened"] = False
 
 
 def player_memory(runtime: dict) -> list[str]:
@@ -359,6 +469,8 @@ def reset_loop(contract: dict[str, Any], world: dict, runtime: dict) -> tuple[di
                 reset_state[key] = deepcopy(previous_state[key])
     runtime["scenario_state"] = reset_state
     runtime["event_status"] = {}
+    # The restored opening has not been narrated in this iteration yet.
+    runtime["scene_just_opened"] = True
     runtime["loop"] = {"iteration": iteration + 1, "returner_memory": memory}
     restored["scenario"] = {"active_scene": runtime["scenario_state"].get("active_scene"),
                             "time": runtime["scenario_state"].get("time", "morning")}

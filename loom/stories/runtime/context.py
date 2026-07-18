@@ -78,6 +78,11 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     places = "\n".join(_place_block(l) for l in st.locations if l.scenes)
     _compiled = bool(scenario)
     _runtime = runtime_state if isinstance(runtime_state, dict) else {}
+    # Scene-length budget: the first narration after a scene opens is an
+    # establishing beat (full scene-length prose); turns inside a standing
+    # scene stay tighter.  Compiled play tracks this deterministically via the
+    # runtime flag; free play keeps the mid-scene default.
+    _scene_open = bool(_runtime.get("scene_just_opened"))
     _scenario_state = _runtime.get("scenario_state") if isinstance(_runtime.get("scenario_state"), dict) else {}
     # An activated scenario owns the starting place and clock.  A browser body
     # is an input request, never authority to teleport its deterministic state.
@@ -471,6 +476,15 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
                 + "\n".join(_arc_lines)
             )
 
+    _length_line = (
+        "A new scene has just opened — establish it as a full scene, not a snippet: 4-7 "
+        "paragraphs, roughly 500-800 words, grounding the reader in the place, the light, "
+        "who is here and what they are doing, landing on the player's actionable moment. "
+        "Still advance ONE beat; don't run ahead."
+        if _scene_open else
+        "Keep it to 3-4 short paragraphs, roughly 200-350 words; advance ONE beat, "
+        "don't run ahead."
+    )
     system = (
         f"You are the narrator of an interactive novel titled \"{st.name}\".\n"
         f"PREMISE: {st.premise}\nTONE: {st.tone}\n" + _time_line
@@ -481,8 +495,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
            f"character at home is in their spot unless the scene says otherwise):\n{places}\n" if places else "")
         + "\n" + PLAY_CRAFT + "\n\n"
         "Narrate the next moment in-world, responding to the player: second person to the player, "
-        "plus the characters' action and dialogue. Keep it brief — 2-3 short paragraphs, a "
-        "screenful at most; advance ONE beat, don't run ahead. Respond with the NARRATION "
+        "plus the characters' action and dialogue. Respond with the NARRATION "
         "ONLY — no headers, no lists, no JSON, no out-of-story commentary."
     )
     # This is deliberately adjacent to the player's action, not buried in
@@ -774,8 +787,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
                if len({w for w in t.lower().split()} & _last_words) >= 1][:3]
     _estab = ("\n\n(Established, use as-is: " + "; ".join(_at_ref) + ")") if _at_ref else ""
 
+    # The length directive sits beside the generation trigger, not mid-system-prompt:
+    # recency is what makes models actually honor the scene-length budget.
     prompt = (f"CURRENT LOCATION: {cur}\n\nTRANSCRIPT:\n{transcript}{directive}{_estab}\n\n"
-              f"Narrate the next turn.")
+              f"Narrate the next turn. {_length_line}")
 
     # ── SCRIBE pass context — the structured-state reporter. A separate (cheap) model reads the
     # fresh narration and emits the full scene report + state_deltas. Prose quality is irrelevant
@@ -803,8 +818,10 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         "- player_status: 'sleeping' if the player sleeps/rests, 'dead' if they die, else 'active'.\n"
         "- people: EVERY named person the narration touched this turn — whether they were physically "
         "present OR only mentioned/remembered. For each: their name, `at` (where they are now: a "
-        "location name, 'here' if in the scene, '' if away/unknown), and a one-line `note` (who they "
-        "are / their tie to the viewpoint). This is how the story remembers who exists and where.\n"
+        "location name, 'here' if in the scene, '' if away/unknown), and a one-line `note` recording "
+        "who they are and their tie to the viewpoint as a concrete description ('Koharu — sits by "
+        "the window, records everyone for the broadcast club'), never a bare label. This is how the "
+        "story remembers who exists and where.\n"
         "\nAlso report `state_deltas` — what changed THIS turn. Each delta is one op; fill only "
         "the fields that op needs (leave the rest empty). `name` is always a character's exact "
         "cast name. The ops:\n"
@@ -816,7 +833,9 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         "- payoff — an OPEN PROMISE above was just fulfilled; value says which.\n"
         "- rel — a present character's stance toward the player shifted; key is 'you', value is a "
         "signed step like +1 or -1.\n"
-        "- mood — a character's mood changed; value is the new mood.\n"
+        "- mood — a character's mood changed; value is the new mood as a short concrete phrase "
+        "with its cause ('wary of your questions', 'softened by the apology'), never a bare "
+        "adjective.\n"
         "- move — someone changed location; value is the destination. Only for movement the "
         "narration actually establishes — keep off-screen characters where they were last seen.\n"
         "- item_add / item_remove — the player's belongings changed; value is the item.\n"
@@ -824,7 +843,9 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         "keywords its trigger words.\n"
         "- set_flag — a genuine story variable changed; key is the variable, value the new value. "
         "Do not invent flags.\n"
-        "- log — REQUIRED every turn, exactly once: value is a one-line summary of the beat.\n"
+        "- log — REQUIRED every turn, exactly once: value is one concrete sentence recording what "
+        "happened and what changed ('You pocketed the brass compass while Mara watched'), never an "
+        "abstract label ('things escalate').\n"
         "Be thorough: a mood/rel delta for every present character who shifted; an empty list "
         "only if truly nothing changed."
     )

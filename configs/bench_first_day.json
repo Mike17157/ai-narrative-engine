@@ -1,0 +1,21 @@
+{
+  "story": "evergreen",
+  "allowed_present": ["kotori_hase", "moriyama_rinka", "tsuchiya_ren", "kijima_ren", "towa"],
+  "plants": [
+    {"token": "watch", "check_from": 8},
+    {"token": "charm", "check_from": 9}
+  ],
+  "turns": [
+    "I wake to my alarm, strap my late father's old field watch onto my wrist, and head out to meet Kotori at the corner.",
+    "On the walk I ask Kotori if she's ever actually been inside the forest at night.",
+    "In homeroom I go over and introduce myself to the transfer student in the back row.",
+    "At break I quietly ask the others what Kijima actually did at his last school.",
+    "At lunch I let Moriyama walk me to the clubroom and ask what the occult society actually investigates.",
+    "I study the corkboard photos and ask her why every single one is blurred the same way — then I sign the membership form.",
+    "After school I help Tsuchiya retie the trellises on the rooftop and ask her about the weather station hum.",
+    "On the way home I stop at the shrine supply shop and let the old shopkeeper press a little wooden charm on me.",
+    "At dusk I walk toward the north gate with Kotori and stop where the lamplight ends, looking for the girl with the ribbon.",
+    "I ask the girl with the ribbon whether she can hear the hum too.",
+    "Back in my room after curfew, I turn my father's watch over in my fingers and watch the canopy for the light to pulse again."
+  ]
+}

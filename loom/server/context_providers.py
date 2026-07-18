@@ -95,6 +95,35 @@ class ProviderContextMixin:
         from .services.img_naming import output_prefix
         return output_prefix(self.workflow_family(model_id), role, character)
 
+    def _registered_text_provider(self, md: ModelDef, connection: str | None = None):
+        """build_provider for a REGISTERED model (models.yaml), plus the visibility wrap.
+
+        models.yaml is committable config and carries no secrets.  When neither the
+        profile options nor the process environment yields an API key, borrow the
+        selected (else active) text connection's — but only when both point at the
+        SAME base_url, so a gateway credential can never leak to a different endpoint
+        (the boundary OpenAICompatProvider already keeps for direct-DeepSeek
+        profiles).  Keyless local profiles (Ollama) are unaffected: their
+        connections have no key to lend.
+        """
+        from ..providers.registry import build_provider
+
+        provider = build_provider(md)
+        if not getattr(provider, "api_key", None):
+            conn = (self.store.get(connection) if connection else None) or self.store.active("text")
+            model_base = str(md.options.get("base_url") or "").rstrip("/").lower()
+            conn_base = str(getattr(conn, "base_url", "") or "").rstrip("/").lower()
+            if conn is not None and getattr(conn, "api_key", None) and model_base and model_base == conn_base:
+                md = md.model_copy()
+                md.options = {**md.options, "api_key": conn.api_key}
+                provider = build_provider(md)
+        # Author-visible ``[[hidden]]…[[/hidden]]`` notes are a real model
+        # boundary, not a convention in a prompt.  Wrap every text provider at
+        # construction so direct story utilities cannot bypass redaction by
+        # calling ``generate_text`` themselves.
+        from ..stories.visibility import model_visibility_provider
+        return model_visibility_provider(provider)
+
     def text_provider_for(self, model_sel: str | None, params: dict | None = None,
                           connection: str | None = None):
         """Build a text provider for a model selection: a registered model key, or a model id
@@ -111,12 +140,7 @@ class ProviderContextMixin:
             md = s.models[model_sel]
             if params:
                 md = md.model_copy(); md.options = {**md.options, **params}
-            # Author-visible ``[[hidden]]…[[/hidden]]`` notes are a real
-            # model boundary, not a convention in a prompt.  Wrap every text
-            # provider at construction so direct story utilities cannot bypass
-            # redaction by calling ``generate_text`` themselves.
-            from ..stories.visibility import model_visibility_provider
-            return model_visibility_provider(build_provider(md))
+            return self._registered_text_provider(md, connection)
         conn = (self.store.get(connection) if connection else None) or self.store.active("text")
         if conn:
             opts = conn.to_model_options()          # carries provider quirks (e.g. Ollama keyless + no-think)
@@ -323,8 +347,7 @@ class ProviderContextMixin:
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
             md = s.models[model_sel].model_copy()
             md.options = {**md.options, "max_tokens": 40000, **params}
-            from ..stories.visibility import model_visibility_provider
-            return model_visibility_provider(build_provider(md))
+            return self._registered_text_provider(md)
         conn = self.store.active("text")
         if conn is None:
             return None
