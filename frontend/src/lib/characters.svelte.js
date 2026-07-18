@@ -5,17 +5,10 @@ import { goto } from '$app/navigation';
 import { get, post, del } from './api.js';
 import { loadStories } from './stories.svelte.js';
 import { refreshHealth, setActiveChar } from './app.svelte.js';
-import { isStoryHostDesktop } from './story-host-client';
 
 export const chars = $state({ list: [], importing: false, msg: null });
 
 export async function loadChars(storyKey = null) {
-  if (isStoryHostDesktop()) {
-    // The desktop card carries its own cast projection. A general character
-    // library capability is intentionally not part of this first host slice.
-    chars.list = [];
-    return chars.list;
-  }
   const path = storyKey ? `/stories/${encodeURIComponent(storyKey)}/cast` : '/characters';
   const result = await get(path);
   chars.list = Array.isArray(result) ? result : [];

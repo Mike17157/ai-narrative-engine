@@ -1,6 +1,5 @@
 <script>
   import { page } from '$app/stores';
-  import { isStoryHostDesktop, requestStoryHost, resolveStoryAssetDataUrl } from '$lib/story-host-client';
 
   let key = $derived($page.params.key || '');
   let status = $state(null);
@@ -34,21 +33,6 @@
     return data;
   }
 
-  async function resolveDesktopImages(rawImages, storyKey, version) {
-    const resolved = await Promise.all((Array.isArray(rawImages) ? rawImages : []).map(async (image) => {
-      const asset = image?.asset;
-      if (!asset || typeof asset !== 'object') return { ...image, url: '' };
-      try {
-        return { ...image, url: await resolveStoryAssetDataUrl(asset) };
-      } catch {
-        // A stale/missing file is not a reason to expose a filesystem path or
-        // retry through HTTP. Keep the gallery entry with a harmless state.
-        return { ...image, url: '' };
-      }
-    }));
-    return version === requestVersion && storyKey === key ? resolved : null;
-  }
-
   async function load() {
     const storyKey = key;
     if (!storyKey) return;
@@ -56,12 +40,11 @@
     requestedKey = storyKey;
     loading = true;
     galleryError = '';
-    const desktop = isStoryHostDesktop();
 
     const encodedKey = encodeURIComponent(storyKey);
     const [statusResult, galleryResult] = await Promise.allSettled([
-      desktop ? requestStoryHost('image.status') : fetch('/api/lean/images/status').then(json),
-      desktop ? requestStoryHost('image.list', { key: storyKey }) : fetch(`/api/stories/${encodedKey}/images`).then(json),
+      fetch('/api/lean/images/status').then(json),
+      fetch(`/api/stories/${encodedKey}/images`).then(json),
     ]);
 
     if (version !== requestVersion || storyKey !== key) return;
@@ -78,14 +61,7 @@
     }
 
     if (galleryResult.status === 'fulfilled') {
-      const rawImages = Array.isArray(galleryResult.value?.images) ? galleryResult.value.images : [];
-      if (desktop) {
-        const resolved = await resolveDesktopImages(rawImages, storyKey, version);
-        if (!resolved) return;
-        images = resolved;
-      } else {
-        images = rawImages;
-      }
+      images = Array.isArray(galleryResult.value?.images) ? galleryResult.value.images : [];
     } else {
       images = [];
       galleryError = galleryResult.reason?.message || 'Could not load this story’s images.';
@@ -108,21 +84,13 @@
 
     rendering = true;
     try {
-      const desktop = isStoryHostDesktop();
-      const result = desktop
-        ? await requestStoryHost('image.request', { key, prompt: cleanPrompt, role, ...(model ? { model } : {}) })
-        : await fetch(`/api/stories/${encodeURIComponent(key)}/images/render`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt: cleanPrompt, role, ...(model ? { model } : {}) }),
-        }).then(json);
+      const result = await fetch(`/api/stories/${encodeURIComponent(key)}/images/render`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt: cleanPrompt, role, ...(model ? { model } : {}) }),
+      }).then(json);
       if (result?.image) {
-        let image = result.image;
-        if (desktop) {
-          const resolvedImages = await resolveDesktopImages([image], key, requestVersion);
-          const resolved = resolvedImages?.[0];
-          image = resolved || image;
-        }
+        const image = result.image;
         images = [image, ...images.filter((existing) => existing.id !== image.id)];
       }
       prompt = '';

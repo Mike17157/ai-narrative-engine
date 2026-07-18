@@ -1,12 +1,5 @@
 # Lean Story Application
 
-> **Status note — parallel HTTP path.** This document describes the current
-> FastAPI/Vite lean surface and remains useful while the desktop migration is
-> validated. It is not the final no-runtime-server target. See
-> [`STORY_HOST_MIGRATION.md`](STORY_HOST_MIGRATION.md) for the pinned Oh My Pi
-> Story Host architecture, explicit migration gates, and the conditions for
-> retiring this HTTP path.
-
 This is the parallel replacement surface for the product that remains after
 retiring the general chat, workflow lab, LoRA/training, audio, tags, and admin
 tools. It is intentionally a **small full-stack Story application**, not a

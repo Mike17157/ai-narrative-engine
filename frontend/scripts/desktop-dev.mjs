@@ -165,8 +165,6 @@ let environment = {
   LOOM_ROOT: storyRoot,
   LOOM_PYTHON: python,
 };
-const bunListPreview = process.argv.includes("--bun-list");
-if (bunListPreview) environment.LOOM_STORY_HOST_BUN_LIST = "1";
 const cargoBin = cargoBinDirectory();
 if (cargoBin) environment = prependPath(environment, cargoBin);
 checkCargo(environment);
@@ -181,12 +179,11 @@ if (process.argv.includes("--check")) {
     root: storyRoot,
     python,
     mode: "desktop-development",
-    storyListBackend: bunListPreview ? "bun-preview" : "python",
+    storyListBackend: "python",
   }));
   process.exit(0);
 }
 
 console.log(`Using repository Story runtime: ${python}`);
 console.log(`Using Story data root: ${storyRoot}`);
-await run(command("npm"), ["run", "desktop:prepare"], environment);
 await runTauri(tauri, environment, developerCommand);

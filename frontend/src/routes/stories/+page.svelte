@@ -5,7 +5,6 @@
   import { goto } from '$app/navigation';
   import { chars } from '$lib/characters.svelte.js';
   import { stories, deleteStory, loadStories } from '$lib/stories.svelte.js';
-  import { isStoryHostDesktop } from '$lib/story-host-client';
 
   async function newStory() {
     goto('/stories/new');
@@ -96,9 +95,7 @@
               </div>
             {/if}
             <button class="playbtn" title="Play" onclick={(e) => { e.stopPropagation(); goto(`/stories/${s.key}/play`); }}>▶</button>
-            {#if !isStoryHostDesktop()}
-              <button class="del" title="Delete story" onclick={(e) => { e.stopPropagation(); void deleteStory(s.key); }}>🗑</button>
-            {/if}
+            <button class="del" title="Delete story" onclick={(e) => { e.stopPropagation(); void deleteStory(s.key); }}>🗑</button>
           </div>
         {/each}
       </div>

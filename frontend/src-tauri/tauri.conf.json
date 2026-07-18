@@ -30,9 +30,6 @@
     "icon": [
       "icons/icon.ico"
     ],
-    "externalBin": [
-      "binaries/story-host"
-    ],
     "resources": {
       "resources/story-seed/": "story-seed/"
     }

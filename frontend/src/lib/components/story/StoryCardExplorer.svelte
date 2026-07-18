@@ -1,6 +1,5 @@
 <script>
   import InlineEditableText from './InlineEditableText.svelte';
-  import { isStoryHostDesktop } from '$lib/story-host-client';
 
   let { story = null, onedit = null, onfocus = null, onselecttarget = null, onsavefield = null } = $props();
 
@@ -248,12 +247,7 @@
 
   function canEditStructured(kind, field) {
     if (kind === 'scene') return ['hook', 'trigger', 'theme', 'tone', 'evidence', 'hidden'].includes(field);
-    // `knowledge` remains a protected/non-public field in the narrow desktop
-    // cast-text capability. Preserve its existing browser editor while making
-    // it visibly read-only in the local Story card instead of offering a save
-    // control that the host must reject.
-    if (kind === 'character') return ['personality', 'appearance', 'background', 'connection'].includes(field)
-      || (field === 'knowledge' && !isStoryHostDesktop());
+    if (kind === 'character') return ['personality', 'appearance', 'background', 'connection', 'knowledge'].includes(field);
     if (kind === 'location') return field === 'background_prompt';
     return false;
   }

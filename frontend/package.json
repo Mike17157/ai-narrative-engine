@@ -10,12 +10,9 @@
     "build:desktop": "vite build --mode desktop",
     "preview": "vite preview",
     "tauri": "tauri",
-    "desktop:prepare": "npm --prefix ../story-host run build:sidecar && npm --prefix ../story-host run stage:tauri",
     "desktop:preflight": "node scripts/desktop-dev.mjs --check",
-    "desktop:smoke": "powershell -NoProfile -File ../scripts/smoke-desktop-dev.ps1",
     "desktop:dev": "node scripts/desktop-dev.mjs",
-    "desktop:dev:bun-list": "node scripts/desktop-dev.mjs --bun-list",
-    "desktop:build": "npm run desktop:prepare && tauri build"
+    "desktop:build": "tauri build"
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.6",
@@ -26,7 +23,6 @@
     "vite": "^5.4.0"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
     "@xyflow/svelte": "^1.6.0",
     "dagre": "^0.8.5",
     "elkjs": "^0.11.1",

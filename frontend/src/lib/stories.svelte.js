@@ -6,7 +6,6 @@ import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
 import { get, post, del } from './api.js';
 import { loadChars } from './characters.svelte.js';
-import { isStoryHostDesktop, requestStoryHost } from './story-host-client';
 
 const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
 
@@ -40,47 +39,23 @@ export const stories = $state({
 
 export async function loadStories() {
   try {
-    const desktop = isStoryHostDesktop();
-    const result = desktop ? await requestStoryHost('story.list') : await get('/stories');
-    stories.list = desktop && !Array.isArray(result) ? (Array.isArray(result?.stories) ? result.stories : []) : result;
+    stories.list = await get('/stories');
   } catch { stories.list = []; }
 }
 export async function loadStory(key) {
   try {
-    const desktop = isStoryHostDesktop();
-    const result = desktop
-      ? await requestStoryHost('story.read', { key })
-      : await get(`/stories/${key}`);
-    const story = desktop ? result?.story : result;
-    if (!story || typeof story !== 'object' || Array.isArray(story)) throw new Error('Story Host returned no author card');
-    if (!desktop) {
-      try {
-        const authoring = await get(`/stories/${key}/interview-history`);
-        story.authoring_history = authoring?.history || [];
-      } catch { story.authoring_history = []; }
-    } else {
-      // Per-target author transcripts are a later IPC capability. The normal
-      // Story card remains usable without asking the desktop host for a raw
-      // conversation history that it does not yet own.
-      story.authoring_history = [];
-      // This opaque token covers only the desktop direct-edit domain. It is
-      // sent back with a narrow prose/cast save so a stale rendered card never
-      // overwrites a newer local author edit.
-      if (typeof result?.author_revision === 'string') story.author_revision = result.author_revision;
-    }
+    const story = await get(`/stories/${key}`);
+    if (!story || typeof story !== 'object' || Array.isArray(story)) throw new Error('The story server returned no author card');
+    try {
+      const authoring = await get(`/stories/${key}/interview-history`);
+      story.authoring_history = authoring?.history || [];
+    } catch { story.authoring_history = []; }
     stories.current = story;
     return stories.current;
   }
   catch { stories.current = null; return null; }
 }
 export async function loadModels() {
-  if (isStoryHostDesktop()) {
-    // Desktop Architect configuration is sealed inside the sidecar. The
-    // legacy global model catalogue has no local IPC capability yet.
-    stories.textModels = [];
-    stories.imageModels = [];
-    return;
-  }
   try {
     stories.textModels = (await get('/text-models?kind=text')).models || [];
     stories.imageModels = (await get('/models')).image || [];
@@ -88,14 +63,6 @@ export async function loadModels() {
 }
 
 export async function createStory({ name = 'Untitled story', type = 'novel' } = {}) {
-  if (isStoryHostDesktop()) {
-    const result = await requestStoryHost('story.create', { name, type });
-    if (!result?.key || typeof result.key !== 'string') {
-      throw new Error('Story Host could not create the story card.');
-    }
-    await loadStories();
-    return result.key;
-  }
   const result = await post('/stories/new', { name, type });
   if (!result.ok || !result.data?.key) {
     throw new Error(result.data?.error || 'Could not create the story card.');
@@ -105,11 +72,6 @@ export async function createStory({ name = 'Untitled story', type = 'novel' } = 
 
 // --- saved-story actions (route-based) ------------------------------------ //
 export async function deleteStory(key) {
-  if (isStoryHostDesktop()) {
-    // Deletion needs an explicit local confirmation capability; do not let a
-    // desktop library control silently fall back to the legacy HTTP route.
-    throw new Error('Story deletion is not available in the local Story Host yet.');
-  }
   await del(`/stories/${key}`);
   await loadStories();
   // The lean API intentionally has no global character library; its cast data

@@ -2,7 +2,6 @@
   import { onMount } from 'svelte';
   import { stories, loadStories, loadModels } from '$lib/stories.svelte.js';
   import { loadChars } from '$lib/characters.svelte.js';
-  import { isStoryHostDesktop } from '$lib/story-host-client';
 
   let { children } = $props();
   const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
@@ -12,10 +11,8 @@
   // Library. This layout only loads data.
   onMount(() => {
     loadStories();
-    if (!leanStoryMode && !isStoryHostDesktop()) loadChars();
-    // The lean app publishes the Story Agent's safe model card through the
-    // Architect contract, not the full global models/configuration surface.
-    if (!leanStoryMode && !isStoryHostDesktop()) loadModels();
+    if (!leanStoryMode) loadChars();
+    if (!leanStoryMode) loadModels();
   });
 </script>
 

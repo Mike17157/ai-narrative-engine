@@ -3,12 +3,10 @@
 // `voice` is reactive: components read voice.state / voice.partial to render the bubble live.
 import { stories } from '$lib/stories.svelte.js';
 import { chars } from '$lib/characters.svelte.js';
-import { isStoryHostDesktop } from '$lib/story-host-client.ts';
 
-// The packaged desktop app is deliberately serverless.  Never probe the
-// legacy FastAPI voice endpoints from that build: browser speech remains the
-// local fallback until voice services are explicitly moved behind Story Host.
-const legacyVoiceApiAvailable = () => import.meta.env.VITE_LEAN_STORY !== '1' && !isStoryHostDesktop();
+// The lean build is deliberately serverless.  Never probe the legacy FastAPI
+// voice endpoints from that build: browser speech remains the local fallback.
+const legacyVoiceApiAvailable = () => import.meta.env.VITE_LEAN_STORY !== '1';
 
 const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 const SS = typeof window !== 'undefined' && window.speechSynthesis;

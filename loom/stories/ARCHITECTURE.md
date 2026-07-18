@@ -71,11 +71,6 @@ draft pipeline, world genesis/systems, story-structure agent, live play, and aut
 One-off generation helpers remain leaf tasks and may be called by a graph when they participate in a
 larger workflow.
 
-The desktop Story Host migration is the deliberately narrow exception: it embeds
-Oh My Pi only for the sealed public Architect proposal turn, while keeping Story
-prepare/review/persistence deterministic. It is not a second generic agent
-runtime for the existing HTTP workflows. See `../../STORY_HOST_MIGRATION.md`.
-
 Story-structure chat accepts an explicit `workflow` choice: `single` for one bounded tool call,
 `structure` for the plan/act/observe/reflect/commit graph, or `auto` as a compatibility fallback.
 Routing is deterministic; it is never delegated to an LLM.

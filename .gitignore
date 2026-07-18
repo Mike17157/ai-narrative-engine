@@ -27,9 +27,6 @@ frontend/build/
 frontend/src-tauri/binaries/*.exe
 frontend/src-tauri/target/
 frontend/src-tauri/gen/schemas/
-story-host/node_modules/
-story-host/dist/
-.story-host/
 .cache/
 logs/
 

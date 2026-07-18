@@ -3,8 +3,6 @@
   import { voice, startListening, stopListening } from '$lib/voice.svelte.js';
   import { loadChars } from '$lib/characters.svelte.js';
   import { PublicStoryArchitectController } from '$lib/story-architect-controller.js';
-  import { isStoryHostDesktop, requestStoryHost } from '$lib/story-host-client';
-  import { DesktopStoryArchitectController, desktopProposalPlan } from '$lib/desktop-story-architect';
   import DirectorBoard from './DirectorBoard.svelte';
   import EditorialModal from './EditorialModal.svelte';
   import InlineEditableText from './InlineEditableText.svelte';
@@ -112,10 +110,6 @@
   // established server-owned Architect path below.
   let publicArchitectController = null;
   let publicArchitectControllerKey = '';
-  // The desktop host makes a proposal first and returns a single-use approval
-  // capability. Keep it in memory only until the author confirms or starts a
-  // fresh request; it is never a browser-owned raw-commit payload.
-  let pendingDesktopProposal = $state(null);
   let architectRequest = 0;
   let architectRun = 0;
   let error = $state('');
@@ -266,13 +260,9 @@
   }
   function publicArchitect() {
     if (!storyKey) return null;
-    const desktop = isStoryHostDesktop();
-    const controllerKey = `${storyKey}:${desktop ? 'desktop' : 'http'}`;
-    if (!publicArchitectController || publicArchitectControllerKey !== controllerKey) {
-      publicArchitectController = desktop
-        ? new DesktopStoryArchitectController(storyKey)
-        : new PublicStoryArchitectController(storyKey);
-      publicArchitectControllerKey = controllerKey;
+    if (!publicArchitectController || publicArchitectControllerKey !== storyKey) {
+      publicArchitectController = new PublicStoryArchitectController(storyKey);
+      publicArchitectControllerKey = storyKey;
     }
     return publicArchitectController;
   }
@@ -308,18 +298,7 @@
     const timeout = setTimeout(() => abortController.abort(), architectRequestTimeoutMs);
     let turn;
     try {
-      if (isStoryHostDesktop()) {
-        // A newer direction supersedes an uncommitted desktop proposal. The
-        // host token has no mutation power without this explicit confirmation
-        // path and expires shortly even if the sidecar stays alive.
-        pendingDesktopProposal = null;
-        architectExecutionReady = false;
-        architectAuthorPlan = null;
-        architectPlan = null;
-        turn = await controller.proposeDirectTurn({ target: architectTarget, brief: message, signal: abortController.signal });
-      } else {
-        turn = await controller.runDirectTurn({ target: architectTarget, brief: message, signal: abortController.signal });
-      }
+      turn = await controller.runDirectTurn({ target: architectTarget, brief: message, signal: abortController.signal });
     } catch (error) {
       if (error?.name === 'AbortError' || error?.code === 'cancelled') {
         throw new Error('The Story Architect did not respond within 45 seconds. Send the same direction again to re-check the latest story card.');
@@ -333,27 +312,6 @@
     // so it is safe to continue through the existing Architect endpoint.
     if (turn?.unavailable || turn?.legacy) return null;
     if (run !== architectRun) return { handled: true, stale: true };
-
-    if (turn?.status === 'awaiting_author_approval') {
-      // This is deliberately a proposal review, not an optimistic render of
-      // the model-safe card. The modal's established confirmation action will
-      // send only the opaque capability token back to the desktop host.
-      pendingDesktopProposal = turn;
-      architectAuthorPlan = desktopProposalPlan(turn);
-      architectPlan = { phase: 'safe_baseline', safe_scopes: [turn.scope] };
-      architectExecutionReady = true;
-      architectSummary = architectAuthorPlan.summary || `A reviewed ${turn.scope} change is ready for your approval.`;
-      architectQuestion = '';
-      architectAnswerTo = '';
-      architectQuestionKey = '';
-      architectMessages = [...before, { role: 'user', text: message }, {
-        role: 'assistant', kind: 'progress',
-        text: 'The Architect prepared a bounded, reviewed change. Nothing has been applied yet.',
-        meta: 'Inspect the exact patch above, then choose Confirm plan & execute to commit it once.'
-      }];
-      persistArchitectThread();
-      return { handled: true };
-    }
 
     applyArchitectResponse(publicArchitectResponse(turn), { run, before, userText: message });
     // Commit also returns a model-safe projection. Reload the normal Story
@@ -650,10 +608,6 @@
       && route?.used_fallback !== true;
   }
   async function assessArchitect({ announce = true } = {}) {
-    if (isStoryHostDesktop()) {
-      architectError = 'Card-gap assessment is not a local Story Host capability yet.';
-      return null;
-    }
     const request = ++architectRequest;
     architectError = '';
     try {
@@ -772,9 +726,6 @@
     window.dispatchEvent(new CustomEvent('queue:refresh'));
   }
   async function requestArchitectTurn(message, { run, before = [], bootstrap = false, complete = false, newMission = false, useFallback = false, commentOn = '' } = {}) {
-    if (isStoryHostDesktop()) {
-      throw new Error('Legacy Architect turns are unavailable in the local Story Host. Use the reviewed local Architect proposal instead.');
-    }
     let res;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), architectRequestTimeoutMs);
@@ -868,7 +819,6 @@
     architectPlan = null;
     architectAuthorPlan = null;
     architectExecutionReady = false;
-    pendingDesktopProposal = null;
     architectRoute = '';
     architectFallback = null;
     architectActivity = 'Reading the live story card…';
@@ -876,25 +826,6 @@
     const retainedThread = architectMessages.filter((message) => !message?.loading);
     architectMessages = retainedThread.length ? retainedThread : [{ role: 'assistant', text: '', loading: true }];
     try {
-      if (isStoryHostDesktop()) {
-        // A bootstrap is an observation only. Desktop direct edits use the
-        // OMP proposal capability later, after the author supplies a bounded
-        // public direction; never send an empty legacy HTTP turn here.
-        const context = await publicArchitect()?.loadContext();
-        if (!context) throw new Error('Could not load the desktop Story Architect context.');
-        if (run !== architectRun) return;
-        if (context.control_graph && typeof context.control_graph === 'object') {
-          controlGraph = context.control_graph;
-        }
-        architectRoute = 'Desktop Story Host';
-        architectSummary = 'The current model-safe Story card is ready for a bounded public change.';
-        architectMessages = [{
-          role: 'assistant', kind: 'progress',
-          text: 'The local Story Architect has the current card. Choose a public section and describe the change; I will return a reviewed patch for your confirmation.',
-          meta: 'Desktop Story Host · no automatic canon changes.'
-        }];
-        return;
-      }
       const result = await requestArchitectTurn('', { run, before: retainedThread, bootstrap: true });
       if (run !== architectRun) return;
       if (result?.unsupported) {
@@ -945,9 +876,6 @@
   }
   async function runArchitect(direction = architectTyped, { complete = false, newMission = false, useFallback = false, commentOn = '' } = {}) {
     if (architectBusy || developing || busy) return;
-    if (complete && pendingDesktopProposal) {
-      return commitDesktopArchitectProposal();
-    }
     const requested = String(direction || '').trim();
     // An approved protected plan may be applied without inventing a fake
     // author message. The server still validates its one-card authorization.
@@ -970,16 +898,6 @@
       if (run !== architectRun) return;
       if (publicTurn?.handled) {
         if (!publicTurn.stale) architectTyped = '';
-        return;
-      }
-      if (isStoryHostDesktop()) {
-        // Desktop mode is intentionally serverless. A protected target must
-        // never quietly fall through to the legacy HTTP Architect/interview
-        // routes while its local approval boundary has not been migrated.
-        architectMessages = before;
-        architectTyped = requested;
-        persistArchitectThread();
-        architectError = 'That protected Story workflow is not in the local Host yet. Use the reviewed public Architect for world, premise, cast, or Day One; Director, arcs, and play remain explicitly unavailable offline.';
         return;
       }
       const result = await requestArchitectTurn(requested, { run, before, complete, newMission, useFallback, commentOn });
@@ -1036,67 +954,6 @@
         architectActivity = 'Waiting for your direction';
       }
     }
-  }
-  async function commitDesktopArchitectProposal() {
-    const pending = pendingDesktopProposal;
-    const controller = publicArchitect();
-    if (!pending || !(controller instanceof DesktopStoryArchitectController) || architectBusy || developing || busy) return;
-    const run = ++architectRun;
-    const before = architectMessages;
-    architectBusy = true;
-    architectError = '';
-    architectActivity = 'Applying the approved Story change…';
-    architectMessages = [...before, { role: 'assistant', text: '', loading: true }];
-    persistArchitectThread();
-    const abortController = new AbortController();
-    const timeout = setTimeout(() => abortController.abort(), architectRequestTimeoutMs);
-    try {
-      const turn = await controller.commitApprovedTurn(pending, { signal: abortController.signal });
-      if (run !== architectRun) return;
-      pendingDesktopProposal = null;
-      architectExecutionReady = false;
-      applyArchitectResponse(publicArchitectResponse(turn), { run, before, userText: '' });
-      // During the migration this reload uses the established full-author
-      // projection. The host's commit card remains model-safe and must never
-      // replace `current` directly.
-      current = await loadStory(storyKey) || current;
-      try { await loadChars(storyKey); } catch { /* display names refresh on the next app update */ }
-      await refreshReadiness();
-      window.dispatchEvent(new CustomEvent('story:refresh', { detail: { key: storyKey } }));
-      window.dispatchEvent(new CustomEvent('queue:refresh'));
-    } catch (err) {
-      if (run === architectRun) {
-        architectMessages = before;
-        persistArchitectThread();
-        architectError = err?.code === 'cancelled'
-          ? 'The approval request was cancelled. The reviewed proposal is still available until it expires.'
-          : (err?.message || 'Could not apply the reviewed Story proposal');
-      }
-    } finally {
-      clearTimeout(timeout);
-      if (run === architectRun) {
-        architectBusy = false;
-        architectActivity = pendingDesktopProposal ? 'Review the proposed change' : 'Waiting for your direction';
-      }
-    }
-  }
-  function discardDesktopArchitectProposal() {
-    if (!pendingDesktopProposal || architectBusy || developing || busy) return;
-    pendingDesktopProposal = null;
-    architectExecutionReady = false;
-    architectAuthorPlan = null;
-    architectPlan = null;
-    architectSummary = 'The reviewed proposal was discarded. No Story canon changed.';
-    architectQuestion = '';
-    architectAnswerTo = '';
-    architectQuestionKey = '';
-    architectMessages = [...architectMessages.filter((message) => !message?.loading), {
-      role: 'assistant', kind: 'progress',
-      text: 'Discarded the reviewed proposal. Nothing was applied.',
-      meta: 'Describe a new direction whenever you are ready.'
-    }];
-    architectActivity = 'Waiting for your direction';
-    persistArchitectThread();
   }
   function retryArchitectWithFallback() {
     const retry = architectFallback;
@@ -1250,11 +1107,6 @@
     readiness = data.readiness || await refreshReadiness();
   }
   async function openConversation(target = sectionTarget(focus)) {
-    if (isStoryHostDesktop()) {
-      architectError = 'Focused interview conversations are not in the local Story Host yet. Use the reviewed Architect or direct card text edits instead.';
-      architectOpen = true;
-      return;
-    }
     const resolved = normaliseTarget(target);
     const request = ++editorRequest;
     focus = resolved.section;
@@ -1287,14 +1139,6 @@
   async function refreshControlGraph() {
     if (!storyKey) return null;
     try {
-      if (isStoryHostDesktop()) {
-        const data = await requestStoryHost('story.control_graph', { key: storyKey });
-        if (data?.graph && typeof data.graph === 'object') {
-          controlGraph = data.graph;
-          return data.graph;
-        }
-        return null;
-      }
       const res = await fetch(`/api/stories/${encodeURIComponent(storyKey)}/control-graph`);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Could not load story map');
@@ -1312,11 +1156,6 @@
     if (!node || typeof node !== 'object') return;
     if (node.id === 'director') {
       workspaceMode = 'story';
-      if (isStoryHostDesktop()) {
-        architectError = 'Director tools are not available in the local Story Host yet. They are kept closed rather than using the legacy HTTP runtime.';
-        architectOpen = true;
-        return;
-      }
       directorOpen = true;
       return;
     }
@@ -1368,11 +1207,6 @@
   }
   async function refreshReadiness() {
     try {
-      if (isStoryHostDesktop()) {
-        const data = await requestStoryHost('story.readiness', { key: storyKey });
-        if (data && typeof data === 'object') readiness = data;
-        return data || null;
-      }
       const res = await fetch(`/api/stories/${storyKey}/play-readiness`);
       const data = await res.json();
       if (res.ok) readiness = data;
@@ -1383,26 +1217,7 @@
   async function saveInlineText(edit) {
     if (!edit || typeof edit.value !== 'string') throw new Error('Nothing to save.');
     let data;
-    if (isStoryHostDesktop()) {
-      const expectedAuthorRevision = current?.author_revision;
-      if (typeof expectedAuthorRevision !== 'string' || !expectedAuthorRevision) {
-        throw new Error('The local Story card is out of date. Reload it before saving this edit.');
-      }
-      data = edit.resource === 'character'
-        ? await requestStoryHost('story.cast_text', {
-          key: storyKey,
-          character: edit.id,
-          field: edit.field,
-          value: edit.value,
-          expected_author_revision: expectedAuthorRevision
-        })
-        : await requestStoryHost('story.inline_text', {
-          key: storyKey,
-          path: edit.path,
-          value: edit.value,
-          expected_author_revision: expectedAuthorRevision
-        });
-    } else if (edit.resource === 'character') {
+    if (edit.resource === 'character') {
       const body = edit.field === 'name'
         ? { name: edit.value }
         : { fields: { [edit.field]: edit.value } };
@@ -1420,7 +1235,6 @@
       if (!res.ok) throw new Error(data?.error || 'Could not save this edit.');
     }
     current = data?.story || await loadStory(storyKey);
-    if (current && typeof data?.author_revision === 'string') current.author_revision = data.author_revision;
     architectSessionKey = '';
     controlGraphKey = '';
     readinessKey = '';
@@ -1433,10 +1247,6 @@
     openArchitect(sectionTarget(blocker.section || 'world'));
   }
   async function activatePlay() {
-    if (isStoryHostDesktop()) {
-      error = 'Live play is not available in the local Story Host yet.';
-      return;
-    }
     if (activating || busy || developing || !readiness?.ready) return;
     activating = true; error = '';
     try {
@@ -1453,10 +1263,6 @@
     finally { activating = false; }
   }
   async function organizeCard() {
-    if (isStoryHostDesktop()) {
-      error = 'Card organization is not a local Story Host capability yet.';
-      return;
-    }
     if (organizing || busy || developing) return;
     organizing = true; error = '';
     try {
@@ -1473,10 +1279,6 @@
     finally { organizing = false; }
   }
   async function reviewCard() {
-    if (isStoryHostDesktop()) {
-      error = 'Legacy card review is not a local Story Host capability yet.';
-      return;
-    }
     if (reviewing || busy || developing) return;
     reviewing = true; error = '';
     try {
@@ -1501,10 +1303,6 @@
       .filter(Boolean);
   }
   async function developCard() {
-    if (isStoryHostDesktop()) {
-      error = 'Batch card development is not a local Story Host capability yet.';
-      return;
-    }
     if (developing || busy || reviewing || organizing) return;
     developing = true; error = '';
     const scope = developmentScopes.find((item) => item.id === developScope);
@@ -1549,10 +1347,6 @@
     typed = suggestion?.prompt || suggestion?.detail || suggestion?.title || '';
   }
   async function send(text = typed) {
-    if (isStoryHostDesktop()) {
-      error = 'Focused interview conversations are not available in the local Story Host yet.';
-      return;
-    }
     const value = text.trim(); if (!value || busy || developing) return;
     const target = normaliseTarget(editorTarget || sectionTarget(focus));
     const request = editorRequest;
@@ -1662,7 +1456,6 @@
         plan={architectPlan}
         authorPlan={architectAuthorPlan}
         executionReady={architectExecutionReady}
-        reviewedPatch={pendingDesktopProposal ? (architectAuthorPlan?.sections?.[0]?.body || '') : ''}
         question={architectQuestion}
         activity={architectActivity}
         route={architectRoute}
@@ -1674,7 +1467,6 @@
         onrun={runArchitect}
         onreview={reviewArchitectDecision}
         onexecute={() => runArchitect('', { complete: true })}
-        onreject={pendingDesktopProposal ? discardDesktopArchitectProposal : null}
         onfallback={retryArchitectWithFallback}
         onclose={closeArchitect}
       />
@@ -1692,16 +1484,7 @@
 
   {:else}
     <section class="workspace-panel play-panel" aria-label="Play workspace">
-      {#if isStoryHostDesktop()}
-        <div class="local-runtime-notice">
-          <span>Local Story Host</span>
-          <h2>Play runtime is not migrated yet</h2>
-          <p>The desktop card, reviewed Architect, and local image capability run without a web server. Live player sessions remain disabled here until their private runtime contract has an equally narrow local boundary.</p>
-          <button type="button" onclick={() => returnToStory('world')}>Return to Story card</button>
-        </div>
-      {:else}
-        <PlaySurface storyKey={storyKey} story={current} {readiness} onedit={returnToStory} />
-      {/if}
+      <PlaySurface storyKey={storyKey} story={current} {readiness} onedit={returnToStory} />
     </section>
   {/if}
 
@@ -1749,7 +1532,6 @@
 <style>
   .interview { box-sizing: border-box; width: 100%; max-width: none; height: calc(100dvh - var(--chrome-top, 0px)); min-height: 520px; margin: 0; padding: 12px 16px 10px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; row-gap: 8px; }
   .workspace-header { grid-column: 1 / -1; }
-  .local-runtime-notice { width: min(680px, 100%); margin: clamp(28px, 10vh, 96px) auto; padding: 24px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }.local-runtime-notice > span { color: var(--accent); font-size: 10px; font-weight: 820; letter-spacing: .08em; text-transform: uppercase; }.local-runtime-notice h2 { margin: 8px 0; font-size: 22px; }.local-runtime-notice p { max-width: 590px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }.local-runtime-notice button { margin-top: 15px; border: 1px solid var(--accent); padding: 7px 9px; background: var(--accent); color: #0b0e14; font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
   .workspace-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
   .workspace-header > div:first-child { max-width: 650px; } .eyebrow { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
   .workspace-header .eyebrow, .workspace-header p { display: none; }
