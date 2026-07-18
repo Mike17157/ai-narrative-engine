@@ -1,5 +1,19 @@
 {
   "model": "",
+  "story_agent": {
+    "label": "Kimi K3 via OpenRouter",
+    "model": "moonshotai/kimi-k3",
+    "connection": "openai",
+    "fallback": "active",
+    "fallback_connection": "openai",
+    "params": {
+      "temperature": 0.35,
+      "reasoning_effort": "low",
+      "max_tokens": 4096,
+      "request_timeout_s": 60,
+      "max_retries": 0
+    }
+  },
   "models": {
     "workshop": "qwen/qwen-2.5-72b-instruct",
     "spine": "qwen/qwen-2.5-72b-instruct",
@@ -13,6 +27,15 @@
     "emotion": "anthropic/claude-haiku-4-5"
   },
   "systems": {},
+  "creation_profiles": {
+    "quiet-island-return": {
+      "label": "Quiet slice of life \u00c2\u00b7 island return",
+      "genre": "slice of life",
+      "biome": "small inhabited island",
+      "seed": "I am coming home from college to the small island where I was raised. People have lived here for hundreds of years; everyone knows everyone, and the island has its own memory.",
+      "guidance": "Build a grounded, open-ended daily-life situation. Start with only two or three immediately relevant people. Use routines, local work, weather, ferry schedules, family shops, old classmates and small social frictions. Do not force a plot, mystery, secret, romance, or escalating stakes. Humor comes from character behavior, mismatched assumptions and concrete inconvenience, never joke-writing. End scenes on a quiet image or unfinished small beat."
+    }
+  },
   "inventions": {
     "spine": "inventive",
     "storyboard": "inventive",

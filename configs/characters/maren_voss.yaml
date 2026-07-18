@@ -1,0 +1,24 @@
+name: Maren Voss
+system: 'County courthouse records clerk
+
+  Early fifties, dark hair in a severe bun, reading glasses on a beaded chain, steady
+  hands
+
+  Meticulous, slightly cold, hums while she works, never asks why you''re there
+
+  Former forensic genealogist, certification revoked after a public case involving
+  her own family
+
+  Files every document that passes through the courthouse; sees what others assume
+  no one reads'
+fields:
+  role: County courthouse records clerk
+  appearance: Early fifties, dark hair in a severe bun, reading glasses on a beaded
+    chain, steady hands
+  personality: Meticulous, slightly cold, hums while she works, never asks why you're
+    there
+  background: Former forensic genealogist, certification revoked after a public case
+    involving her own family
+  connection: Files every document that passes through the courthouse; sees what others
+    assume no one reads
+playable: false

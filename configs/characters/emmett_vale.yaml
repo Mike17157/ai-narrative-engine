@@ -1,0 +1,20 @@
+name: Emmett Vale
+system: 'Funeral home embalmer and Walt''s apprentice
+
+  Late twenties, lean, with hands that move like they''re always measuring something
+
+  Quiet, meticulous, with a habit of lingering in doorways like he''s deciding whether
+  to stay or go
+
+  Son of a silicosis victim; Walt took him in after his father''s funeral
+
+  Walt''s surrogate son, Dana''s uneasy counterpart'
+fields:
+  role: Funeral home embalmer and Walt's apprentice
+  appearance: Late twenties, lean, with hands that move like they're always measuring
+    something
+  personality: Quiet, meticulous, with a habit of lingering in doorways like he's
+    deciding whether to stay or go
+  background: Son of a silicosis victim; Walt took him in after his father's funeral
+  connection: Walt's surrogate son, Dana's uneasy counterpart
+playable: false

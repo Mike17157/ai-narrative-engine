@@ -98,8 +98,17 @@ def _fetch_janny(url: str) -> tuple[dict, bytes | None]:
     if not uuid:
         raise ValueError("no character UUID found in the JanitorAI URL")
     with _client() as c:
+        # JannyAI's download gate keys off the requested import format.  Its public
+        # endpoint returns a Tavern PNG, and rejects the JSON content-type used by
+        # normal API clients (SillyTavern carries the same compatibility header).
         r = c.post("https://api.jannyai.com/api/v1/download",
-                   json={"characterId": uuid.group(0)}, headers={"Content-Type": "application/json"})
+                   json={"characterId": uuid.group(0)},
+                   headers={"Content-Type": "image/png", "Accept": "image/png"})
+        if r.status_code == 403:
+            raise ValueError(
+                "JanitorAI/JannyAI denied this server's card-download request. "
+                "Download/export the character as a Tavern PNG or JSON from JannyAI, then import the file here."
+            )
         r.raise_for_status()
         payload = r.json()
         if payload.get("status") != "ok" or not payload.get("downloadUrl"):
