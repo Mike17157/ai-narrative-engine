@@ -42,13 +42,13 @@ def load_session(root: Path, sid: str) -> dict | None:
         return None
     # Surface the unified State doc alongside the legacy flat fields (lazy + lossless).
     if not isinstance(raw.get("state"), dict):
-        from ...stories import runtime_state as _SD
+        from ...stories.runtime import state as _SD
         raw["state"] = _SD.from_session(raw)
     return raw
 
 
 def save_session(root: Path, sid: str, data: dict) -> dict:
-    from ...stories import runtime_state as _SD
+    from ...stories.runtime import state as _SD
 
     safe = _safe(sid)
     data = data or {}

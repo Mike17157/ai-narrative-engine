@@ -6,6 +6,7 @@
   import { get, post } from '$lib/api.js';
 
   let { storyKey, sid, onclose } = $props();
+  const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
 
   let doc = $state(null);          // { prologue:[{title,text}], scenes:[{loc,pages:[{text,beat}]}] }
   let sel = $state(0);             // selected entry in the rail: 0 = prologue (if any), then scenes
@@ -77,7 +78,9 @@
       <b>📖 Manuscript</b>
       <span class="hint">click a paragraph block to edit it</span>
       <button class="soft" onclick={bake} disabled={baking}>{baking ? 'Baking…' : 'Bake prose'}</button>
-      <button class="soft" onclick={illustrate} disabled={illustrating}>{illustrating ? 'Illustrating…' : 'Illustrate'}</button>
+      {#if !leanStoryMode}
+        <button class="soft" onclick={illustrate} disabled={illustrating}>{illustrating ? 'Illustrating…' : 'Illustrate'}</button>
+      {/if}
       <button class="x" onclick={onclose}>✕</button>
     </div>
     <div class="msbody">

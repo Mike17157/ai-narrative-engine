@@ -144,6 +144,34 @@ def test_merge_rejected_on_non_object_value():
     assert not r["applied"] and len(r["rejected"]) == 1
 
 
+def test_same_batch_child_edit_does_not_stale_a_sibling_ancestor_op():
+    # Both ops are anchored from the SAME originally-shown view. The child edit
+    # (arc-2/premise) runs first and mutates arc-2 — the second op's anchor on
+    # arc-2 itself must NOT be treated as stale just because an earlier op in
+    # THIS SAME BATCH touched it. Only a change from OUTSIDE the batch is real
+    # staleness (mirrors real oh-my-pi's same-path-merge behavior).
+    d = copy.deepcopy(_story())
+    item_anchor = node_hash(d["arcs"][1])            # arc-2, pre-batch
+    child_anchor = node_hash(d["arcs"][1]["premise"])  # arc-2/premise, pre-batch
+    r = apply_ops(d, [
+        {"path": "arcs/arc-2/premise", "anchor": child_anchor, "op": "set", "value": "new"},
+        {"path": "arcs/arc-2", "anchor": item_anchor, "op": "merge", "value": {"name": "Paper Lanterns"}},
+    ])
+    assert r["rejected"] == []
+    assert {a["path"] for a in r["applied"]} == {"arcs/arc-2/premise", "arcs/arc-2"}
+    assert d["arcs"][1]["premise"] == "new"
+    assert d["arcs"][1]["name"] == "Paper Lanterns"
+
+
+def test_genuine_external_staleness_still_rejected_after_same_batch_fix():
+    # The fix above must not weaken real staleness detection: an anchor that
+    # never matched anything the batch itself touched is still rejected.
+    d = copy.deepcopy(_story())
+    r = apply_ops(d, [{"path": "premise", "anchor": "deadbeef", "op": "set", "value": "x"}])
+    assert d["premise"] == "the famine"
+    assert len(r["rejected"]) == 1 and "stale" in r["rejected"][0]["reason"]
+
+
 def test_removed_node_anchor_then_seen_as_gone():
     # An op that targets a now-deleted node (with an anchor) is rejected as gone,
     # not silently re-created.

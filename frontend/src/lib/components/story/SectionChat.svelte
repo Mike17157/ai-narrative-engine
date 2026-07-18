@@ -90,6 +90,26 @@
     busy = true; err = '';
     convo = [...convo, { role: 'assistant', content: '', streaming: true }];
     const idx = convo.length - 1;
+    // A new story uses the dedicated real-card interview contract. It returns
+    // readable prose while the server privately validates and applies PATCH.
+    if (interview) {
+      try {
+        const res = await fetch(`/api/stories/${storyKey}/interview`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ messages, section: 'interview' })
+        });
+        const d = await res.json();
+        busy = false; convo[idx].streaming = false;
+        if (!res.ok) { convo = convo.slice(0, idx); err = d?.error || 'interview failed'; return; }
+        convo[idx].content = d.reply || 'Okay.';
+        await loadStory(storyKey);
+        window.dispatchEvent(new CustomEvent('queue:refresh'));
+        saveConvo(); scroll();
+      } catch {
+        convo = convo.slice(0, idx); busy = false; err = 'interview failed';
+      }
+      return;
+    }
     let res;
     try {
       res = await fetch(`/api/stories/${storyKey}/card/${layer}/chat`, {

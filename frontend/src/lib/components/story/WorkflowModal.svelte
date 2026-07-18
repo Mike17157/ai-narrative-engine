@@ -12,7 +12,7 @@
 
   let { storyKey, startLayer = '', onClose = () => {} } = $props();
 
-  const LABEL = { overview: 'Premise & theme', map: 'World', relationships: 'Cast & bonds', plot: 'Arc & scenes', cast: 'Production' };
+  const LABEL = { overview: 'Story overview', map: 'World', relationships: 'Cast & bonds', plot: 'Storylines & scenes', cast: 'Production' };
   const ICON = { overview: '🎯', map: '🗺', relationships: '🕸', plot: '🎬', cast: '🎭' };
   // The three tiers, in order — sections group under these (loom/stories/card.py TIERS).
   const TIERS = [['bible', 'Bible — the constant truth'], ['progression', 'Progression — the staged plan'], ['production', 'Production — rendered assets']];

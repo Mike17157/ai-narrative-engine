@@ -47,7 +47,7 @@ def load_rules(root: Path) -> list[dict]:
     whose trigger is 'output', plus the builtin floor (script='fallback')."""
     rules: list[dict] = [{"phrases": list(BUILTIN_REFUSALS), "script": "fallback"}]
     try:
-        from ..server.services import lorebook_store as LS
+        from ...server.services import lorebook_store as LS
         for e in LS.load_lorebook(root, GUARD_SCOPE):
             if not e.enabled or e.trigger != "output":
                 continue
@@ -96,6 +96,12 @@ def generate_guarded(primary, *, system: str, prompt: str, root: Path,
 
         { res, text, data, tripped: phrase|None, script: str|None, used_fallback: bool, error }
     """
+    # Runtime calls can receive test/dummy providers directly rather than via
+    # AppContext.  Apply the same final redaction here so raw history, a scene
+    # plan, or a retry prompt cannot reveal author-only ``[[hidden]]`` text.
+    from ..visibility import strip_model_hidden
+    system = strip_model_hidden(system) or ""
+    prompt = strip_model_hidden(prompt) or ""
     rules = load_rules(root)
     res, err, hit = _attempt(primary, system=system, prompt=prompt, emits=emits,
                              rules=rules, on_delta=on_delta)

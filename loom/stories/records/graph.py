@@ -62,8 +62,8 @@ def parse_functions(entries: list) -> list[GraphFunction]:
     registered code script (`{"fn": "add_beat"}`) and carries the trigger keywords; the
     logic/params/describe are CANONICAL in code (stories/scripts.py). An entry whose `fn`
     isn't registered (or a plain data entry) is ignored — there's no inline-code path."""
-    from .authoring import scripts as _S
-    from .authoring import stages as _ST
+    from ..authoring import scripts as _S
+    from ..authoring import stages as _ST
 
     out: list[GraphFunction] = []
     for e in entries or []:
@@ -98,8 +98,8 @@ def resolve_functions(names: list[str]) -> list[GraphFunction]:
     the chat agent, whose modes list their functions in story_agent.json instead of going through a
     lorebook (the code registry in scripts.py / stage_tools.py is canonical). Unknown/dup names are
     skipped. Books are still used by the pipeline + for preset/model binding, just not for this."""
-    from .authoring import scripts as _S
-    from .authoring import stages as _ST
+    from ..authoring import scripts as _S
+    from ..authoring import stages as _ST
 
     out: list[GraphFunction] = []
     seen: set = set()
@@ -145,7 +145,7 @@ def _parse_spec(content: str) -> dict | None:
         return spec
     fn = spec.get("fn")
     if fn:
-        from .authoring import scripts as _S
+        from ..authoring import scripts as _S
         if _S.get(str(fn)) is not None:
             return spec
     return None
@@ -340,8 +340,8 @@ def apply_calls(state: dict, calls: list, functions: list[GraphFunction]) -> tup
     level. Returns (new_state, log). Never raises — a bad call is skipped and logged."""
     import copy
 
-    from .authoring import scripts as _S
-    from .runtime import state as _SD
+    from ..authoring import scripts as _S
+    from ..runtime import state as _SD
 
     st = _SD.normalize(copy.deepcopy(state))
     by_name = {f.name: f for f in functions}
@@ -373,7 +373,7 @@ def apply_ops(graph: dict, calls: list, functions: list[GraphFunction]) -> tuple
     then unwraps. Returns (new_graph, log)."""
     import copy
 
-    from .runtime import state as _SD
+    from ..runtime import state as _SD
 
     state = {"levels": {"graph": copy.deepcopy(graph or {})}, "revision": 0}
     new_state, log = apply_calls(state, calls, functions)
@@ -406,13 +406,13 @@ def _empty() -> dict:
 
 
 def load(root: Path) -> dict:
-    from ..server.services import lorebook_store as LS
+    from ...server.services import lorebook_store as LS
     doc = LS.get_doc(root, KEY)
     return doc if isinstance(doc, dict) else _empty()
 
 
 def save(root: Path, doc: dict) -> dict:
-    from ..server.services import lorebook_store as LS
+    from ...server.services import lorebook_store as LS
     return LS.put_doc(root, KEY, doc)
 
 
@@ -420,7 +420,7 @@ def all_functions() -> list:
     """Every registered script, exposed as a callable against this doc. No lorebook keyword
     gating — the global graph is the authoring surface for the whole universe, so all of
     them are always available."""
-    from .authoring import scripts as S
+    from ..authoring import scripts as S
     return [GraphFunction(name=sd.name, describe=sd.describe, params=sd.params,
                           keywords=sd.keywords, writes=sd.writes, impl=sd.impl, kind="doc")
             for sd in S.REGISTRY.values()]

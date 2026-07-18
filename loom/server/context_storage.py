@@ -177,27 +177,27 @@ class StorageContextMixin:
     def story_bg_dir(self, key: str) -> Path:
         return self.story_dir() / re.sub(r"[^\w\-]+", "", key) / "bg"
 
-    def char_asset_dir(self, key: str) -> Path:
+    def char_asset_dir(self, key: str, *, story_key: str | None = None) -> Path:
         """The directory holding a character's IMAGE assets — avatar `<key>.png`, reference
         `<key>.ref.png`, and `portraits/<key>/…`. For a STORY-OWNED character this lives inside the
         story's own folder (`configs/stories/<owner>/chars`) so the story is self-contained and a
         delete/backup is one folder; for a global/imported library card it's the shared
         `configs/characters`. The filename convention inside is identical either way — only the root
         differs — so per-character path code just swaps `char_dir()` for this."""
-        owner = self._char_owner(key)
+        owner = story_key if story_key is not None else self._char_owner(key)
         if owner is not None:
             return self.story_dir() / re.sub(r"[^\w\-]+", "", owner) / "chars"
         return self.char_dir()
 
-    def portrait_dir(self, key: str, *, create: bool = False) -> Path:
+    def portrait_dir(self, key: str, *, create: bool = False, story_key: str | None = None) -> Path:
         safe = re.sub(r"[^\w\-]+", "", key)
-        d = self.char_asset_dir(key) / "portraits" / safe
+        d = self.char_asset_dir(key, story_key=story_key) / "portraits" / safe
         if create:
             d.mkdir(parents=True, exist_ok=True)
         return d
 
-    def portrait_manifest(self, key: str) -> dict:
-        p = self.portrait_dir(key) / "manifest.json"
+    def portrait_manifest(self, key: str, *, story_key: str | None = None) -> dict:
+        p = self.portrait_dir(key, story_key=story_key) / "manifest.json"
         if p.is_file():
             try:
                 return json.loads(p.read_text(encoding="utf-8"))
@@ -205,18 +205,18 @@ class StorageContextMixin:
                 pass
         return {"appearance": "", "outfits": []}
 
-    def save_portrait_manifest(self, key: str, data: dict) -> None:
-        d = self.portrait_dir(key, create=True)
+    def save_portrait_manifest(self, key: str, data: dict, *, story_key: str | None = None) -> None:
+        d = self.portrait_dir(key, create=True, story_key=story_key)
         (d / "manifest.json").write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
 
     def portrait_outfit(self, manifest: dict, oid: str) -> dict | None:
         return next((o for o in manifest.get("outfits", []) if o.get("id") == oid), None)
 
-    def reference_path(self, key: str) -> Path | None:
+    def reference_path(self, key: str, *, story_key: str | None = None) -> Path | None:
         """The character's img2img reference image: a dedicated <key>.ref.png if
         set, else the card avatar <key>.png. None if neither exists."""
         safe = re.sub(r"[^\w\-]+", "", key)
-        base = self.char_asset_dir(key)
+        base = self.char_asset_dir(key, story_key=story_key)
         for fn in (f"{safe}.ref.png", f"{safe}.png"):
             p = base / fn
             if p.is_file():
@@ -256,7 +256,8 @@ class StorageContextMixin:
                     out.append({"kind": "card link", "url": m, "ok": None, "source": "external"})
         return out
 
-    def portrait_payload(self, key: str) -> dict:
+    def portrait_payload(self, key: str, *, story_key: str | None = None,
+                         image_base: str | None = None) -> dict:
         """The manifest enriched with served image URLs for the frontend.
 
         affect.range in the manifest may be either the old format (list of dicts with
@@ -265,8 +266,8 @@ class StorageContextMixin:
         for the frontend carousel and AffectScatter."""
         from .services.emotions import (EMOTION_KEYS, EMOTION_LABELS, EMOTION_COORDS,
                                         NORMAL_KEYS, range_to_display)
-        m = self.portrait_manifest(key)
-        base = f"/api/characters/{key}/portraits/img"
+        m = self.portrait_manifest(key, story_key=story_key)
+        base = image_base or f"/api/characters/{key}/portraits/img"
         canon = m.get("expression_prompts") or {}
         # Normalise affect.range to a list of string keys regardless of stored format.
         raw_range = (m.get("affect") or {}).get("range") if isinstance(m.get("affect"), dict) else None
@@ -329,7 +330,10 @@ class StorageContextMixin:
         char_dir.mkdir(parents=True, exist_ok=True)
         taken = {p.stem for p in char_dir.glob("*.yaml")}
         if story_key:
-            taken |= set(SS.character_keys(self.root, story_key))
+            # Runtime and image helpers historically address a character by
+            # key alone. Keep Story-generated keys globally unique so a later
+            # Story cannot silently shadow an existing embedded character.
+            taken |= SS.all_character_keys(self.root)
         base = re.sub(r"[^a-z0-9]+", "_", (npc.get("name") or "npc").lower()).strip("_") or "npc"
         key, i = base, 2
         while key in taken:
@@ -524,6 +528,22 @@ class StorageContextMixin:
         path = self.char_dir() / f"{safe}.yaml"
         return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
 
+    def _read_story_character_data(self, story_key: str, key: str) -> dict | None:
+        """Read a cast card from one explicit Story before considering its library source.
+
+        Character keys are historically global-looking, but a Story embeds an
+        independent card record.  Callers that already know the Story must not
+        resolve through ``_char_owner``: the same source card can legitimately
+        be embedded in more than one Story.
+        """
+        from ..server.services import story_store as SS
+        embedded = SS.get_character(self.root, story_key, key)
+        if embedded is not None:
+            return embedded
+        safe = re.sub(r"[^\w\-]+", "", key)
+        path = self.char_dir() / f"{safe}.yaml"
+        return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
+
     def _write_character_data(self, key: str, cdata: dict) -> None:
         """Persist a character to its OWNING story (embedded in the relational store) or the
         global YAML library."""
@@ -537,6 +557,20 @@ class StorageContextMixin:
             safe = re.sub(r"[^\w\-]+", "", key)
             (self.char_dir() / f"{safe}.yaml").write_text(
                 yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        self.reload_settings()
+
+    def _write_story_character_data(self, story_key: str, key: str, cdata: dict) -> None:
+        """Persist one Story's embedded cast card without touching another Story or YAML.
+
+        An initially library-backed cast member becomes an embedded copy on its
+        first Story-local edit.  That is deliberate: authoring a Story cannot
+        silently rewrite the reusable source card or a second Story that used
+        the same source.
+        """
+        from ..config.schema import Character
+        from ..server.services import story_store as SS
+        Character(**cdata)  # validate FIRST
+        SS.upsert_character(self.root, story_key, key, cdata)
         self.reload_settings()
 
     def update_story_fields(self, key: str, fields: dict) -> list[str]:

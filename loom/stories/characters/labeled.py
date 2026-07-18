@@ -43,6 +43,9 @@ def run_text(provider, system: str, prompt: str) -> str:
     if not hasattr(provider, "generate_text"):
         return ""
     try:
+        from ..visibility import strip_model_hidden
+        system = strip_model_hidden(system) or ""
+        prompt = strip_model_hidden(prompt) or ""
         return (provider.generate_text(system=system, prompt=prompt).text or "").strip()
     except Exception:  # noqa: BLE001 — a bad turn is a blank field, not a crash
         return ""

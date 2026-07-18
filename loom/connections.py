@@ -178,12 +178,13 @@ class ConnectionStore:
     #   image         — the image backend (ComfyUI)
     KINDS = ("text", "image_prompt", "image")
 
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, ensure_local: bool = True):
         self.path = Path(root) / "secrets" / "connections.json"
         self._active: dict[str, str | None] = {k: None for k in self.KINDS}
         self._conns: dict[str, Connection] = {}
         self._load()
-        self._ensure_local_connection()
+        if ensure_local:
+            self._ensure_local_connection()
 
     def _ensure_local_connection(self) -> None:
         """Always offer a local Ollama provider so "run local" is a selectable option

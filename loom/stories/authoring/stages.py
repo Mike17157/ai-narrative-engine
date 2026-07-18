@@ -28,7 +28,7 @@ def provider(ctx, body: dict, stage: str):
 
 
 def preset(ctx, body: dict) -> dict:
-    from ..server.services import presets as _presets
+    from ...server.services import presets as _presets
 
     preset_id = (body.get("preset") or "").strip()
     return (_presets.get_preset(ctx.root, preset_id) if preset_id else None) \
@@ -36,7 +36,7 @@ def preset(ctx, body: dict) -> dict:
 
 
 def critic_provider(ctx):
-    from ..server.services import config_files as _config_files
+    from ...server.services import config_files as _config_files
 
     fallback = (_config_files.load_text_roles(ctx.root).get("fallback") or "").strip()
     if fallback:
@@ -47,7 +47,7 @@ def critic_provider(ctx):
 
 
 def as_agent(ctx, agent_id: str):
-    from ..server.services import presets as _presets
+    from ...server.services import presets as _presets
 
     selected = _presets.get_preset(ctx.root, agent_id) \
         or _presets.get_preset(ctx.root, "character_smith") \
@@ -209,8 +209,8 @@ _short = short
     params={"premise": "the story premise to board from (optional — defaults to the conversation)"},
 )
 def _storyboard(ctx, body: dict) -> dict:
-    from .pipeline import board_to_graph, parse_storyboard, storyboard_inputs
-    from .pipeline import grounding as _G
+    from ..pipeline import board_to_graph, parse_storyboard, storyboard_inputs
+    from ..pipeline import grounding as _G
     ch = _character(ctx, body)
     provider, systems = _provider(ctx, body, "storyboard")
     base = body.get("spine") or body.get("graph") or {}
@@ -309,13 +309,13 @@ def _generate_story_cover(ctx, body: dict) -> dict:
                          "character to; if omitted the creator picks the most fitting one"},
 )
 def _create_character(ctx, body: dict) -> dict:
-    from .pipeline import PROTAGONIST_SCHEMA   # {name, persona, appearance, role}
+    from ..pipeline import PROTAGONIST_SCHEMA   # {name, persona, appearance, role}
     brief = (body.get("brief") or "").strip()
     if not brief:
         raise ValueError("need a brief describing who to create")
     # Run as the character-creation agent (character_smith), NOT whatever preset is active — a weak
     # local model produces generic fluff. Falls back to the active preset only if that agent is unset.
-    from ..server.services import presets as _P
+    from ...server.services import presets as _P
     smith = _P.get_preset(ctx.root, "character_smith") or {}
     preset = smith if (smith.get("model") or "").strip() else _preset(ctx, body)
     # Generous token budget: these are LARGE structured outputs (5 seeds, the full character, 6-9
@@ -326,7 +326,7 @@ def _create_character(ctx, body: dict) -> dict:
                                      _params, connection=preset.get("connection") or None)
     if provider is None:
         raise RuntimeError("no chat connection for the character creator")
-    from .pipeline._helpers import _ANTI_FLUFF
+    from ..pipeline._helpers import _ANTI_FLUFF
     name = (body.get("name") or "").strip()
     system = (preset.get("system") or
               "You write characters the way a novelist does: a specific person, observed, not a "
@@ -384,7 +384,7 @@ def _create_character(ctx, body: dict) -> dict:
         }
         schema["required"] = list(schema.get("required", [])) + ["relationships"]
 
-    from .pipeline import grounding as _G
+    from ..pipeline import grounding as _G
 
     base_ctx = "\n\n".join(p for p in [
         f"BRIEF: {brief}",
@@ -554,8 +554,8 @@ def _create_character(ctx, body: dict) -> dict:
     # a character feel like a specific real person, not a list of adjectives.
     if key:
         try:
-            from ..server.services import lorebook_store as _LS
-            from .pipeline.character_scaffold import FACETS_SCHEMA, facet_to_entry
+            from ...server.services import lorebook_store as _LS
+            from ..pipeline.character_scaffold import FACETS_SCHEMA, facet_to_entry
             rel_ctx = ("RELATIONSHIPS (let these bonds colour their behaviour):\n"
                        + "\n".join(f"- {r['to']}: {r['nature']}" for r in out["relationships"])
                        if out.get("relationships") else "")
@@ -594,7 +594,7 @@ def _create_character(ctx, body: dict) -> dict:
     # Kick off the portrait render right after minting — best-effort: a render failure (ComfyUI
     # off, no base workflow) must NOT lose the freshly-created character.
     if key:
-        from ..server.services import full_gen as _FG
+        from ...server.services import full_gen as _FG
         try:
             out["portrait"] = _FG.render_reference(ctx, key)
         except Exception as exc:  # noqa: BLE001
@@ -626,7 +626,7 @@ def _create_character(ctx, body: dict) -> dict:
 def _design_wardrobe(ctx, body: dict) -> dict:
     import re as _re
 
-    from .pipeline import compose_outfit_prompt, plan_wardrobe
+    from ..pipeline import compose_outfit_prompt, plan_wardrobe
     key = (body.get("character") or "").strip()
     ch = ctx.base_settings.characters.get(key)
     if ch is None:
@@ -690,7 +690,7 @@ def _design_wardrobe(ctx, body: dict) -> dict:
 def _plan_cast_outfit(ctx, body: dict) -> dict:
     from loom.server.services.prompts import _regionize_prompt, _safe_image_tags, _snap_prompt
 
-    from .pipeline import compose_outfit_prompt
+    from ..pipeline import compose_outfit_prompt
     name = (body.get("outfit") or "").strip()
     if not name:
         raise ValueError("need an outfit name to compose across the cast")
@@ -786,10 +786,10 @@ _SCENE_MEM_SCHEMA = {
                      "arrival on). Falls back to the flat `scene` for everyone when omitted."},
 )
 def _record_scene(ctx, body: dict) -> dict:
-    from ..server.services import lorebook_store as _LS
+    from ...server.services import lorebook_store as _LS
     from . import scripts as _S
     from ..runtime import state as _PC
-    from .pipeline.character_scaffold import facet_to_entry
+    from ..pipeline.character_scaffold import facet_to_entry
 
     scene = (body.get("scene") or "").strip()
     # Perception scoping: when the caller passes an indexed `steps` transcript + the world-state's
@@ -971,8 +971,8 @@ def _consolidate(ctx, body: dict) -> dict:
     # a scene BOTH characters were present for. `present` = cast whose name appears in the events.
     import re
     from . import scripts as _S
-    from ..server.services import lorebook_store as _LS
-    from .pipeline.character_scaffold import facet_to_entry
+    from ...server.services import lorebook_store as _LS
+    from ..pipeline.character_scaffold import facet_to_entry
     bykey = {c["name"].strip().lower(): c["key"] for c in cast}
     _ev = events.lower()
     def _present(nm: str) -> bool:
@@ -1055,11 +1055,16 @@ def generate_dream(ctx, skey: str, world_state: dict, present: list | None = Non
             present = [m.character for m in st.cast]
         present = present[:8]
         cname = lambda k: getattr(ctx.base_settings.characters.get(k), "name", k)
+        # The /interview cast focus writes a character's concrete backstory onto the
+        # STORY (fields.character_wounds), not the character registry — the registry's
+        # own `wound` stays as a fallback for anything written by an older/other path.
+        story_wounds = ((getattr(st, "fields", None) or {}).get("character_wounds") or {}) if st else {}
 
         def _scaf(k):
             f = getattr(ctx.base_settings.characters.get(k), "fields", {}) or {}
+            wound = story_wounds.get(k) or f.get("wound") or ""
             bits = [f"want: {f['want']}" if f.get("want") else "", f"lie: {f['lie']}" if f.get("lie") else "",
-                    f"wound: {f['wound']}" if f.get("wound") else "", f"secret: {f['secret']}" if f.get("secret") else ""]
+                    f"wound: {wound}" if wound else "", f"secret: {f['secret']}" if f.get("secret") else ""]
             inner = "; ".join(b for b in bits if b)
             return f"- {cname(k)}: {inner or '(unknown depths)'}"
         scaffolds = "\n".join(_scaf(k) for k in present) or "(no cast)"
@@ -1196,7 +1201,7 @@ def consolidate_cast(ctx, skey: str, world_state: dict, sid: str = "") -> dict:
                             world_state.setdefault("log", []).append(f"(a new person was deepened: {nm})")
                         if sid:
                             try:
-                                from ..server.services import story_store as _SS
+                                from ...server.services import story_store as _SS
                                 seed = (world_state.get("people") or {}).get(nm) or {}
                                 _SS.apply_play_card_update(
                                     ctx.root, skey, sid, kind="character", card_key=nm,
@@ -1233,7 +1238,7 @@ def consolidate_cast(ctx, skey: str, world_state: dict, sid: str = "") -> dict:
         # the foundation remains the authored premise/arc and the history carries the evidence.
         if sid:
             try:
-                from ..server.services import story_store as _SS
+                from ...server.services import story_store as _SS
                 _SS.apply_play_card_update(
                     ctx.root, skey, sid, kind="story", card_key=skey,
                     foundation={"premise": getattr(st, "premise", ""),

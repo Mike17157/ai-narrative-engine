@@ -224,3 +224,28 @@ Scene seed / Protected logic — is now the thing actually rendered in the UI,
 not a concept sitting next to a wall of buttons. Free-play scenes carry the
 same per-participant role richness VN scenes always had. ~2400 lines of dead
 frontend/backend code and one fully orphaned runtime module are gone.
+
+## Frontend follow-up (2026-07-15)
+
+Live verification after the consolidation found two migration seams that a
+successful Svelte build did not expose:
+
+- The Atlas and every adjacent control were separate grid children. The Atlas
+  filled the left column, while the readiness panel and authoring tools flowed
+  below the fixed-height grid and were clipped. The surviving controls now live
+  in one scrollable authoring rail beside the Atlas, with a single-column mobile
+  fallback.
+- The conversation-first `/stories/new` page still depended on the small empty-
+  card creation endpoint that had been removed with the much larger genesis
+  subsystem. That route is now a library lifecycle operation: it only persists
+  an empty `interviewing` card and does not restore any wizard, draft graph, or
+  model generation path. The same narrow lifecycle treatment preserves the
+  active character-import → first story-card shortcut without restoring its
+  removed model-seeding machinery. The page now also exposes a retryable error
+  instead of hanging forever on creation failure.
+
+The frontend story store was reduced to its active data/lifecycle surface; dead
+arc-expansion, graph-expansion, and legacy edit-clone methods that called removed
+endpoints were deleted. Verification: production frontend build succeeds, live
+desktop geometry checked at 1280×720, new-story navigation reaches the new card,
+and the full story suite passes (209 tests).

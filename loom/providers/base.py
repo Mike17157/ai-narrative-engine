@@ -16,6 +16,25 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
 
+class ModelRequestTimeout(TimeoutError):
+    """A model turn exceeded its configured end-to-end response budget.
+
+    Model calls are always applied by a caller *after* this boundary returns,
+    so surfacing this distinct exception lets authoring endpoints promise that
+    a timed-out turn did not partially write canon.
+    """
+
+    def __init__(self, *, model: str | None = None, timeout_s: float | None = None):
+        label = str(model or "the selected model").strip() or "the selected model"
+        if isinstance(timeout_s, (int, float)) and timeout_s > 0:
+            budget = f" within {float(timeout_s):g}s"
+        else:
+            budget = " in time"
+        super().__init__(
+            f"{label} did not respond{budget}. No story changes were made; try again or choose a faster model."
+        )
+
+
 @dataclass
 class TextResult:
     text: str

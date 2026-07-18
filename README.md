@@ -74,6 +74,11 @@ connections) exposing `/api/*`, and a **SvelteKit SPA** frontend (`frontend/`).
 In production FastAPI serves the built SPA; in dev Vite serves it. If Node isn't
 installed, the server falls back to a bundled single-file page.
 
+The existing application above is the current web runtime. A separate,
+incremental desktop Story-only migration uses a local Bun/Oh My Pi sidecar and
+Tauri IPC rather than a runtime HTTP listener; its scope and release gates are
+in [`STORY_HOST_MIGRATION.md`](STORY_HOST_MIGRATION.md).
+
 ## Roadmap
 
 - **Phase 1 (done)** — engine core: schemas, providers, pipeline runner, CLI.

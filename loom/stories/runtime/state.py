@@ -109,7 +109,10 @@ def from_session(sess: dict | None) -> dict:
     sess = sess or {}
     st = sess.get("state")
     if isinstance(st, dict) and isinstance(st.get("levels"), dict):
-        return normalize(st)
+        # This is already the leveled document.  Do not feed it through the
+        # world-level normalizer (which would bolt entity/flag keys onto the
+        # document root and blur the two state layers).
+        return document_normalize(st)
 
     st = empty_state()
     for fld, level in _LEGACY_MAP.items():
@@ -483,7 +486,7 @@ def _write_fact(root: Path, scope: str, *, title: str, keywords: list[str], cont
     """Upsert an engine-established fact into a dynamic lorebook scope (deduped by title)."""
     try:
         from ..config.schema import LoreEntry
-        from ..server.services import lorebook_store as LS
+        from ...server.services import lorebook_store as LS
         eid = "auto-" + re.sub(r"[^\w\-]+", "-", title.lower()).strip("-")[:40] or "auto-fact"
         if not keywords:  # derive crude triggers from the title so it's retrievable
             keywords = [w for w in re.findall(r"[A-Za-z][A-Za-z\-']{2,}", title)][:6]

@@ -266,6 +266,88 @@ def serve(
                 pass
 
 
+@app.command("story-serve")
+def story_serve(
+    host: str = typer.Option("127.0.0.1", "--host"),
+    port: int = typer.Option(8001, "--port"),
+    open_browser: bool = typer.Option(True, "--open/--no-open", help="Open the Story UI on start."),
+    root: Path = typer.Option(Path("."), "--root"),
+    reload: bool = typer.Option(True, "--reload/--no-reload", help="Reload the lean API on code changes."),
+    no_vite: bool = typer.Option(False, "--no-vite", help="Do not launch the existing Story frontend dev server."),
+    comfy: bool = typer.Option(True, "--comfy/--no-comfy", help="Enable the optional on-demand Krea2/Comfy runner."),
+):
+    """Run the parallel Story/Architect application without legacy domains.
+
+    The command launches the existing Svelte Story routes through Vite by
+    default, pointing their ``/api`` proxy at the lean API on ``--port``.  It
+    never starts ComfyUI at boot; ``--comfy`` only permits an on-demand image
+    render to connect to or launch the configured local runner.
+    """
+    import os
+    import subprocess
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from .lean import create_lean_app
+    from .lean.app import _load_dotenv
+    from .server.security import require_token_for_bind
+
+    root = root.resolve()
+    _load_dotenv(root)
+    try:
+        require_token_for_bind(host)
+    except RuntimeError as exc:
+        typer.secho(str(exc), fg=typer.colors.RED, err=True)
+        raise typer.Exit(2) from exc
+
+    # A wildcard listener is valid for Uvicorn but not a browser/proxy target.
+    browser_host = "127.0.0.1" if host in {"0.0.0.0", "::"} else host
+    origin_host = f"[{browser_host}]" if ":" in browser_host and not browser_host.startswith("[") else browser_host
+    api_origin = f"http://{origin_host}:{port}"
+    vite = None
+    if no_vite:
+        browse_url = f"{api_origin}/docs"
+        typer.secho(f"Loom Story API running at {api_origin}", fg=typer.colors.GREEN)
+    else:
+        frontend = (root / "frontend").resolve()
+        browse_url = f"http://{origin_host}:5173"
+        typer.secho(
+            f"Loom Story — UI {browse_url} · lean API {api_origin}"
+            + (" · Krea2/Comfy on demand" if comfy else " · image runner disabled"),
+            fg=typer.colors.GREEN,
+        )
+        try:
+            vite_env = {**os.environ, "LOOM_API_ORIGIN": api_origin, "VITE_LEAN_STORY": "1"}
+            # shell=True lets Windows resolve npm.cmd; Vite logs stay visible.
+            vite = subprocess.Popen("npm run dev", cwd=str(frontend), shell=True, env=vite_env)
+        except OSError as exc:
+            typer.secho(f"Could not start Vite ({exc}); is Node/npm installed and `npm install` run?",
+                        fg=typer.colors.RED)
+
+    if open_browser:
+        threading.Timer(3.5 if vite is not None else 1.5, lambda: webbrowser.open(browse_url)).start()
+
+    try:
+        os.environ["LOOM_ROOT"] = str(root)
+        os.environ["LOOM_LEAN_COMFY"] = "1" if comfy else "0"
+        if reload:
+            uvicorn.run("loom.lean.app:dev_lean_app", factory=True, host=host, port=port,
+                        reload=True, reload_dirs=[str(Path(__file__).resolve().parent)], log_level="info")
+        else:
+            uvicorn.run(create_lean_app(root, comfy_enabled=comfy), host=host, port=port, log_level="info")
+    finally:
+        if vite is not None:
+            try:
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/T", "/PID", str(vite.pid)], capture_output=True)
+                else:
+                    vite.terminate()
+            except Exception:
+                pass
+
+
 @comfy_app.command("status")
 def comfy_status(root: Path = typer.Option(Path("."), "--root")):
     """Report whether the configured ComfyUI backend is reachable."""

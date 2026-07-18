@@ -25,6 +25,49 @@ _MODEL_ENTITY_FIELDS = ("description",)
 _MODEL_LOOP_FIELDS = ("start", "reset", "memory", "returner", "end_condition")
 
 
+def _entity_character(card: dict[str, Any]) -> dict[str, Any] | None:
+    """Collapse the story entity into one character-shaped authoring record.
+
+    Runtime storage remains backward compatible: identity, activity windows,
+    and scene gates still live in the structures that enforce them.  Authoring
+    clients should not have to reconstruct that distribution, though, so this
+    projection gives them one stable object to select and discuss.
+    """
+    world = card.get("world") if isinstance(card.get("world"), dict) else {}
+    entity = world.get("entity") if isinstance(world.get("entity"), dict) else None
+    if not entity or not any(value not in (None, "", [], {}) for value in entity.values()):
+        return None
+
+    time_system = card.get("time_system") if isinstance(card.get("time_system"), dict) else {}
+    periods = [deepcopy(item) for item in (time_system.get("entity_periods") or []) if isinstance(item, dict)]
+    fields = card.get("fields") if isinstance(card.get("fields"), dict) else {}
+    first_day = fields.get("first_day_plan") if isinstance(fields.get("first_day_plan"), dict) else {}
+    scene_ids: list[str] = []
+    for event in first_day.get("events") or []:
+        if not isinstance(event, dict):
+            continue
+        knowledge = event.get("knowledge") if isinstance(event.get("knowledge"), dict) else {}
+        if event.get("entity_action") is True or event.get("entity_period") or event.get("entity_periods") or knowledge.get("entity"):
+            event_id = str(event.get("id") or "").strip()
+            if event_id and event_id not in scene_ids:
+                scene_ids.append(event_id)
+
+    name = str(entity.get("name") or entity.get("title") or entity.get("label") or "Entity").strip()
+    return {
+        "character": "__story_entity__",
+        "name": name,
+        "role": str(entity.get("role") or entity.get("type") or "Story entity"),
+        "core": str(entity.get("description") or ""),
+        "personality": str(entity.get("tactic") or ""),
+        "background": str(entity.get("limitations") or ""),
+        "connection": str(entity.get("objective") or ""),
+        "knowledge": deepcopy(entity.get("knowledge")),
+        "schedule": periods,
+        "scene_ids": scene_ids,
+        "private": True,
+    }
+
+
 def public_story_card(ctx: Any, key: str, card: dict[str, Any]) -> dict[str, Any]:
     """Return a UI-safe card with character display details.
 
@@ -33,6 +76,10 @@ def public_story_card(ctx: Any, key: str, card: dict[str, Any]) -> dict[str, Any
     truth.  They are always removed here, matching the public story endpoint.
     ``arc_outline`` is a deliberately structural, narrator-safe indication
     that an arc exists: only its public theme and cast owner.
+    ``author_arc_outline`` is a separate compact projection for this authoring
+    card: it contains a storyline's title and public dramatic question, but no
+    private character pressure. ``model_story_card`` removes it before any
+    generic model receives the card.
     ``cast_details`` is derived data only; the persisted roster remains the
     compact list of stable character keys.
     """
@@ -59,20 +106,29 @@ def public_story_card(ctx: Any, key: str, card: dict[str, Any]) -> dict[str, Any
     # same boundary; derive a safe one afresh instead.
     arc_design = fields.pop("arc_design", None)
     fields.pop("arc_outline", None)
+    fields.pop("author_arc_outline", None)
     if isinstance(contract, dict):
         fields["runtime_ready"] = bool(contract.get("ready"))
     if arc_design is not None:
         try:
-            from .arc_design import arc_public_outline
+            from .arc_design import arc_public_outline, author_arc_outline
 
             outline = arc_public_outline(arc_design)
+            author_outline = author_arc_outline(arc_design)
         except Exception:  # noqa: BLE001 - a malformed private draft must not leak or break the card
             outline = {}
+            author_outline = {}
         if outline:
             fields["arc_outline"] = outline
+        if author_outline:
+            fields["author_arc_outline"] = author_outline
     result["fields"] = fields
 
     character_cores = fields.get("character_cores") if isinstance(fields.get("character_cores"), dict) else {}
+    # `character_wounds` is private author material (a concrete ordinary backstory), the
+    # same privacy tier as arc_design's truth/blind_spot — surfaced here for the author UI
+    # only; `model_story_card` pops it before any generic model call.
+    character_wounds = fields.get("character_wounds") if isinstance(fields.get("character_wounds"), dict) else {}
     details: list[dict[str, str]] = []
     # Secret-tier facets (character_scaffold.FACET_TIERS) are never sent to any
     # model or client in full — the Atlas only gets to know one exists, the
@@ -103,6 +159,7 @@ def public_story_card(ctx: Any, key: str, card: dict[str, Any]) -> dict[str, Any
             # player too; expose the matching public entry here only as
             # convenient display data for card clients.
             "core": str(character_cores.get(character) or ""),
+            "wound": str(character_wounds.get(character) or ""),
         })
         if _LS is not None:
             try:
@@ -111,6 +168,10 @@ def public_story_card(ctx: Any, key: str, card: dict[str, Any]) -> dict[str, Any
             except Exception:  # noqa: BLE001 - one bad scope must not blank the whole count
                 pass
     result["cast_details"] = details
+    # The entity behaves like a character in the authoring experience, but is
+    # not inserted into ``cast``: doing that would expose a Director-private
+    # actor to narration and ordinary character context.
+    result["entity_character"] = _entity_character(result)
     result["protected_facet_count"] = secret_facet_count
     result["key"] = key
     return result
@@ -131,10 +192,21 @@ def model_story_card(ctx: Any, key: str, card: dict[str, Any]) -> dict[str, Any]
     are redacted as a separate, fail-closed boundary too.
     """
     result = public_story_card(ctx, key, card)
+    # This convenience record intentionally reunites Director-private fields
+    # for the author UI. Generic model calls continue to use the independently
+    # redacted world/time/scene projections below.
+    result.pop("entity_character", None)
     fields = dict(result.get("fields") or {})
+    # This browser-only authoring projection contains a storyline's title and
+    # dramatic question. Generic development/review models use only the
+    # topology-only ``arc_outline`` and must never get a broader arc view.
+    fields.pop("author_arc_outline", None)
     # These notes are deliberately author-only even when their text does not
     # use an inline wrapper.  A generic card agent may never receive them.
     fields.pop("author_notes", None)
+    # A character's concrete backstory is private author material (the same tier as
+    # arc_design's truth/blind_spot) — never a generic model's context.
+    fields.pop("character_wounds", None)
     # Compact cores are intentionally public model context, but malformed or
     # wrapper-marked legacy values never get a chance to masquerade as a safe
     # character surface in a generic co-author call.

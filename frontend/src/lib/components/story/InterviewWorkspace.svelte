@@ -1,11 +1,15 @@
 <script>
   import { loadStory } from '$lib/stories.svelte.js';
   import { voice, startListening, stopListening } from '$lib/voice.svelte.js';
-  import { charName, loadChars } from '$lib/characters.svelte.js';
+  import { loadChars } from '$lib/characters.svelte.js';
+  import { PublicStoryArchitectController } from '$lib/story-architect-controller.js';
+  import { isStoryHostDesktop, requestStoryHost } from '$lib/story-host-client';
+  import { DesktopStoryArchitectController, desktopProposalPlan } from '$lib/desktop-story-architect';
   import DirectorBoard from './DirectorBoard.svelte';
   import EditorialModal from './EditorialModal.svelte';
+  import InlineEditableText from './InlineEditableText.svelte';
   import StoryArchitectModal from './StoryArchitectModal.svelte';
-  import StoryControlFlow from './StoryControlFlow.svelte';
+  import StoryCardExplorer from './StoryCardExplorer.svelte';
   import PlaySurface from './PlaySurface.svelte';
 
   let { storyKey, story } = $props();
@@ -17,23 +21,27 @@
   });
   const workspaceModes = [
     { id: 'story', label: 'Story card', hint: 'Your living story. Browse a section first, then discuss the exact detail you want to change.' },
-    { id: 'architect', label: 'Architect', hint: 'The Story Architect can turn high-level direction into a bounded story pass.' },
     { id: 'play', label: 'Play', hint: 'Readiness and the live story state.' }
   ];
-  // The card is the everyday home because it is the public source of truth.
-  // Architect is a deliberate co-authoring surface; Director-only material is
-  // available contextually from the card rather than competing with it.
+  // The card and Architect are the everyday authoring surface. Keep both
+  // mounted from the first render so a draft or in-flight turn cannot vanish
+  // merely because the author has not reopened a secondary pane.
   let workspaceMode = $state('story');
+  let architectOpen = $state(true);
+  let architectEntryLabel = $state('Story overview');
+  let architectEntrySection = $state('overview');
+  let architectEntrySummary = $state('Edit the world, premise, and opening position.');
   let directorOpen = $state(false);
   let conversationOpen = $state(false);
   const stages = [
     { id: 'world', label: 'The world', hint: 'What sort of story are we telling?' },
     { id: 'premise', label: 'The opening', hint: 'Where do we begin, and what has shifted?' },
     { id: 'cast', label: 'The people', hint: 'Who is already waiting there?' },
-    { id: 'arcs', label: 'Theme & arcs', hint: 'What can each person not admit or see yet?' },
+    { id: 'arcs', label: 'Storylines', hint: 'What can each person not admit or see yet?' },
     { id: 'first_day', label: 'Possible scenes', hint: 'Where can pressure land before the first death?' },
     { id: 'time_system', label: 'Entity schedule', hint: 'When can the entity observe, hunt, or feed?' },
   ];
+  const publicDirectArchitectSections = new Set(['world', 'premise', 'cast', 'first_day']);
   const legacyBootstrap = new Set([
     'I’m starting a new story. Invite me to share any useful starting spark.',
     "I'm starting a new story. Invite me to share any useful starting spark.",
@@ -53,7 +61,7 @@
     if (!(current?.time_system?.entity_periods || []).length) return 'time_system';
     return 'arcs';
   };
-  let focus = $state(initialFocus());
+  let focus = $state('world');
   // Every thread belongs to one durable story-card target.  Histories live on
   // the server, rather than in one local, story-wide interview transcript.
   let editorTarget = $state(null);
@@ -71,6 +79,14 @@
   let architectBusy = $state(false);
   let architectTyped = $state('');
   let architectMessages = $state([]);
+  // Unlike the old single Architect transcript, a discussion belongs to the
+  // precise card element being edited.  This lightweight browser cache keeps
+  // the full working conversation (including useful progress copy the server
+  // deliberately does not store) when the dock is closed or the author moves
+  // between scenes, people, and the overview.
+  let architectTargetId = $state('section:overview');
+  let architectTarget = $state(sectionTarget('overview'));
+  let architectThreads = $state({});
   let architectGaps = $state([]);
   let architectSummary = $state('');
   let architectMission = $state('');
@@ -91,6 +107,15 @@
   let architectQuestionKey = $state('');
   let architectActivity = $state('Reading the live story card…');
   let architectSessionKey = $state('');
+  // The public controller is deliberately per-story and only handles an
+  // explicit, bounded direct-edit slice.  Everything else remains on the
+  // established server-owned Architect path below.
+  let publicArchitectController = null;
+  let publicArchitectControllerKey = '';
+  // The desktop host makes a proposal first and returns a single-use approval
+  // capability. Keep it in memory only until the author confirms or starts a
+  // fresh request; it is never a browser-owned raw-commit payload.
+  let pendingDesktopProposal = $state(null);
   let architectRequest = 0;
   let architectRun = 0;
   let error = $state('');
@@ -150,15 +175,16 @@
     return stages.some((stage) => stage.id === section) ? section : 'world';
   }
   function sectionTarget(section) {
-    const id = normaliseSection(section?.id || section);
+    const requested = String(section?.id || section || '').trim();
+    const id = requested === 'overview' ? 'overview' : normaliseSection(requested);
     const stage = stages.find((item) => item.id === id);
     return {
       id: `section:${id}`,
       scope: 'section',
       section: id,
       kind: 'section',
-      label: stage?.label || 'Story section',
-      summary: stage?.hint || 'Make this part of the story more useful.'
+      label: id === 'overview' ? 'Story overview' : (stage?.label || 'Story section'),
+      summary: id === 'overview' ? 'Edit the setting, premise, and opening position together.' : (stage?.hint || 'Make this part of the story more useful.')
     };
   }
   function itemTarget(section, kind, id, label, summary = '', field = '') {
@@ -179,18 +205,165 @@
   }
   function normaliseTarget(target) {
     if (!target || typeof target === 'string') return sectionTarget(target || focus);
-    if (!target.item && (!target.kind || target.kind === 'section')) return sectionTarget(target.section || target.id || focus);
+    if (!target.item && (!target.kind || target.kind === 'section')) {
+      const section = sectionTarget(target.section || target.id || focus);
+      return { ...section, label: target.label || section.label, summary: target.summary || section.summary };
+    }
     if (target.item?.kind && target.item?.id) {
       return itemTarget(target.section || focus, target.item.kind, target.item.id, target.label, target.summary, target.item.field || target.field);
     }
     if (target.kind && target.id) return itemTarget(target.section || focus, target.kind, target.id, target.label, target.summary, target.field);
     return sectionTarget(target.section || focus);
   }
+  const architectThreadLimit = 24;
+  const architectMessageLimit = 60;
+  function architectThreadStorageKey() {
+    return `loom.story-architect-threads.v1:${storyKey || 'draft'}`;
+  }
+  function compactArchitectThread(thread) {
+    const safeMessages = (Array.isArray(thread?.messages) ? thread.messages : [])
+      .filter((message) => message && typeof message.text === 'string')
+      .slice(-architectMessageLimit)
+      .map((message) => ({
+        role: message.role === 'user' ? 'user' : 'assistant',
+        text: message.text.slice(0, 12000),
+        ...(message.kind ? { kind: String(message.kind).slice(0, 40) } : {}),
+        ...(message.meta ? { meta: String(message.meta).slice(0, 1200) } : {})
+      }));
+    return { messages: safeMessages, draft: String(thread?.draft || '').slice(0, 12000), updatedAt: Date.now() };
+  }
+  function loadArchitectThreads() {
+    if (typeof window === 'undefined') return {};
+    try {
+      const saved = JSON.parse(window.localStorage.getItem(architectThreadStorageKey()) || '{}');
+      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+      return Object.fromEntries(Object.entries(saved)
+        .filter(([key]) => typeof key === 'string' && key.length <= 220)
+        .slice(-architectThreadLimit)
+        .map(([key, value]) => [key, compactArchitectThread(value)]));
+    } catch { return {}; }
+  }
+  function persistArchitectThread() {
+    if (typeof window === 'undefined' || !architectTargetId) return;
+    const next = { ...architectThreads, [architectTargetId]: compactArchitectThread({ messages: architectMessages, draft: architectTyped }) };
+    const entries = Object.entries(next).sort(([, left], [, right]) => (left.updatedAt || 0) - (right.updatedAt || 0));
+    architectThreads = Object.fromEntries(entries.slice(-architectThreadLimit));
+    try { window.localStorage.setItem(architectThreadStorageKey(), JSON.stringify(architectThreads)); } catch { /* private browsing or full storage must not interrupt writing */ }
+  }
+  function restoreArchitectThread() {
+    const cached = architectThreads[architectTargetId];
+    architectMessages = Array.isArray(cached?.messages) ? cached.messages : [];
+    architectTyped = typeof cached?.draft === 'string' ? cached.draft : '';
+  }
+  function architectTargetKey(target) {
+    return normaliseTarget(target).id || 'section:world';
+  }
   function apiTarget(target) {
     const resolved = normaliseTarget(target);
     const api = { section: resolved.section };
     if (resolved.item) api.item = { ...resolved.item };
     return api;
+  }
+  function publicArchitect() {
+    if (!storyKey) return null;
+    const desktop = isStoryHostDesktop();
+    const controllerKey = `${storyKey}:${desktop ? 'desktop' : 'http'}`;
+    if (!publicArchitectController || publicArchitectControllerKey !== controllerKey) {
+      publicArchitectController = desktop
+        ? new DesktopStoryArchitectController(storyKey)
+        : new PublicStoryArchitectController(storyKey);
+      publicArchitectControllerKey = controllerKey;
+    }
+    return publicArchitectController;
+  }
+  function publicArchitectResponse(turn) {
+    // Capability cards are model-safe projections.  Never pass either one to
+    // `applyArchitectResponse`, because that would replace the author's full
+    // card in the workspace with the redacted model snapshot.
+    const commit = turn?.commit && typeof turn.commit === 'object' ? turn.commit : {};
+    const { card: _modelCard, story: _modelStory, updated_story: _updatedModelStory, ...response } = commit;
+    const updatedSections = Array.isArray(commit.updated_sections) && commit.updated_sections.length
+      ? commit.updated_sections
+      : [turn.scope];
+    return {
+      ...response,
+      action: 'develop',
+      updated_sections: updatedSections,
+      reply: commit.message || `Completed the public ${readableArchitectScopes(updatedSections)} pass.`,
+      model_route: turn?.model?.model_route || commit.model_route,
+      work_order: turn?.model?.work_order || commit.work_order
+    };
+  }
+  async function runPublicArchitectDirect(message, { run, before, complete = false, commentOn = '', useFallback = false } = {}) {
+    // This first browser-owned slice must be a real, single-surface author
+    // request.  Broad planning, plan feedback/execution, protected questions,
+    // fallback selection, and every non-public target stay with the legacy
+    // route, rather than being quietly widened into a client-selected scope.
+    if (!message || complete || commentOn || useFallback || architectAnswerTo || !architectTarget
+      || !publicDirectArchitectSections.has(architectTarget.section)) return null;
+    const controller = publicArchitect();
+    if (!controller) return null;
+    architectActivity = 'Drafting a public story pass…';
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), architectRequestTimeoutMs);
+    let turn;
+    try {
+      if (isStoryHostDesktop()) {
+        // A newer direction supersedes an uncommitted desktop proposal. The
+        // host token has no mutation power without this explicit confirmation
+        // path and expires shortly even if the sidecar stays alive.
+        pendingDesktopProposal = null;
+        architectExecutionReady = false;
+        architectAuthorPlan = null;
+        architectPlan = null;
+        turn = await controller.proposeDirectTurn({ target: architectTarget, brief: message, signal: abortController.signal });
+      } else {
+        turn = await controller.runDirectTurn({ target: architectTarget, brief: message, signal: abortController.signal });
+      }
+    } catch (error) {
+      if (error?.name === 'AbortError' || error?.code === 'cancelled') {
+        throw new Error('The Story Architect did not respond within 45 seconds. Send the same direction again to re-check the latest story card.');
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+    // A 404 is the controller's explicit compatibility signal.  Context/model
+    // calls are non-mutating, and a missing commit has not written anything,
+    // so it is safe to continue through the existing Architect endpoint.
+    if (turn?.unavailable || turn?.legacy) return null;
+    if (run !== architectRun) return { handled: true, stale: true };
+
+    if (turn?.status === 'awaiting_author_approval') {
+      // This is deliberately a proposal review, not an optimistic render of
+      // the model-safe card. The modal's established confirmation action will
+      // send only the opaque capability token back to the desktop host.
+      pendingDesktopProposal = turn;
+      architectAuthorPlan = desktopProposalPlan(turn);
+      architectPlan = { phase: 'safe_baseline', safe_scopes: [turn.scope] };
+      architectExecutionReady = true;
+      architectSummary = architectAuthorPlan.summary || `A reviewed ${turn.scope} change is ready for your approval.`;
+      architectQuestion = '';
+      architectAnswerTo = '';
+      architectQuestionKey = '';
+      architectMessages = [...before, { role: 'user', text: message }, {
+        role: 'assistant', kind: 'progress',
+        text: 'The Architect prepared a bounded, reviewed change. Nothing has been applied yet.',
+        meta: 'Inspect the exact patch above, then choose Confirm plan & execute to commit it once.'
+      }];
+      persistArchitectThread();
+      return { handled: true };
+    }
+
+    applyArchitectResponse(publicArchitectResponse(turn), { run, before, userText: message });
+    // Commit also returns a model-safe projection. Reload the normal Story
+    // card adapter for the full author view after the validated commit succeeds.
+    current = await loadStory(storyKey) || current;
+    try { await loadChars(storyKey); } catch { /* display names refresh on the next app update */ }
+    await refreshReadiness();
+    window.dispatchEvent(new CustomEvent('story:refresh', { detail: { key: storyKey } }));
+    window.dispatchEvent(new CustomEvent('queue:refresh'));
+    return { handled: true };
   }
   function targetHistoryUrl(target) {
     const resolved = normaliseTarget(target);
@@ -477,6 +650,10 @@
       && route?.used_fallback !== true;
   }
   async function assessArchitect({ announce = true } = {}) {
+    if (isStoryHostDesktop()) {
+      architectError = 'Card-gap assessment is not a local Story Host capability yet.';
+      return null;
+    }
     const request = ++architectRequest;
     architectError = '';
     try {
@@ -537,7 +714,13 @@
     // if another local request is slow or being restarted.
     else if (nextStory) void refreshReadiness();
 
-    const history = architectAuthorHistory(data, before);
+    // A saved component thread is richer than the coordinator's small
+    // server ledger (it includes completed progress notes). Prefer it when
+    // present so returning to a scene never makes its discussion look as if
+    // it has been flushed.
+    const history = before.filter((message) => !message?.loading).length
+      ? before.filter((message) => !message?.loading)
+      : architectAuthorHistory(data, before);
     const reply = responseArchitectReply(data);
     const questionValue = responseArchitectQuestion(data);
     const rawAnswerTo = data?.answer_to || data?.question_id || questionValue?.answer_to || questionValue?.id || '';
@@ -575,11 +758,12 @@
       role: 'assistant', kind: 'progress', text: 'The Architect is holding the current plan.',
       meta: 'No author decision is waiting right now.'
     }];
+    persistArchitectThread();
     const changed = data?.next_focus || data?.updated_section || data?.focus
       || (Array.isArray(data?.updated_sections) ? data.updated_sections[0] : '');
     if (changed && stages.some((stage) => stage.id === changed)) focus = changed;
     if (data?.created || data?.created_characters) {
-      void loadChars().catch(() => { /* names refresh on the next app update */ });
+      void loadChars(storyKey).catch(() => { /* names refresh on the next app update */ });
     }
     // Do not emit `story:refresh` from a bootstrap.  The route shell replaces
     // this component for that event; doing so here created a reload loop:
@@ -588,11 +772,21 @@
     window.dispatchEvent(new CustomEvent('queue:refresh'));
   }
   async function requestArchitectTurn(message, { run, before = [], bootstrap = false, complete = false, newMission = false, useFallback = false, commentOn = '' } = {}) {
+    if (isStoryHostDesktop()) {
+      throw new Error('Legacy Architect turns are unavailable in the local Story Host. Use the reviewed local Architect proposal instead.');
+    }
     let res;
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), architectRequestTimeoutMs);
     try {
       const payload = { message: String(message || '') };
+      // A normal dock turn edits exactly the card element the author picked.
+      // Plan-sheet comments and explicit completion remain Architect-level
+      // orchestration, but they must not swallow a focused scene/premise edit.
+      if (payload.message.trim() && !complete && !commentOn && architectTarget) {
+        payload.direct_edit = true;
+        payload.target = apiTarget(architectTarget);
+      }
       // The server can resolve its persisted pending question without this,
       // but carrying the opaque id makes an answer/replay relationship
       // explicit when the endpoint has supplied one.
@@ -655,10 +849,15 @@
   }
   async function startArchitect({ force = false } = {}) {
     if (!storyKey || (!force && architectSessionKey === storyKey)) return;
+    if (architectSessionKey !== storyKey) {
+      architectThreads = loadArchitectThreads();
+      architectTargetId = 'section:overview';
+      architectTarget = sectionTarget('overview');
+      restoreArchitectThread();
+    }
     architectSessionKey = storyKey;
     const run = ++architectRun;
     architectError = '';
-    architectTyped = '';
     architectQuestion = '';
     architectAnswerTo = '';
     architectQuestionKey = '';
@@ -669,13 +868,34 @@
     architectPlan = null;
     architectAuthorPlan = null;
     architectExecutionReady = false;
+    pendingDesktopProposal = null;
     architectRoute = '';
     architectFallback = null;
     architectActivity = 'Reading the live story card…';
     architectBusy = true;
-    architectMessages = [{ role: 'assistant', text: '', loading: true }];
+    const retainedThread = architectMessages.filter((message) => !message?.loading);
+    architectMessages = retainedThread.length ? retainedThread : [{ role: 'assistant', text: '', loading: true }];
     try {
-      const result = await requestArchitectTurn('', { run, before: [], bootstrap: true });
+      if (isStoryHostDesktop()) {
+        // A bootstrap is an observation only. Desktop direct edits use the
+        // OMP proposal capability later, after the author supplies a bounded
+        // public direction; never send an empty legacy HTTP turn here.
+        const context = await publicArchitect()?.loadContext();
+        if (!context) throw new Error('Could not load the desktop Story Architect context.');
+        if (run !== architectRun) return;
+        if (context.control_graph && typeof context.control_graph === 'object') {
+          controlGraph = context.control_graph;
+        }
+        architectRoute = 'Desktop Story Host';
+        architectSummary = 'The current model-safe Story card is ready for a bounded public change.';
+        architectMessages = [{
+          role: 'assistant', kind: 'progress',
+          text: 'The local Story Architect has the current card. Choose a public section and describe the change; I will return a reviewed patch for your confirmation.',
+          meta: 'Desktop Story Host · no automatic canon changes.'
+        }];
+        return;
+      }
+      const result = await requestArchitectTurn('', { run, before: retainedThread, bootstrap: true });
       if (run !== architectRun) return;
       if (result?.unsupported) {
         architectActivity = 'Mapping the current story…';
@@ -725,6 +945,9 @@
   }
   async function runArchitect(direction = architectTyped, { complete = false, newMission = false, useFallback = false, commentOn = '' } = {}) {
     if (architectBusy || developing || busy) return;
+    if (complete && pendingDesktopProposal) {
+      return commitDesktopArchitectProposal();
+    }
     const requested = String(direction || '').trim();
     // An approved protected plan may be applied without inventing a fake
     // author message. The server still validates its one-card authorization.
@@ -735,11 +958,30 @@
     architectError = '';
     architectFallback = null;
     architectActivity = complete && !requested ? 'Applying the approved plan…' : 'Tracing what your direction changes…';
-    architectTyped = '';
+    // Keep the submitted direction visible while the turn is in flight. A
+    // good prompt should never look lost merely because the composer became
+    // disabled; clear it only after the server has accepted the turn.
     architectMessages = requested
       ? [...before, { role: 'user', text: requested }, { role: 'assistant', text: '', loading: true }]
       : [...before, { role: 'assistant', text: '', loading: true }];
+    persistArchitectThread();
     try {
+      const publicTurn = await runPublicArchitectDirect(requested, { run, before, complete, commentOn, useFallback });
+      if (run !== architectRun) return;
+      if (publicTurn?.handled) {
+        if (!publicTurn.stale) architectTyped = '';
+        return;
+      }
+      if (isStoryHostDesktop()) {
+        // Desktop mode is intentionally serverless. A protected target must
+        // never quietly fall through to the legacy HTTP Architect/interview
+        // routes while its local approval boundary has not been migrated.
+        architectMessages = before;
+        architectTyped = requested;
+        persistArchitectThread();
+        architectError = 'That protected Story workflow is not in the local Host yet. Use the reviewed public Architect for world, premise, cast, or Day One; Director, arcs, and play remain explicitly unavailable offline.';
+        return;
+      }
       const result = await requestArchitectTurn(requested, { run, before, complete, newMission, useFallback, commentOn });
       if (run !== architectRun) return;
       if (result?.unsupported) {
@@ -747,6 +989,7 @@
         // it never asks the author to pick a target.  It is only used while
         // an older local server is running during migration.
         architectMessages = before;
+        persistArchitectThread();
         architectBusy = false;
         // An older server cannot validate an opaque approved-plan action, so
         // never fall through to the legacy broad worker for an empty request.
@@ -762,6 +1005,8 @@
         // retry against the newly observed card instead of being sent twice.
         architectTyped = requested;
         architectError = 'The card changed while that feedback was in flight. I refreshed the current plan; review it, then resend or revise your draft.';
+      } else if (!result?.unsupported && !result?.stale) {
+        architectTyped = '';
       }
     } catch (err) {
       if (run === architectRun) {
@@ -769,6 +1014,7 @@
         // Preserve the author’s direction so a transient model/provider
         // failure can be retried directly from the composer.
         architectTyped = requested;
+        persistArchitectThread();
         architectError = err.message || 'The Story Architect could not complete this turn';
         if (err?.modelRoute) architectRoute = architectRouteLabel(err.modelRoute);
         // The retry is deliberately separate from this failed request.  It
@@ -790,6 +1036,67 @@
         architectActivity = 'Waiting for your direction';
       }
     }
+  }
+  async function commitDesktopArchitectProposal() {
+    const pending = pendingDesktopProposal;
+    const controller = publicArchitect();
+    if (!pending || !(controller instanceof DesktopStoryArchitectController) || architectBusy || developing || busy) return;
+    const run = ++architectRun;
+    const before = architectMessages;
+    architectBusy = true;
+    architectError = '';
+    architectActivity = 'Applying the approved Story change…';
+    architectMessages = [...before, { role: 'assistant', text: '', loading: true }];
+    persistArchitectThread();
+    const abortController = new AbortController();
+    const timeout = setTimeout(() => abortController.abort(), architectRequestTimeoutMs);
+    try {
+      const turn = await controller.commitApprovedTurn(pending, { signal: abortController.signal });
+      if (run !== architectRun) return;
+      pendingDesktopProposal = null;
+      architectExecutionReady = false;
+      applyArchitectResponse(publicArchitectResponse(turn), { run, before, userText: '' });
+      // During the migration this reload uses the established full-author
+      // projection. The host's commit card remains model-safe and must never
+      // replace `current` directly.
+      current = await loadStory(storyKey) || current;
+      try { await loadChars(storyKey); } catch { /* display names refresh on the next app update */ }
+      await refreshReadiness();
+      window.dispatchEvent(new CustomEvent('story:refresh', { detail: { key: storyKey } }));
+      window.dispatchEvent(new CustomEvent('queue:refresh'));
+    } catch (err) {
+      if (run === architectRun) {
+        architectMessages = before;
+        persistArchitectThread();
+        architectError = err?.code === 'cancelled'
+          ? 'The approval request was cancelled. The reviewed proposal is still available until it expires.'
+          : (err?.message || 'Could not apply the reviewed Story proposal');
+      }
+    } finally {
+      clearTimeout(timeout);
+      if (run === architectRun) {
+        architectBusy = false;
+        architectActivity = pendingDesktopProposal ? 'Review the proposed change' : 'Waiting for your direction';
+      }
+    }
+  }
+  function discardDesktopArchitectProposal() {
+    if (!pendingDesktopProposal || architectBusy || developing || busy) return;
+    pendingDesktopProposal = null;
+    architectExecutionReady = false;
+    architectAuthorPlan = null;
+    architectPlan = null;
+    architectSummary = 'The reviewed proposal was discarded. No Story canon changed.';
+    architectQuestion = '';
+    architectAnswerTo = '';
+    architectQuestionKey = '';
+    architectMessages = [...architectMessages.filter((message) => !message?.loading), {
+      role: 'assistant', kind: 'progress',
+      text: 'Discarded the reviewed proposal. Nothing was applied.',
+      meta: 'Describe a new direction whenever you are ready.'
+    }];
+    architectActivity = 'Waiting for your direction';
+    persistArchitectThread();
   }
   function retryArchitectWithFallback() {
     const retry = architectFallback;
@@ -860,7 +1167,7 @@
         if (!res.ok) throw new Error(data?.error || 'The story agent could not complete this pass');
         architectRoute = architectRouteLabel(data?.model_route);
         current = data.story || await loadStory(storyKey);
-        try { await loadChars(); } catch { /* display names refresh on the next app update */ }
+        try { await loadChars(storyKey); } catch { /* display names refresh on the next app update */ }
         readiness = data.readiness || await refreshReadiness();
         const sections = Array.isArray(data?.updated_sections) ? data.updated_sections : scopes;
         const created = createdCharacterNames(data);
@@ -892,7 +1199,7 @@
           } catch (arcError) {
             // The public pass has already committed safely.  Do not hide that
             // work merely because the optional protected follow-up is delayed.
-            arcMeta = `Arc follow-up deferred: ${arcError?.message || 'try again from Theme & arcs.'}`;
+            arcMeta = `Storyline follow-up deferred: ${arcError?.message || 'try again from Storylines.'}`;
           }
         }
         architectMessages = [...before, { role: 'user', text: requestedBrief }, {
@@ -943,6 +1250,11 @@
     readiness = data.readiness || await refreshReadiness();
   }
   async function openConversation(target = sectionTarget(focus)) {
+    if (isStoryHostDesktop()) {
+      architectError = 'Focused interview conversations are not in the local Story Host yet. Use the reviewed Architect or direct card text edits instead.';
+      architectOpen = true;
+      return;
+    }
     const resolved = normaliseTarget(target);
     const request = ++editorRequest;
     focus = resolved.section;
@@ -975,6 +1287,14 @@
   async function refreshControlGraph() {
     if (!storyKey) return null;
     try {
+      if (isStoryHostDesktop()) {
+        const data = await requestStoryHost('story.control_graph', { key: storyKey });
+        if (data?.graph && typeof data.graph === 'object') {
+          controlGraph = data.graph;
+          return data.graph;
+        }
+        return null;
+      }
       const res = await fetch(`/api/stories/${encodeURIComponent(storyKey)}/control-graph`);
       const data = await res.json();
       if (!res.ok) throw new Error(data?.error || 'Could not load story map');
@@ -992,10 +1312,34 @@
     if (!node || typeof node !== 'object') return;
     if (node.id === 'director') {
       workspaceMode = 'story';
+      if (isStoryHostDesktop()) {
+        architectError = 'Director tools are not available in the local Story Host yet. They are kept closed rather than using the legacy HTTP runtime.';
+        architectOpen = true;
+        return;
+      }
       directorOpen = true;
       return;
     }
-    if (node.target) void openConversation(node.target);
+    if (node.target) openArchitect(node.target);
+  }
+  function openArchitect(target = sectionTarget(focus)) {
+    setArchitectTarget(target);
+    architectOpen = true;
+  }
+  function setArchitectTarget(target = sectionTarget(focus)) {
+    persistArchitectThread();
+    const resolved = normaliseTarget(target?.target || target);
+    focus = normaliseSection(resolved.section === 'overview' ? 'premise' : resolved.section);
+    architectEntryLabel = resolved.label || stages.find((stage) => stage.id === focus)?.label || 'Story direction';
+    architectEntrySection = resolved.section;
+    architectEntrySummary = resolved.summary || `Edit ${architectEntryLabel} directly.`;
+    architectTarget = resolved;
+    architectTargetId = architectTargetKey(resolved);
+    restoreArchitectThread();
+  }
+  function closeArchitect() {
+    persistArchitectThread();
+    architectOpen = false;
   }
   function closeConversation() {
     conversationOpen = false;
@@ -1024,19 +1368,75 @@
   }
   async function refreshReadiness() {
     try {
+      if (isStoryHostDesktop()) {
+        const data = await requestStoryHost('story.readiness', { key: storyKey });
+        if (data && typeof data === 'object') readiness = data;
+        return data || null;
+      }
       const res = await fetch(`/api/stories/${storyKey}/play-readiness`);
       const data = await res.json();
       if (res.ok) readiness = data;
       return data;
     } catch { return null; }
   }
+
+  async function saveInlineText(edit) {
+    if (!edit || typeof edit.value !== 'string') throw new Error('Nothing to save.');
+    let data;
+    if (isStoryHostDesktop()) {
+      const expectedAuthorRevision = current?.author_revision;
+      if (typeof expectedAuthorRevision !== 'string' || !expectedAuthorRevision) {
+        throw new Error('The local Story card is out of date. Reload it before saving this edit.');
+      }
+      data = edit.resource === 'character'
+        ? await requestStoryHost('story.cast_text', {
+          key: storyKey,
+          character: edit.id,
+          field: edit.field,
+          value: edit.value,
+          expected_author_revision: expectedAuthorRevision
+        })
+        : await requestStoryHost('story.inline_text', {
+          key: storyKey,
+          path: edit.path,
+          value: edit.value,
+          expected_author_revision: expectedAuthorRevision
+        });
+    } else if (edit.resource === 'character') {
+      const body = edit.field === 'name'
+        ? { name: edit.value }
+        : { fields: { [edit.field]: edit.value } };
+      const res = await fetch(`/api/stories/${encodeURIComponent(storyKey)}/cast/${encodeURIComponent(edit.id)}/card`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      });
+      data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Could not save this edit.');
+    } else {
+      const res = await fetch(`/api/stories/${encodeURIComponent(storyKey)}/inline-text`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ path: edit.path, value: edit.value })
+      });
+      data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Could not save this edit.');
+    }
+    current = data?.story || await loadStory(storyKey);
+    if (current && typeof data?.author_revision === 'string') current.author_revision = data.author_revision;
+    architectSessionKey = '';
+    controlGraphKey = '';
+    readinessKey = '';
+    await refreshReadiness();
+    return current;
+  }
   function resolveBlocker(blocker) {
-    workspaceMode = 'architect';
     const prompt = `Resolve this play-readiness constraint without changing established canon: ${blocker.message || 'The story needs one runtime decision.'}${blocker.fix ? ` ${blocker.fix}` : ''}`;
-    if (architectBusy) architectTyped = prompt;
-    else void runArchitect(prompt);
+    architectTyped = prompt;
+    openArchitect(sectionTarget(blocker.section || 'world'));
   }
   async function activatePlay() {
+    if (isStoryHostDesktop()) {
+      error = 'Live play is not available in the local Story Host yet.';
+      return;
+    }
     if (activating || busy || developing || !readiness?.ready) return;
     activating = true; error = '';
     try {
@@ -1053,6 +1453,10 @@
     finally { activating = false; }
   }
   async function organizeCard() {
+    if (isStoryHostDesktop()) {
+      error = 'Card organization is not a local Story Host capability yet.';
+      return;
+    }
     if (organizing || busy || developing) return;
     organizing = true; error = '';
     try {
@@ -1069,6 +1473,10 @@
     finally { organizing = false; }
   }
   async function reviewCard() {
+    if (isStoryHostDesktop()) {
+      error = 'Legacy card review is not a local Story Host capability yet.';
+      return;
+    }
     if (reviewing || busy || developing) return;
     reviewing = true; error = '';
     try {
@@ -1093,6 +1501,10 @@
       .filter(Boolean);
   }
   async function developCard() {
+    if (isStoryHostDesktop()) {
+      error = 'Batch card development is not a local Story Host capability yet.';
+      return;
+    }
     if (developing || busy || reviewing || organizing) return;
     developing = true; error = '';
     const scope = developmentScopes.find((item) => item.id === developScope);
@@ -1120,7 +1532,7 @@
       }];
       if (!editorTarget) editorTarget = sectionTarget(developScope === 'cast' ? 'cast' : 'premise');
       current = data.story || await loadStory(storyKey);
-      try { await loadChars(); } catch { /* names still fall back safely until the next app refresh */ }
+      try { await loadChars(storyKey); } catch { /* names still fall back safely until the next app refresh */ }
       readiness = data.readiness || await refreshReadiness();
       focus = data.next_focus || stageFor(data.patch || {});
       lastUpdated = focus;
@@ -1137,6 +1549,10 @@
     typed = suggestion?.prompt || suggestion?.detail || suggestion?.title || '';
   }
   async function send(text = typed) {
+    if (isStoryHostDesktop()) {
+      error = 'Focused interview conversations are not available in the local Story Host yet.';
+      return;
+    }
     const value = text.trim(); if (!value || busy || developing) return;
     const target = normaliseTarget(editorTarget || sectionTarget(focus));
     const request = editorRequest;
@@ -1207,7 +1623,7 @@
   <header class="workspace-header">
     <div>
       <span class="eyebrow">Story control room</span>
-      <h1>{current?.name || 'Untitled story'}</h1>
+      <h1 aria-label={current?.name || 'Untitled story'}><InlineEditableText value={current?.name || ''} placeholder="Untitled story" label="story title" multiline={false} onsave={(value) => saveInlineText({ path: ['name'], value })} /></h1>
       <p>{workspaceModes.find((item) => item.id === workspaceMode)?.hint}</p>
     </div>
     <div class="workspace-tabs" role="tablist" aria-label="Story workspace">
@@ -1220,10 +1636,25 @@
     </div>
   </header>
 
-  {#if workspaceMode === 'architect'}
-    <section class="workspace-panel architect-panel" aria-label="Story Architect workspace">
+  {#if workspaceMode === 'story'}
+  <section class="card-workspace" class:architect-open={architectOpen} aria-label="Story card workspace">
+    <StoryCardExplorer
+      story={current}
+      onedit={selectArchitectGraphNode}
+      onfocus={(section) => (focus = normaliseSection(section))}
+      onselecttarget={setArchitectTarget}
+      onsavefield={saveInlineText}
+    />
+
+  {#if architectOpen}
+    <aside class="architect-dock" aria-label="Story Architect">
       <StoryArchitectModal
+        docked={true}
+        entryLabel={architectEntryLabel}
+        entrySection={architectEntrySection}
+        entrySummary={architectEntrySummary}
         messages={architectMessages}
+        history={architectMessages}
         gaps={architectGaps}
         summary={architectSummary}
         mission={architectMission}
@@ -1231,6 +1662,7 @@
         plan={architectPlan}
         authorPlan={architectAuthorPlan}
         executionReady={architectExecutionReady}
+        reviewedPatch={pendingDesktopProposal ? (architectAuthorPlan?.sections?.[0]?.body || '') : ''}
         question={architectQuestion}
         activity={architectActivity}
         route={architectRoute}
@@ -1238,62 +1670,38 @@
         error={architectError}
         fallbackRetry={architectFallback}
         bind:typed={architectTyped}
+        ondraft={() => queueMicrotask(persistArchitectThread)}
         onrun={runArchitect}
         onreview={reviewArchitectDecision}
         onexecute={() => runArchitect('', { complete: true })}
+        onreject={pendingDesktopProposal ? discardDesktopArchitectProposal : null}
         onfallback={retryArchitectWithFallback}
+        onclose={closeArchitect}
       />
-    </section>
-  {:else if workspaceMode === 'story'}
-  <section class="card-workspace" aria-label="Story card workspace">
-    <StoryControlFlow
-      graph={controlGraph}
-      story={current}
-      selected={({ world: 'world', premise: 'opening', cast: 'cast', arcs: 'arcs', first_day: 'scenes', time_system: 'director' })[focus] || focus}
-      bind:compact={controlGraphCompact}
-      onselect={selectArchitectGraphNode}
-    />
-
-  <aside class="story-rail" aria-label="Story card actions and readiness">
-  <div class="cardhead"><span>Story tools</span><span class="cardactions"><button type="button" class="edit-card" onclick={() => openConversation(focus)} disabled={busy || developing}>Edit {stages.find((stage) => stage.id === focus)?.label || 'section'}</button><button type="button" class="director-tools" onclick={() => (directorOpen = true)} disabled={busy || developing} aria-haspopup="dialog" aria-expanded={directorOpen}>Director tools</button><button type="button" class="develop" onclick={() => (developOpen = !developOpen)} disabled={developing || busy || reviewing || organizing} aria-expanded={developOpen}>{developing ? 'Building…' : 'Build'}</button><button type="button" class="organize" onclick={reviewCard} disabled={reviewing || busy || developing}>{reviewing ? 'Reviewing…' : 'Review'}</button><button type="button" class="organize" onclick={organizeCard} disabled={organizing || busy || developing}>{organizing ? 'Organizing…' : 'Organize'}</button></span></div>
-  {#if developOpen}
-    <section class="develop-panel" aria-label="Build a starting set">
-      <div class="develop-title"><div><strong>Build a starting set</strong><p>One agent pass from this card—not a new interview. It can add canon and make real character cards.</p></div><button type="button" class="close-develop" onclick={() => (developOpen = false)} aria-label="Close build setup">×</button></div>
-      <div class="develop-scopes" role="radiogroup" aria-label="What to build">
-        {#each developmentScopes as scope}
-          <button type="button" role="radio" aria-checked={developScope === scope.id} class:selected={developScope === scope.id} onclick={() => (developScope = scope.id)}><b>{scope.label}</b><span>{scope.hint}</span></button>
-        {/each}
-      </div>
-      <label class="develop-brief">Optional direction<textarea bind:value={developBrief} disabled={developing} placeholder="Keep Shuri central; add two people with conflicting reasons to be at the dock…"></textarea></label>
-      <div class="develop-actions"><button type="button" class="cancel-develop" onclick={() => (developOpen = false)} disabled={developing}>Cancel</button><button type="button" class="run-develop" onclick={developCard} disabled={developing}>{developing ? 'Building…' : `Build ${developmentScopes.find((scope) => scope.id === developScope)?.label || 'set'}`}</button></div>
-    </section>
+    </aside>
+  {:else}
+    <button
+      type="button"
+      class="architect-fab"
+      onclick={() => (architectOpen = true)}
+      disabled={busy || developing}
+      aria-expanded="false"
+    ><span aria-hidden="true">✦</span><b>Edit with Architect</b><small>{architectEntryLabel}</small></button>
   {/if}
-  {#if readiness}
-    <div class:ready={readiness.ready} class="readiness">
-      {#if readiness.ready}
-        <span>Ready to play</span><button onclick={activatePlay} disabled={activating || busy || developing}>{activating ? 'Starting…' : 'Start play'}</button>
-      {:else}
-        <span>Needs {readinessItems.length} runtime decision{readinessItems.length === 1 ? '' : 's'}</span>
-        <div class="readiness-items">
-          {#each readinessItems as blocker}
-            <button onclick={() => resolveBlocker(blocker)}><b>{blocker.section}</b><span>{blocker.message}{#if blocker.count > 1} ({blocker.count} scenes){/if}</span>{#if blocker.fix}<small>{blocker.fix}</small>{/if}</button>
-          {/each}
-        </div>
-      {/if}
-    </div>
-  {/if}
-  {#if current?.fields?.open_questions?.length}
-    <div class="questions"><span>Still open</span>{#each current.fields.open_questions as question, index}<button type="button" class="card-leaf inline-leaf" onclick={() => openConversation(itemTarget('world', 'author_note', `open-question-${index}`, 'Open question', question, 'open_questions'))}>{question}</button>{#if index < current.fields.open_questions.length - 1}<i> · </i>{/if}{/each}</div>
-  {/if}
-  {#if current?.fields?.author_notes?.length}
-    <div class="notes author-notes"><span>Author-only notes</span><small>Never sent to a model</small>{#each current.fields.author_notes as note, index}<button type="button" class="card-leaf rule-leaf" onclick={() => openConversation(itemTarget('world', 'author_note', `note-${index}`, 'Author-only note', authorNote(note)))}>{authorNote(note)}</button>{/each}</div>
-  {/if}
-  </aside>
   </section>
 
   {:else}
     <section class="workspace-panel play-panel" aria-label="Play workspace">
-      <PlaySurface storyKey={storyKey} story={current} {readiness} onedit={returnToStory} />
+      {#if isStoryHostDesktop()}
+        <div class="local-runtime-notice">
+          <span>Local Story Host</span>
+          <h2>Play runtime is not migrated yet</h2>
+          <p>The desktop card, reviewed Architect, and local image capability run without a web server. Live player sessions remain disabled here until their private runtime contract has an equally narrow local boundary.</p>
+          <button type="button" onclick={() => returnToStory('world')}>Return to Story card</button>
+        </div>
+      {:else}
+        <PlaySurface storyKey={storyKey} story={current} {readiness} onedit={returnToStory} />
+      {/if}
     </section>
   {/if}
 
@@ -1339,20 +1747,31 @@
 </main>
 
 <style>
-  .interview { box-sizing: border-box; max-width: 1180px; height: calc(100dvh - var(--chrome-top, 0px)); min-height: 520px; margin: 0 auto; padding: clamp(24px, 6vh, 64px) 24px 16px; display: grid; grid-template-columns: minmax(0, 1fr) 340px; grid-template-rows: auto auto minmax(0, 1fr) auto; column-gap: 28px; row-gap: 18px; }
+  .interview { box-sizing: border-box; width: 100%; max-width: none; height: calc(100dvh - var(--chrome-top, 0px)); min-height: 520px; margin: 0; padding: 12px 16px 10px; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto minmax(0, 1fr) auto; row-gap: 8px; }
   .workspace-header { grid-column: 1 / -1; }
-  .workspace-header { display: flex; align-items: end; justify-content: space-between; gap: 20px; }
+  .local-runtime-notice { width: min(680px, 100%); margin: clamp(28px, 10vh, 96px) auto; padding: 24px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }.local-runtime-notice > span { color: var(--accent); font-size: 10px; font-weight: 820; letter-spacing: .08em; text-transform: uppercase; }.local-runtime-notice h2 { margin: 8px 0; font-size: 22px; }.local-runtime-notice p { max-width: 590px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }.local-runtime-notice button { margin-top: 15px; border: 1px solid var(--accent); padding: 7px 9px; background: var(--accent); color: #0b0e14; font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; }
+  .workspace-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
   .workspace-header > div:first-child { max-width: 650px; } .eyebrow { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
-  h1 { margin: 5px 0; font-size: clamp(30px, 5vw, 48px); letter-spacing: -.04em; } .workspace-header p { margin: 0; color: var(--muted); }
-  .workspace-tabs { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; justify-content: flex-end; }
-  .workspace-tabs button { border: 1px solid var(--border-soft); border-radius: 8px; padding: 7px 10px; background: var(--elev); color: var(--muted); font: inherit; font-size: 12px; font-weight: 750; cursor: pointer; }
-  .workspace-tabs button.active { border-color: color-mix(in srgb, var(--accent) 65%, var(--border)); background: color-mix(in srgb, var(--accent) 16%, var(--elev)); color: var(--text); }
+  .workspace-header .eyebrow, .workspace-header p { display: none; }
+  h1 { margin: 0; font-size: clamp(22px, 3vw, 28px); letter-spacing: -.035em; }
+  .workspace-tabs { display: flex; align-items: stretch; gap: 0; flex-wrap: wrap; justify-content: flex-end; border-bottom: 1px solid var(--border-soft); }
+  .workspace-tabs button { border: 0; border-bottom: 2px solid transparent; border-radius: 0; padding: 8px 13px 7px; background: transparent; color: var(--muted); font: inherit; font-size: 11px; font-weight: 750; cursor: pointer; }
+  .workspace-tabs button:hover { background: color-mix(in srgb, var(--elev) 72%, transparent); color: var(--text); }
+  .workspace-tabs button.active { border-bottom-color: var(--accent); background: color-mix(in srgb, var(--accent) 9%, transparent); color: var(--text); }
   .workspace-readiness { margin-left: 5px; color: var(--faint); font-size: 11px; white-space: nowrap; } .workspace-readiness.ready { color: var(--good, #6ec77f); }
   .workspace-panel { grid-column: 1 / -1; grid-row: 2 / span 3; min-height: 0; }
   .architect-panel { height: 100%; }
-  .card-workspace { grid-column: 1 / -1; grid-row: 2 / span 3; display: grid; grid-template-columns: minmax(420px, 1.25fr) minmax(320px, .75fr); gap: 18px; min-height: 0; overflow: hidden; }
-  .story-rail { box-sizing: border-box; min-width: 0; min-height: 0; overflow: auto; padding: 14px; border: 1px solid var(--border-soft); border-radius: 14px; background: color-mix(in srgb, var(--panel) 88%, var(--elev)); scrollbar-width: thin; }
-  .story-rail .cardhead { top: -14px; margin: -14px -14px 12px; padding: 14px 14px 10px; }
+  .card-workspace { grid-column: 1 / -1; grid-row: 2 / span 3; display: grid; grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 0; min-height: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 2px; background: var(--panel); transition: grid-template-columns .2s ease; }
+  .card-workspace.architect-open { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .card-workspace :global(.explorer) { height: 100%; border: 0; border-radius: 0; }
+  .architect-dock { min-width: 0; min-height: 0; overflow: hidden; border-left: 1px solid var(--border); animation: architect-dock-in .2s cubic-bezier(.2,.75,.25,1) both; }
+  @keyframes architect-dock-in { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
+  .architect-fab { position: fixed; z-index: 35; right: clamp(18px, 3vw, 42px); bottom: clamp(18px, 3vw, 34px); display: grid; grid-template-columns: auto auto; column-gap: 9px; align-items: center; min-width: 210px; border: 1px solid color-mix(in srgb, var(--accent) 75%, white 8%); border-radius: 15px; padding: 11px 15px; background: color-mix(in srgb, var(--accent) 88%, #151821); color: #0b0e14; text-align: left; font: inherit; box-shadow: 0 16px 48px rgba(0,0,0,.38), 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent); cursor: pointer; transition: transform .16s ease, box-shadow .16s ease; }
+  .architect-fab:hover, .architect-fab:focus-visible { transform: translateY(-2px); box-shadow: 0 20px 52px rgba(0,0,0,.44), 0 0 0 5px color-mix(in srgb, var(--accent) 18%, transparent); outline: none; }
+  .architect-fab:disabled { opacity: .55; transform: none; cursor: default; }
+  .architect-fab > span { grid-row: 1 / span 2; font-size: 20px; line-height: 1; }
+  .architect-fab b { font-size: 12px; line-height: 1.2; }
+  .architect-fab small { grid-column: 2; color: color-mix(in srgb, #0b0e14 70%, transparent); font-size: 9px; line-height: 1.2; }
   .card-workspace .card { grid-column: auto; grid-row: auto; align-self: stretch; position: relative; top: auto; max-height: calc(100dvh - 160px); }
   .card { grid-column: 2; grid-row: 3 / span 2; align-self: start; position: sticky; top: 20px; max-height: calc(100dvh - 150px); overflow: auto; scroll-behavior: smooth; background: color-mix(in srgb, var(--accent) 7%, var(--panel)); border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--border)); border-radius: 14px; padding: 14px 16px; } .cardhead { position: sticky; top: -14px; z-index: 1; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin: -14px -16px 0; padding: 14px 16px 9px; background: var(--panel); color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; } .cardactions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 5px; } .organize, .develop, .director-tools { border: 1px solid var(--border-soft); border-radius: 6px; padding: 4px 7px; background: var(--elev); color: var(--accent); font: inherit; font-size: 10px; font-weight: 800; letter-spacing: .04em; cursor: pointer; } .director-tools { color: var(--muted); } .director-tools:hover { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); color: var(--text); } .develop { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); background: color-mix(in srgb, var(--accent) 15%, var(--elev)); color: var(--text); } .organize:disabled, .develop:disabled, .director-tools:disabled { opacity: .55; cursor: default; } .develop-panel { margin: 0 0 12px; padding: 11px; border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--elev)); } .develop-title { display: flex; align-items: flex-start; justify-content: space-between; gap: 9px; } .develop-title strong { display: block; color: var(--text); font-size: 12px; } .develop-title p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.35; } .close-develop { flex: none; border: 0; padding: 0 2px; background: transparent; color: var(--muted); font: inherit; font-size: 18px; line-height: 1; cursor: pointer; } .develop-scopes { display: grid; gap: 6px; margin-top: 10px; } .develop-scopes button { display: grid; gap: 2px; width: 100%; padding: 7px 8px; border: 1px solid var(--border-soft); background: var(--panel); color: var(--muted); text-align: left; font: inherit; cursor: pointer; } .develop-scopes button.selected { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, var(--panel)); } .develop-scopes b { color: var(--text); font-size: 11px; } .develop-scopes span { font-size: 10px; line-height: 1.3; } .develop-brief { display: grid; gap: 5px; margin-top: 10px; color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; } .develop-brief textarea { box-sizing: border-box; width: 100%; min-height: 62px; resize: vertical; border: 1px solid var(--border-soft); padding: 7px 8px; background: var(--panel); color: var(--text); font: inherit; font-size: 11px; font-weight: 400; line-height: 1.35; letter-spacing: normal; text-transform: none; outline: 0; } .develop-brief textarea:focus { border-color: var(--accent); } .develop-actions { display: flex; justify-content: flex-end; gap: 7px; margin-top: 9px; } .cancel-develop, .run-develop { border: 1px solid var(--border-soft); padding: 6px 8px; background: transparent; color: var(--muted); font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; } .run-develop { border-color: var(--accent); background: var(--accent); color: #0b0e14; } .cancel-develop:disabled, .run-develop:disabled { opacity: .55; cursor: default; } .readiness { margin: 0 0 10px; padding: 9px 10px; border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border)); background: var(--elev); color: var(--muted); font-size: 11px; line-height: 1.35; } .readiness.ready { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--good, #6ec77f); } .readiness > button { border: 0; border-radius: 6px; padding: 5px 8px; background: var(--accent); color: #0b0e14; font: inherit; font-size: 10px; font-weight: 800; cursor: pointer; } .readiness > button:disabled { opacity: .55; cursor: default; } .readiness-items { display: grid; gap: 5px; margin-top: 7px; } .readiness-items button { display: grid; gap: 2px; width: 100%; border: 0; padding: 5px 0; background: transparent; color: var(--muted); text-align: left; font: inherit; font-size: 11px; line-height: 1.3; cursor: pointer; } .readiness-items button:hover { color: var(--text); } .readiness-items b { color: var(--accent); font-size: 9px; letter-spacing: .05em; text-transform: uppercase; } .readiness-items small { color: var(--faint); font-size: 10px; } .cardsection { width: 100%; display: block; text-align: left; padding: 10px 8px; border: 0; border-bottom: 1px solid var(--border-soft); background: transparent; color: var(--text); font: inherit; transition: color .18s, background .18s, box-shadow .18s; cursor: pointer; } .cardsection:hover { background: color-mix(in srgb, var(--accent) 4%, transparent); } .cardsection.active { background: color-mix(in srgb, var(--accent) 5%, transparent); box-shadow: inset 2px 0 0 var(--accent); } .cardsection.active .sectiontext, .cardsection.active .bonds { color: var(--text); } .cardsection.active > span:first-child { color: var(--accent); } .cardsection.updated { animation: cardupdate 1.1s ease-out; } .cardsection > span:first-child { color: var(--faint); font-size: 10px; font-weight: 800; letter-spacing: .06em; text-transform: uppercase; } .sectiontext { display: block; margin-top: 5px; line-height: 1.4; font-size: 12px; } .bonds { display: block; margin-top: 7px; color: var(--muted); font-size: 11px; line-height: 1.35; } .events { margin: 8px 0; padding-left: 18px; display: grid; gap: 8px; } .events li { padding-left: 2px; color: var(--muted); font-size: 12px; line-height: 1.35; } .events b, .events span { display: block; } .events b { color: var(--text); font-size: 11px; } .notes { margin: 8px 0; padding: 8px; border-left: 2px solid var(--accent); background: var(--elev); color: var(--muted); font-size: 11px; line-height: 1.35; } .periods { margin: 6px 0 0; padding: 0; list-style: none; display: grid; gap: 5px; color: var(--muted); font-size: 11px; } .periods b { color: var(--text); text-transform: capitalize; } .questions { margin-top: 10px; color: var(--muted); font-size: 12px; } .questions span { color: var(--faint); text-transform: uppercase; font-size: 10px; font-weight: 700; margin-right: 8px; } .chat-suggestions { align-self: stretch; display: grid; gap: 5px; } .chat-suggestions button { text-align: left; padding: 8px 10px; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--elev); color: var(--text); font: inherit; font-size: 12px; line-height: 1.35; cursor: pointer; } .chat-suggestions b { display: block; color: var(--accent); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; } .chat-suggestions small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; } @keyframes cardupdate { 0% { background: color-mix(in srgb, var(--good, #6ec77f) 20%, transparent); } 100% { background: transparent; } }
   .edit-card { border: 1px solid color-mix(in srgb, var(--accent) 56%, var(--border)); border-radius: 6px; padding: 4px 7px; background: color-mix(in srgb, var(--accent) 14%, var(--elev)); color: var(--text); font: inherit; font-size: 10px; font-weight: 800; letter-spacing: .04em; cursor: pointer; } .edit-card:disabled { opacity: .55; cursor: default; }
@@ -1387,6 +1806,7 @@
   .conversation-modal-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; } .conversation-modal-head h2 { margin: 4px 0; font-size: 20px; letter-spacing: -.02em; } .conversation-modal-head p { max-width: 570px; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.4; }
   .close-conversation { width: 32px; height: 32px; flex: none; border: 1px solid var(--border-soft); border-radius: 8px; background: var(--elev); color: var(--muted); font: inherit; font-size: 21px; line-height: 1; cursor: pointer; } .close-conversation:hover { color: var(--text); border-color: var(--muted); }
   .conversation-modal .conversation-pane { grid-column: auto; min-height: 0; height: 100%; } .conversation-modal form { grid-column: auto; }
-  @media (max-width: 900px) { .card-workspace { grid-template-columns: 1fr; overflow: auto; } .story-rail { overflow: visible; } .card-workspace .card { max-height: none; } }
+  @media (max-width: 900px) { .card-workspace, .card-workspace.architect-open { grid-template-columns: minmax(0, 1fr); overflow: hidden; }.card-workspace.architect-open :global(.explorer) { display: none; }.architect-dock { grid-column: 1; width: 100%; height: 100%; min-height: 0; border-left: 0; }.card-workspace .card { max-height: none; } }
+  @media (max-width: 620px) { .architect-fab { right: 14px; bottom: 14px; width: calc(100vw - 28px); } }
   @media (max-width: 760px) { .interview { height: 100dvh; min-height: 0; padding: 24px 16px 12px; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: 14px; } .workspace-header { align-items: stretch; flex-direction: column; } .workspace-tabs { justify-content: flex-start; } .workspace-panel, .card-workspace { grid-row: 2 / span 4; } .card { grid-column: 1; grid-row: 3; position: static; } .card-workspace .card { grid-column: auto; grid-row: auto; } .conversation-pane { grid-row: 4; } form { grid-row: 5; } .conversation-overlay { padding: 12px; } .conversation-modal { width: 100%; height: calc(100dvh - 24px); padding: 14px; border-radius: 14px; } .conversation-modal .conversation-pane, .conversation-modal form { grid-row: auto; } .conversation-modal-head p { font-size: 11px; } .director-sheet { width: 100vw; border-left: 0; } .director-sheet-head, .director-sheet-body { padding: 14px; } }
 </style>

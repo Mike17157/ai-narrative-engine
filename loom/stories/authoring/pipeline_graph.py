@@ -121,6 +121,9 @@ class StoryState:
 
 async def _gen(deps: StoryDeps, *, system: str, prompt: str, emits: dict | None = None):
     """Call the (sync) provider off the event loop. Stream prose; never stream raw JSON."""
+    from ..visibility import strip_model_hidden
+    system = strip_model_hidden(system) or ""
+    prompt = strip_model_hidden(prompt) or ""
     return await asyncio.to_thread(lambda: deps.provider.generate_text(
         system=system, prompt=prompt, emits=emits,
         on_delta=(deps.on_delta if emits is None else None),

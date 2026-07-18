@@ -47,7 +47,13 @@ def _register_defaults() -> None:
 
 
 def build_provider(model: ModelDef) -> TextProvider | ImageProvider:
-    """Instantiate the provider backing a model definition."""
+    """Instantiate the provider backing a model definition.
+
+    Text providers are wrapped with the author-visibility boundary here rather
+    than relying on each caller to remember it.  A story can therefore retain
+    ``[[hidden]]…[[/hidden]]`` author notes in its canonical data without a
+    newly-added model route accidentally receiving their contents.
+    """
     _register_defaults()
     if model.kind == "text":
         factory = _TEXT_PROVIDERS.get(model.provider) or _TEXT_DEFAULT
@@ -55,4 +61,11 @@ def build_provider(model: ModelDef) -> TextProvider | ImageProvider:
         factory = _IMAGE_PROVIDERS.get(model.provider)
     if factory is None:
         raise ValueError(f"no {model.kind} provider for '{model.provider}'")
-    return factory(model.options)
+    provider = factory(model.options)
+    # Local import keeps the provider package usable by the lower-level story
+    # utilities while making redaction the universal construction path for
+    # normal application providers. Image workflows count too: a private note
+    # must not become a diffusion-model prompt merely because it is not chat.
+    from ..stories.visibility import model_visibility_provider
+
+    return model_visibility_provider(provider)

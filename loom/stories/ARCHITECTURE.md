@@ -49,6 +49,37 @@ The Storymaster uses `minimax/minimax-m3` for the reflective residual pass. It r
 plain-text card sections and raw turns, using narrow tools, rather than consuming or emitting one
 large JSON document.
 
+## Agent workflow contract
+
+The existing HTTP Story workflows use `pydantic-graph`; their established
+boundary remains:
+
+```text
+deterministic context → model candidate → parse/normalize → validate → MutationPlan → one commit
+```
+
+- Models propose prose or structured candidates; they never directly mutate canonical Story,
+  Character, or runtime state.
+- Deterministic services (scene eligibility, knowledge projection, card validation, and persistence)
+  stay ordinary code rather than fake graph nodes.
+- Graphs own dependent calls, branching, retries/checkpoints, human approval points, and events.
+- Each graph-backed workflow emits common `workflow`, `node`, and `model` trace envelopes through
+  `stories.workflows`. Existing UI-specific events remain compatible during migration.
+
+Current graph-backed workflows are the interview, card review/organization, authoring workshop and
+draft pipeline, world genesis/systems, story-structure agent, live play, and autonomous simulation.
+One-off generation helpers remain leaf tasks and may be called by a graph when they participate in a
+larger workflow.
+
+The desktop Story Host migration is the deliberately narrow exception: it embeds
+Oh My Pi only for the sealed public Architect proposal turn, while keeping Story
+prepare/review/persistence deterministic. It is not a second generic agent
+runtime for the existing HTTP workflows. See `../../STORY_HOST_MIGRATION.md`.
+
+Story-structure chat accepts an explicit `workflow` choice: `single` for one bounded tool call,
+`structure` for the plan/act/observe/reflect/commit graph, or `auto` as a compatibility fallback.
+Routing is deterministic; it is never delegated to an LLM.
+
 ## Creation subsystem
 
 `creation.py` is the canonical home for everything that makes a story world before play begins: world framing, cast harnesses, relationship weaving, premise and substrate material, geography, and pydantic-graph orchestration. New code imports from `stories.creation`.

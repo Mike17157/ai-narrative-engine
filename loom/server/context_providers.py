@@ -111,14 +111,22 @@ class ProviderContextMixin:
             md = s.models[model_sel]
             if params:
                 md = md.model_copy(); md.options = {**md.options, **params}
-            return build_provider(md)
+            # Author-visible ``[[hidden]]…[[/hidden]]`` notes are a real
+            # model boundary, not a convention in a prompt.  Wrap every text
+            # provider at construction so direct story utilities cannot bypass
+            # redaction by calling ``generate_text`` themselves.
+            from ..stories.visibility import model_visibility_provider
+            return model_visibility_provider(build_provider(md))
         conn = (self.store.get(connection) if connection else None) or self.store.active("text")
         if conn:
             opts = conn.to_model_options()          # carries provider quirks (e.g. Ollama keyless + no-think)
             if model_sel:
                 opts["model"] = model_sel
             opts.update(params)                     # a config's params win (incl. reasoning_effort)
-            return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
+            from ..stories.visibility import model_visibility_provider
+            return model_visibility_provider(
+                build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
+            )
         return None
 
     def ip_provider(self):
@@ -129,13 +137,17 @@ class ProviderContextMixin:
         conn = self.store.active("image_prompt") or self.store.active("text")
         if conn is None:
             return None
-        return build_provider(ModelDef(provider=conn.provider, kind="text", options=conn.to_model_options()))
+        from ..stories.visibility import model_visibility_provider
+        return model_visibility_provider(
+            build_provider(ModelDef(provider=conn.provider, kind="text", options=conn.to_model_options()))
+        )
 
     def image_provider(self, model_id: str | None = None, output_variant: str | None = None):
         """A provider for an image WORKFLOW — an explicit workflow id if given, else the active
         image connection, plus the resolved model id. (provider, id) or (None, error_message).
         output_variant ('full'|'cutout') overrides whatever the model definition says."""
         from ..providers.comfyui_provider import ComfyUIProvider
+        from ..stories.visibility import model_visibility_provider
 
         conn = self.store.active("image")
         model_id = model_id or (conn.model if conn else None) or self.user.defaults.get("image_model")
@@ -149,7 +161,7 @@ class ProviderContextMixin:
         if conn and conn.base_url:
             opts["base_url"] = conn.base_url
         opts["flags"] = {**opts.get("flags", {}), **self.image_flags()}
-        return ComfyUIProvider(opts), model_id
+        return model_visibility_provider(ComfyUIProvider(opts)), model_id
 
     def image_flags(self) -> dict:
         """Global pipeline toggles for renders (configs/app.json) → the workflow's switch
@@ -311,14 +323,180 @@ class ProviderContextMixin:
         if model_sel and model_sel in s.models and s.models[model_sel].kind == "text":
             md = s.models[model_sel].model_copy()
             md.options = {**md.options, "max_tokens": 40000, **params}
-            return build_provider(md)
+            from ..stories.visibility import model_visibility_provider
+            return model_visibility_provider(build_provider(md))
         conn = self.store.active("text")
         if conn is None:
             return None
         opts = {**conn.to_model_options(), "max_tokens": 40000, **params}
         if model_sel:
             opts["model"] = model_sel
-        return build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
+        from ..stories.visibility import model_visibility_provider
+        return model_visibility_provider(
+            build_provider(ModelDef(provider=conn.provider, kind="text", options=opts))
+        )
+
+    @staticmethod
+    def _story_agent_provider_ready(provider) -> bool:
+        """Whether a constructed Story Agent provider is usable without a request.
+
+        The OpenAI-compatible adapter exposes ``api_key`` directly, which lets
+        the high-level authoring route avoid a predictable 401 when its named
+        gateway profile has not been configured.  Other adapters deliberately
+        remain opaque here (for example Anthropic owns its environment lookup),
+        so they are allowed through and retain their normal error reporting.
+        Test doubles and local/keyless providers likewise remain usable.
+        """
+        if provider is None:
+            return False
+        api_key = getattr(provider, "api_key", None)
+        return api_key is None or bool(str(api_key).strip())
+
+    def story_agent_provider(self, body: dict | None = None, *, params: dict | None = None):
+        """Resolve the named high-level Story Agent and expose its route metadata.
+
+        Returns ``(provider, route)``.  ``route`` is safe to return from a
+        future architect endpoint: it contains model/connection identifiers and
+        fallback state, never credentials.  A request ``body.model`` is a hard
+        override.  Otherwise the policy in ``story_builder.story_agent`` is
+        used; a named gateway profile with no credential can explicitly fall
+        back to the active text connection (``fallback: \"active\"``).
+        """
+        request = body if isinstance(body, dict) else {}
+        route = config_files.story_agent_route(
+            self.load_story_builder(), request.get("model"), params,
+        )
+        # A failed authoring turn is never automatically retried on another
+        # model.  ``use_fallback`` is an explicit, UI-triggered follow-up that
+        # may select only this route's configured fallback—not an arbitrary
+        # request model.  Strict identity keeps ``"false"`` from becoming a
+        # truthy control flag at the API boundary.
+        use_fallback = request.get("use_fallback") is True
+
+        def _build(model: str, connection: str | None, model_params: dict | None = None):
+            return self.text_provider_for(
+                model or None,
+                model_params if isinstance(model_params, dict) else route["params"],
+                connection=connection or None,
+            )
+
+        # An explicit request-level model intentionally owns the route.  It
+        # must not be combined with an automatic fallback selection, because
+        # that would make a model-picker choice ambiguous.
+        fallback = route["fallback"] if not route["requested"] else ""
+        if fallback.lower() == "active":
+            fallback_model, fallback_connection = "", route["fallback_connection"]
+            fallback_label = "active"
+        else:
+            fallback_model, fallback_connection = fallback, route["fallback_connection"]
+            fallback_label = fallback
+
+        def _route_metadata(*, selected_model: str, selected_connection: str,
+                            used_fallback: bool, available: bool,
+                            fallback_selected: bool = False,
+                            fallback_ready: bool | None = None,
+                            error: str = "") -> dict:
+            # The target and bounded options are safe authoring diagnostics:
+            # neither contains a credential.  ``fallback_available`` means
+            # the author has a configured retry path when it is returned for
+            # a primary attempt; after a fallback selection it reflects the
+            # actual constructed provider's readiness.
+            metadata = {
+                **route,
+                "selected_model": selected_model,
+                "selected_connection": selected_connection,
+                "used_fallback": used_fallback,
+                "available": available,
+                "fallback_configured": bool(fallback),
+                "fallback_available": bool(fallback) if fallback_ready is None else bool(fallback_ready),
+                "fallback_selected": fallback_selected,
+                "fallback_target": (
+                    {"model": fallback_label, "connection": fallback_connection or "active"}
+                    if fallback else None
+                ),
+            }
+            if error:
+                metadata["error"] = error
+            return metadata
+
+        if use_fallback:
+            if route["requested"]:
+                return None, _route_metadata(
+                    selected_model=route["model"] or "active",
+                    selected_connection=route["connection"] or "active",
+                    used_fallback=False,
+                    available=False,
+                    fallback_selected=True,
+                    fallback_ready=False,
+                    error=("the configured Story Agent fallback cannot be combined with an explicit "
+                           "model override"),
+                )
+            if not fallback:
+                return None, _route_metadata(
+                    selected_model=route["model"] or "active",
+                    selected_connection=route["connection"] or "active",
+                    used_fallback=False,
+                    available=False,
+                    fallback_selected=True,
+                    fallback_ready=False,
+                    error=("no configured Story Agent fallback is available for this request; "
+                           "remove an explicit model override or configure story_agent.fallback"),
+                )
+            candidate = _build(fallback_model, fallback_connection, route.get("fallback_params"))
+            if self._story_agent_provider_ready(candidate):
+                return candidate, _route_metadata(
+                    selected_model=fallback_label,
+                    selected_connection=fallback_connection or "active",
+                    used_fallback=True,
+                    available=True,
+                    fallback_selected=True,
+                    fallback_ready=True,
+                )
+            return None, _route_metadata(
+                selected_model=fallback_label,
+                selected_connection=fallback_connection or "active",
+                used_fallback=True,
+                available=False,
+                fallback_selected=True,
+                fallback_ready=False,
+                error=("the configured Story Agent fallback is unavailable; connect its provider "
+                       "or choose another model"),
+            )
+
+        primary = _build(route["model"], route["connection"])
+        if self._story_agent_provider_ready(primary):
+            return primary, _route_metadata(
+                selected_model=route["model"] or "active",
+                selected_connection=route["connection"] or "active",
+                used_fallback=False,
+                available=True,
+            )
+
+        # Do not countermand an explicit body.model: callers asked for that
+        # specific model and deserve a configuration error rather than an
+        # invisible downgrade.
+        if fallback:
+            candidate = _build(fallback_model, fallback_connection, route.get("fallback_params"))
+            if self._story_agent_provider_ready(candidate):
+                return candidate, _route_metadata(
+                    selected_model=fallback_label,
+                    selected_connection=fallback_connection or "active",
+                    used_fallback=True,
+                    available=True,
+                    fallback_ready=True,
+                )
+
+        return None, _route_metadata(
+            selected_model=route["model"] or "active",
+            selected_connection=route["connection"] or "active",
+            used_fallback=False,
+            available=False,
+            fallback_ready=False if fallback else None,
+            error=(
+                "the configured Story Agent model is unavailable; connect its provider "
+                "or choose an active text model"
+            ),
+        )
 
     def stage_provider(self, stage: str | None, model_override: str | None = None,
                        max_tokens: int = 40000):
@@ -364,6 +542,15 @@ class ProviderContextMixin:
             sys_override = self.stage_system(stage)
             if sys_override:
                 systems[stage] = sys_override
+        # High-level card authoring has one deliberately named route instead
+        # of allowing a DeepSeek gateway model id to inherit an unrelated
+        # active provider.  Keep it inside builder_ctx so existing stage
+        # callers/tests retain the standard provider/error contract.
+        if stage == "story_agent":
+            provider, route = self.story_agent_provider(body)
+            if provider is None:
+                return None, route.get("error") or "no story agent model configured"
+            return provider, systems
         provider = self.stage_provider(stage, model_override)
         if provider is None or not hasattr(provider, "generate_text"):
             return None, "no chat connection — connect a chat model first"

@@ -105,12 +105,12 @@ def _registered_tool_names() -> set[str]:
     dropping the tool from the agent's menu."""
     names: set[str] = set()
     try:
-        from .authoring import scripts as _S
+        from ..authoring import scripts as _S
         names.update(getattr(_S, "REGISTRY", {}).keys())
     except Exception:  # noqa: BLE001
         pass
     try:
-        from .authoring import stages as _ST
+        from ..authoring import stages as _ST
         names.update(getattr(_ST, "TOOLS", {}).keys())
     except Exception:  # noqa: BLE001
         pass
@@ -211,7 +211,7 @@ def _mode_vectors(root: Path, modes: dict) -> dict:
     if key in _vec_cache:
         return _vec_cache[key]
     try:
-        from ..server.services import embeddings as _emb
+        from ...server.services import embeddings as _emb
     except Exception:  # noqa: BLE001
         return {}
     ids, texts = [], []
@@ -232,7 +232,7 @@ def _semantic_mode(root: Path, text: str) -> list[str]:
     if not agents or not (text or "").strip():
         return []
     try:
-        from ..server.services import embeddings as _emb
+        from ...server.services import embeddings as _emb
     except Exception:  # noqa: BLE001
         return []
     qv = _emb.embed_query(text)
@@ -263,7 +263,7 @@ def demo() -> None:
     root = Path(__file__).resolve().parents[2]
     assert "wardrobe" in _keyword_modes(root, "design her outfit")
     try:
-        from ..server.services import embeddings as _emb
+        from ...server.services import embeddings as _emb
         sem_ok = _emb.available()
     except Exception:  # noqa: BLE001
         sem_ok = False
@@ -357,7 +357,7 @@ def assemble_system_prompt(*, cfg: dict, graph: dict, adopted: str, story_ctx: s
     ] if p)
 
     # ESTABLISHED WORLD directive — the framing prose is config; the world BRIEF is rendered live.
-    from .world.creation import world_brief as _world_brief
+    from ..world.creation import world_brief as _world_brief
     _wbrief = _world_brief(graph.get("world")) if isinstance(graph, dict) else ""
     if _wbrief:
         system += "\n\n" + (cfg.get("directives") or {}).get("world", "") + "\n" + _wbrief
@@ -470,10 +470,10 @@ def run_turn(ctx, body: dict) -> dict:
     """One chat turn: offer the lorebook tools, adopt the matching mode persona, assemble the system
     prompt from config + grounding, call the model, apply tool calls, persist, return the result.
     Returns the response dict; a `_status` key (popped by the router) signals a non-200."""
-    from ..server.services import lorebook_store as _LS
-    from ..server.services import presets as _P
-    from .records import graph as GO
-    from .pipeline import grounding as _G
+    from ...server.services import lorebook_store as _LS
+    from ...server.services import presets as _P
+    from ..records import graph as GO
+    from ..pipeline import grounding as _G
 
     body = body or {}
     root = ctx.root
@@ -487,9 +487,8 @@ def run_turn(ctx, body: dict) -> dict:
     # ── Agent / persona — resolve FIRST (triggers or explicit agent) so the tool menu can be scoped
     # to the active persona. The full agent definition (persona + tools + triggers) comes from the
     # JSON config. An explicit `mode` from the client may use the OLD internal key — translate it. ──
-    from .runtime.agent import translate_key as _translate_key
     modes = cfg.get("agents") or {}
-    explicit = _translate_key((body.get("mode") or "").strip())
+    explicit = translate_key((body.get("mode") or "").strip())
     active_ids = [explicit] if (explicit and explicit in modes) else match_modes(root, req_text)
     adopted = "\n\n".join(modes[m]["persona"] for m in active_ids if modes.get(m, {}).get("persona"))
     adopted_examples = "\n\n".join(modes[m]["example"] for m in active_ids if modes.get(m, {}).get("example"))
@@ -813,11 +812,6 @@ def _rubric(cfg: dict) -> list[str]:
     return r if isinstance(r, list) else []
 
 
-def _graph_prose(graph: dict) -> str:
-    """Render the current story doc as readable prose for the model (delegates to agent.py)."""
-    return _graph_prose(graph)
-
-
 # ── Nodes ────────────────────────────────────────────────────────────────────── #
 
 async def step_plan(ctx: StepContext[StoryAgentState, StoryAgentDeps, None]) -> str:
@@ -1054,23 +1048,36 @@ _COMPLEX_KEYWORDS = ("restructure", "rework the", "rebuild the", "redesign the",
                      "design the full arc", "design arc", "build the full storyboard")
 
 
+def select_workflow(body: dict, cfg: dict) -> str:
+    """Choose an explicit authoring workflow without asking an LLM to route.
+
+    Clients may request ``workflow: 'structure'`` or ``'single'``.  ``auto``
+    keeps the conservative compatibility fallback until every caller exposes a
+    workflow selector; it never changes canonical state by itself.
+    """
+    requested = str((body or {}).get("workflow") or "auto").strip().lower()
+    if requested in {"structure", "single"}:
+        return requested
+    return "structure" if should_use_graph(body or {}, cfg) else "single"
+
+
 def should_use_graph(body: dict, cfg: dict) -> bool:
     """True ONLY for genuine multi-step restructuring — full arc design, storyboard rebuild,
     beat-chain overhaul. Single-field edits, single-beat adds, spine setting all stay single-shot
     (one-call, full context, no drift, ~10x faster). The graph loop is reserved for tasks where
     intermediate state genuinely changes the plan."""
     agents = cfg.get("agents") or {}
-    explicit = _translate_key((body.get("mode") or "").strip())
+    explicit = translate_key((body.get("mode") or "").strip())
     active = explicit if (explicit and explicit in agents) else None
     if active is None:
-        req = next((str(m.get("content", "")) for m in (body.get("messages") or [])
+        req = next((str(m.get("content", "")) for m in reversed(body.get("messages") or [])
                     if isinstance(m, dict) and m.get("role") == "user"), "")
         active = "story" if any(t in req.lower() for t in
                                 ("storyboard", "title", "premise", "theme", "arc ", "plot",
                                  "beats", "outline", "ending", "climax")) else None
     if active != "story":
         return False
-    req = next((str(m.get("content", "")) for m in (body.get("messages") or [])
+    req = next((str(m.get("content", "")) for m in reversed(body.get("messages") or [])
                 if isinstance(m, dict) and m.get("role") == "user"), "")
     return any(k in req.lower() for k in _COMPLEX_KEYWORDS)
 

@@ -162,6 +162,9 @@ class Location(BaseModel):
     id: str
     name: str
     description: str = ""                    # the place, objectively (no events/people)
+    # A concrete, ordinary history this place grew out of — a specific instance of the
+    # world's own condition (world.history), not decoration. "" = not authored yet.
+    history: str = ""
     # A PURE background plate: the empty environment only — no characters/figures.
     background_prompt: str = ""
     background: str | None = None            # rendered background asset (later)
@@ -425,6 +428,10 @@ class Story(BaseModel):
     #   people: [{name, life}],              # ordinary lives the world orbits
     #   fragments: [{kind, text}]}           # lived particulars (shown, rule withheld)
     world: dict[str, Any] = Field(default_factory=dict)
+    # Every story has the same playable three-slot day. Individual stories add
+    # entity windows/capabilities, but no story needs to opt into having time.
+    time_system: dict[str, Any] = Field(default_factory=lambda: {
+        "slots": ["morning", "evening", "night"], "entity_periods": []})
     # The bounded plot outline this experience was built from; scenes + cast are extracted from it.
     storyboard: Storyboard = Field(default_factory=Storyboard)
     cast: list[CastMember] = Field(default_factory=list)  # the roster (presence is dynamic)
@@ -497,11 +504,15 @@ class Story(BaseModel):
                 for ck in (s.characters or []):
                     if ck not in cast_keys:
                         bad.append(f"scene '{s.id}'.characters → '{ck}' (not in cast)")
-        # relationship.source/target → cast key
+        # relationship.source/target → cast key. "player" is never a real cast[] member
+        # (see cast.home above and the interview minting boundary) but IS the standard
+        # protagonist identifier everywhere else in this schema (character_cores,
+        # character_wounds, arc_design owner) — a bond naming them is normal, not dangling.
+        rel_keys = cast_keys | {"player"}
         for r in self.relationships:
-            if r.source and r.source not in cast_keys:
+            if r.source and r.source not in rel_keys:
                 bad.append(f"relationship '{r.id}'.source → '{r.source}' (not in cast)")
-            if r.target and r.target not in cast_keys:
+            if r.target and r.target not in rel_keys:
                 bad.append(f"relationship '{r.id}'.target → '{r.target}' (not in cast)")
         # arc.cast / arc.owner → cast key ; arc.pressures → relationship id ; arc.conditions → condition id
         for a in self.arcs:

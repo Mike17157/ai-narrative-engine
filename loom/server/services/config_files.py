@@ -51,7 +51,36 @@ def save_app_flags(root: Path, data: dict) -> dict:
 
 
 # -- story builder -----------------------------------------------------------
-STORY_BUILDER_DEFAULT = {"model": "", "models": {}, "systems": {}, "inventions": {}}
+# ``story_agent`` is the high-level authoring route used by the focused card
+# editor, organizer, reviewer, and batch developer.  It deliberately lives in
+# story_builder.json (rather than configs/story_agent.json, which describes
+# runtime chat modes) so a story author can change this one model policy
+# without changing a play-session agent's behavior.
+#
+# ``fallback: "active"`` means: when the named profile has no usable local
+# credential, use the currently active text connection.  It is an explicit
+# opt-in fallback rather than silently sending a gateway model id to whatever
+# provider happens to be active.
+STORY_BUILDER_DEFAULT = {
+    "model": "", "models": {}, "systems": {}, "inventions": {},
+    "story_agent": {"model": "", "fallback": "active", "params": {}},
+}
+
+# A Story Architect retry must be a *separate*, author-selected request.  When
+# that request uses the configured fallback (normally the active text
+# connection), it must retain the same interactive deadline as the named
+# Story Agent rather than inherit a connection's much longer general-chat
+# retry policy.  A story_builder ``fallback_params`` object may deliberately
+# tune this, but the bounded default is always present.
+STORY_AGENT_FALLBACK_PARAMS = {"request_timeout_s": 32, "max_retries": 0}
+
+# These raw IDs existed in story routes before named ModelDefs did.  Treating
+# the V4 Pro alias as its gateway-bound profile prevents a request-level model
+# override from being accidentally sent to a direct DeepSeek (or unrelated)
+# active connection.
+_STORY_AGENT_MODEL_ALIASES = {
+    "deepseek/deepseek-v4-pro": "story_agent_deepseek_v4_pro",
+}
 
 
 def _story_builder_raw(root: Path) -> dict:
@@ -81,6 +110,79 @@ def _stage_model(cfg: dict, stage: str | None, override: str | None = None) -> s
         return override
     per = (cfg.get("models") or {}).get(stage or "") if stage else ""
     return per or cfg.get("model") or ""
+
+
+def story_agent_route(cfg: dict, model_override: str | None = None,
+                      params: dict | None = None) -> dict:
+    """Resolve the dedicated high-level Story Agent model route.
+
+    This is intentionally a small, data-only resolver.  Provider construction
+    and credential fallback live in :meth:`ProviderContextMixin.story_agent_provider`.
+    Keeping the policy here makes it inspectable through ``/api/story-builder``
+    and keeps legacy ``models.story_agent`` configurations working.
+
+    Supported ``story_builder.json`` shape::
+
+        "story_agent": {
+          "model": "story_agent_deepseek_v4_pro",
+          "fallback": "active",        // or another named/raw model id
+          "connection": "optional-connection-id",
+          "params": {"temperature": 0.4}
+        }
+
+    A non-empty request-level ``model`` wins and intentionally disables the
+    automatic fallback: an explicit caller selection should either run or
+    report its own configuration problem.
+    """
+    cfg = cfg if isinstance(cfg, dict) else {}
+    raw = cfg.get("story_agent") or {}
+    # Accept the concise legacy/hand-authored ``"story_agent": "model-id"``
+    # form as well as the richer object.
+    if isinstance(raw, str):
+        raw = {"model": raw}
+    if not isinstance(raw, dict):
+        raw = {}
+
+    override = str(model_override or "").strip()
+    configured_model = str(raw.get("model") or "").strip()
+    if not configured_model:
+        configured_model = _stage_model(cfg, "story_agent")
+    requested_model = override or configured_model
+    selected_model = _STORY_AGENT_MODEL_ALIASES.get(requested_model.lower(), requested_model)
+
+    stage_inference = stage_params(cfg, "story_agent")
+    raw_params = raw.get("params") if isinstance(raw.get("params"), dict) else {}
+    effective_params = {
+        **(stage_inference if isinstance(stage_inference, dict) else {}),
+        **raw_params,
+        **(params if isinstance(params, dict) else {}),
+    }
+    raw_fallback_params = raw.get("fallback_params") if isinstance(raw.get("fallback_params"), dict) else {}
+    fallback_params = {
+        **effective_params,
+        **STORY_AGENT_FALLBACK_PARAMS,
+        **raw_fallback_params,
+    }
+    connection = str(raw.get("connection") or "").strip()
+    fallback = "" if override else str(raw.get("fallback") or "active").strip()
+    fallback_connection = str(raw.get("fallback_connection") or "").strip()
+    source = "request" if override else ("story_builder" if selected_model else "active")
+    return {
+        "model": selected_model,
+        "requested_model": requested_model,
+        "configured_model": configured_model,
+        "connection": connection,
+        "fallback": fallback,
+        "fallback_connection": fallback_connection,
+        "params": effective_params,
+        # These are model options, never credentials.  They are deliberately
+        # separate from the primary route so an explicit fallback retry cannot
+        # accidentally inherit a long connection-level retry loop.
+        "fallback_params": fallback_params,
+        "source": source,
+        "label": str(raw.get("label") or "").strip(),
+        "requested": bool(override),
+    }
 
 
 # -- per-role image-workflow overrides ---------------------------------------

@@ -3,9 +3,16 @@
 // `voice` is reactive: components read voice.state / voice.partial to render the bubble live.
 import { stories } from '$lib/stories.svelte.js';
 import { chars } from '$lib/characters.svelte.js';
+import { isStoryHostDesktop } from '$lib/story-host-client.ts';
+
+// The packaged desktop app is deliberately serverless.  Never probe the
+// legacy FastAPI voice endpoints from that build: browser speech remains the
+// local fallback until voice services are explicitly moved behind Story Host.
+const legacyVoiceApiAvailable = () => import.meta.env.VITE_LEAN_STORY !== '1' && !isStoryHostDesktop();
 
 const SR = typeof window !== 'undefined' && (window.SpeechRecognition || window.webkitSpeechRecognition);
 const SS = typeof window !== 'undefined' && window.speechSynthesis;
+const CAN_RECORD = typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
 
 // The active story's cast NAMES — fed to Whisper as a bias prompt so it stops mangling them.
 function sttHints() {
@@ -59,6 +66,10 @@ let _audio = null;            // current Kokoro <audio>
 let _kokoro = null;           // null=unknown, true/false (cached)
 async function kokoroReady() {
   if (_kokoro !== null) return _kokoro;
+  if (!legacyVoiceApiAvailable()) {
+    _kokoro = false;
+    return false;
+  }
   try {
     const j = await (await fetch('/api/tts/status')).json();
     _kokoro = !!j.available;
@@ -67,7 +78,7 @@ async function kokoroReady() {
   if (_kokoro) voice.ttsSupported = true;   // backend TTS works even without browser Web Speech
   return _kokoro;
 }
-if (typeof window !== 'undefined') kokoroReady();   // probe early so the toggle reflects it
+if (typeof window !== 'undefined' && legacyVoiceApiAvailable()) kokoroReady();   // probe early so the toggle reflects it
 
 export async function speak(text) {
   if (!voice.tts || !text) return;
@@ -116,16 +127,21 @@ export function toggleHandsFree() { voice.handsFree = !voice.handsFree; }
 let _whisper = null;          // null=unknown, true/false (cached)
 async function whisperReady() {
   if (_whisper !== null) return _whisper;
+  if (!legacyVoiceApiAvailable()) {
+    _whisper = false;
+    return false;
+  }
   try { const r = await fetch('/api/stt/status'); _whisper = !!(await r.json()).available; }
   catch { _whisper = false; }
-  if (_whisper) voice.supported = true;   // we can do STT even without browser Web Speech
+  if (_whisper && CAN_RECORD) voice.supported = true;
   return _whisper;
 }
-if (typeof window !== 'undefined') whisperReady();   // probe early so the mic reflects it
+if (typeof window !== 'undefined' && legacyVoiceApiAvailable()) whisperReady();   // probe early so the mic reflects it
 
 let _rec = null, _stream = null, _actx = null, _vadRAF = 0, _silenceT = 0;
 
 function startWhisper(onFinal) {
+  if (!CAN_RECORD) { voice.state = 'idle'; voice.supported = !!SR; return false; }
   navigator.mediaDevices.getUserMedia({ audio: true }).then((stream) => {
     _stream = stream;
     const chunks = [];
@@ -152,6 +168,7 @@ function startWhisper(onFinal) {
     voice.state = 'listening'; voice.partial = '';
     startVad(stream);
   }).catch(() => { voice.state = 'idle'; });
+  return true;
 }
 
 // Energy-based endpointing: once speech is heard, auto-stop ~1.2s after it tapers to silence.
@@ -191,7 +208,7 @@ let rec = null;
 // Returns false if speech recognition isn't available (caller shows the text-input fallback).
 export function startListening(onFinal) {
   stopSpeaking();                       // barge-in: talking cuts off the agent's voice
-  if (_whisper) { startWhisper(onFinal); return true; }   // local Whisper path (preferred)
+  if (_whisper) return startWhisper(onFinal);              // local Whisper path (preferred)
   if (!SR) { voice.supported = false; return false; }
   rec = new SR();
   rec.lang = 'en-US';

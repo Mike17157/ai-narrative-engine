@@ -25,6 +25,9 @@
   // ── derived ──
   let path = $derived($page.url.pathname);
   let search = $derived($page.url.search || '');
+  // The parallel Story app uses this build flag so its routes never boot the
+  // full app's health/activity/persona machinery. `loom serve` is unchanged.
+  const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
   let section = $derived(path.split('/')[1] || '');
   let tree = $derived(new Set(['characters', 'stories', 'images', 'training', 'settings', 'library']).has(section) ? treeFor(section, path) : []);
   let activeHref = $derived(path + search);
@@ -64,7 +67,13 @@
   function go(n) { goto(n.home ? n.href : (lastRoute[n.id] || n.href)); }
 
   // Programmatic deep-link from child components (e.g. Train → Settings).
-  $effect(() => { if (app.nav.screen) { const s = app.nav.screen; app.nav.screen = null; goto(`/${s}`); } });
+  $effect(() => {
+    if (!leanStoryMode && app.nav.screen) {
+      const s = app.nav.screen;
+      app.nav.screen = null;
+      goto(`/${s}`);
+    }
+  });
 
   // ── subnav dropdown ──
   function toggleDrop(id, e) {
@@ -105,6 +114,7 @@
 
   let timer, atimer, ptimer;
   onMount(async () => {
+    if (leanStoryMode) return;
     await refreshAll();
     await refreshActivity();
     await migratePersonas();
@@ -119,6 +129,15 @@
 
 <svelte:window onclick={closeMenus} />
 
+{#if leanStoryMode}
+  <div class="lean-shell">
+    <header class="lean-topbar">
+      <a href="/stories" class="lean-brand">Loom Story</a>
+      <span>Architect · author · play</span>
+    </header>
+    <main>{@render children()}</main>
+  </div>
+{:else}
 <div class="shell" style:--chrome-top={tree.length ? '86px' : '48px'}>
 
   <!-- ── top bar: section switcher + status tools ── -->
@@ -200,8 +219,16 @@
 <TagGraphModal />
 <ConfigModal />
 <EntityBrowseModal />
+{/if}
 
 <style>
+  .lean-shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+  .lean-shell main { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column; }
+  .lean-topbar { display: flex; align-items: center; gap: 10px; height: 42px; padding: 0 16px;
+                 border-bottom: 1px solid var(--border); background: #12151d; color: var(--muted);
+                 font-size: 12px; }
+  .lean-brand { color: var(--text); font-size: 13px; font-weight: 750; letter-spacing: .02em;
+                text-decoration: none; }
   .shell { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
 
   /* ── top bar ── */

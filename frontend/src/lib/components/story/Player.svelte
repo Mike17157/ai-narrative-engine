@@ -7,7 +7,8 @@
   import Manuscript from './Manuscript.svelte';
 
   let { storyKey } = $props();
-  const exitPlay = () => goto(`/stories/${storyKey}/structure`);
+  const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
+  const exitPlay = () => goto(`/stories/${storyKey}`);
 
   // Lorebooks attached to THIS play thread (world/RPG/etc. books from the manager).
   // Persisted under a dedicated `play-<key>` session so it survives reloads and never
@@ -16,7 +17,7 @@
   let lorebooks = $state([]);
   async function setLorebooks(v) {
     lorebooks = v;
-    await put(`/stories/session/${playSid}`, { lorebooks: v });
+    await put(`/stories/${storyKey}/session`, { lorebooks: v });
   }
   function openConfig(tab = 'lorebooks') {
     openConfigModal({ tab, lorebooks, onLorebooks: setLorebooks });
@@ -198,13 +199,13 @@
   );
 
   async function loadAssets() {
-    const sess = await get(`/stories/session/${playSid}`);
+    const sess = await get(`/stories/${storyKey}/session`);
     if (Array.isArray(sess?.lorebooks)) lorebooks = sess.lorebooks;
     await loadState();
     story = await get(`/stories/${storyKey}`);
     for (const l of story.locations) locs[l.id] = { name: l.name, description: l.description, background: l.background };
-    scene.location = story.start || story.locations[0]?.id || null;
-    const all = await get('/characters');
+    scene.location = worldState?.location || story.start || story.locations[0]?.id || null;
+    const all = await get(`/stories/${storyKey}/cast`);
     roster = all;
     for (const c of all) {
       names[c.key] = c.name;
@@ -214,7 +215,7 @@
     primaryKey = story.cast.find((m) => m.primary)?.character || story.cast[0]?.character || '';
     for (const m of story.cast) {
       try {
-        const p = await get(`/characters/${m.character}/portraits`);
+        const p = await get(`/stories/${storyKey}/cast/${m.character}/portraits`);
         const o = p.outfits?.[0];
         if (o?.expressions) sprites[m.character] = o.expressions;
       } catch { /* no sprites yet */ }
@@ -230,7 +231,10 @@
     const secs = r.ok ? (r.data?.sections || []) : [];
     if (secs.length) {
       pages = secs.map((s) => ({ kind: 'prologue', title: s.title, text: s.text }));
-      history = secs.map((s) => ({ role: 'assistant', text: s.text }));  // play continues from it
+      // A compiled loop starts from its explicit opening state.  A prewritten
+      // prologue is readable material, not context that every person in loop
+      // one magically remembers.
+      history = story?.fields?.status === 'active' ? [] : secs.map((s) => ({ role: 'assistant', text: s.text }));
       cursor = 0;
     } else {
       await turn({ history: [], location: scene.location });   // no prologue → live opening turn
@@ -253,7 +257,9 @@
     busy = false;
     if (!r.ok) { err = r.data?.error || 'director error'; return; }
     const d = r.data;
-    history = [...history, { role: 'assistant', text: d.reply }];
+    // A real loop reset must cut the client transcript too.  Otherwise the
+    // next /play request reintroduces the entire dead loop through `history`.
+    history = d.reset_history ? [] : [...history, { role: 'assistant', text: d.reply }];
     scene = { location: d.location, present: d.present || [], emotions: d.emotions || {}, movement: !!d.movement };
     pages = [...pages, { kind: 'turn', text: d.reply, lines: d.lines || [], present: d.present || [], emotions: d.emotions || {}, pov: d.pov || '' }];
     cursor = pages.length - 1;       // a new turn jumps you to the live edge
@@ -264,6 +270,7 @@
     lastGuard = d.guard || null;
     if (d.consolidation?.dream) dream = d.consolidation.dream;   // the player slept → a fever-dream rises
     if (d.day) day = d.day;                                      // the slot rhythm follows the server
+    if (d.loop_reset) { offers = []; curScene = null; dream = ''; }
     if (showState) loadState();   // refresh sibling-level counts (facts/sim grow as you play)
   }
   async function send() {
@@ -358,8 +365,10 @@
       <button class="ghost sm" class:on={showPlaces} onclick={() => (showPlaces = !showPlaces)}
         title="Move to a place / scene">🗺 Places</button>
     {/if}
-    <button class="ghost sm" onclick={() => openConfig('lorebooks')}
-      title="Attach lorebooks to this playthrough">📚 {lorebooks.length || ''}</button>
+    {#if !leanStoryMode}
+      <button class="ghost sm" onclick={() => openConfig('lorebooks')}
+        title="Attach lorebooks to this playthrough">📚 {lorebooks.length || ''}</button>
+    {/if}
     <button class="ghost sm" class:on={showState} onclick={() => (showState = !showState)}
       title="World state — the evolving model of this playthrough">🧠 State{#if lastGuard?.used_fallback} <span class="fb" title="primary model refused; used fallback">⤵</span>{/if}</button>
     {#if lastBeat}
@@ -368,7 +377,9 @@
     {/if}
     <button class="ghost sm" onclick={() => (showMs = true)}
       title="Read and edit this playthrough as literature — scenes, beats, paragraphs">📖 Manuscript</button>
-    <button class="gear" onclick={() => openConfig('models')} title="Models, configs & connections">⚙</button>
+    {#if !leanStoryMode}
+      <button class="gear" onclick={() => openConfig('models')} title="Models, configs & connections">⚙</button>
+    {/if}
     <span class="loc">{scene.location ? (locs[scene.location]?.name || scene.location) : ''}</span>
   </div>
 
@@ -453,6 +464,14 @@
     {#if showMs}
       <Manuscript {storyKey} sid={playSid} onclose={() => (showMs = false)} />
     {/if}
+    {#if day}
+      <div class="story-time" aria-label={`Day ${day.n}, ${day.slot}`}>
+        <span class="dlab">Day {day.n}</span>
+        {#each SLOTS as s (s)}
+          <span class="slot" class:on={day.slot === s}>{SLOT_ICON[s]} {s}</span>
+        {/each}
+      </div>
+    {/if}
     <div class="cast">
       {#each stageKeys as k (k)}
         {#if spriteOf(k)}
@@ -493,11 +512,6 @@
 
       {#if atEnd && !prologueBusy}
         <div class="dayrow">
-          {#if day}
-            <span class="dlab">Day {day.n}</span>
-            {#each SLOTS as s (s)}<span class="slot" class:on={day.slot === s}>{SLOT_ICON[s]} {s}</span>{/each}
-          {/if}
-          <span class="dsp"></span>
           {#if !day}
             <button class="dbtn" onclick={() => suggestScenes(false)} disabled={offersBusy || busy}>{offersBusy ? '…' : '🎬 Start the day'}</button>
           {:else if day.slot === 'night'}
@@ -662,6 +676,12 @@
     display: flex; flex-direction: column; justify-content: flex-end;
   }
   .stage.nobg { background: linear-gradient(160deg, #2a2f3e, #14171f); }
+  /* Time belongs to the story surface, not the action controls. It is an overlay so the
+     dialogue's height and type scale never shift as the day advances. */
+  .story-time { position: absolute; top: 12px; right: 12px; z-index: 3; display: flex; align-items: center;
+    gap: 2px; max-width: calc(100% - 24px); padding: 4px 6px 4px 9px; border-radius: 999px;
+    background: rgba(11,13,19,.66); border: 1px solid rgba(255,255,255,.14); backdrop-filter: blur(5px);
+    box-shadow: 0 3px 12px rgba(0,0,0,.2); pointer-events: none; }
   /* sprites stand full-height; the opaque text box overlays their lower body (VN style) */
   .cast { position: absolute; inset: 2% 0 0 0; display: flex; align-items: flex-end; justify-content: center; gap: 5%; pointer-events: none; }
   .sprite { height: 96%; }   /* fallback; per-character height set inline from height_cm */
@@ -709,13 +729,12 @@
            font-size: 11px; font-weight: 800; letter-spacing: .3px; vertical-align: 2px; text-shadow: none;
            background: rgba(124,109,255,.32); border: 1px solid rgba(124,109,255,.6); color: #fff; }
   .vnline.tht .vntext { font-style: italic; color: #c2c9dc; }
-  .dayrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+  .dayrow { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
   .dlab { font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .5px; color: var(--faint); }
   .slot { font-size: 11px; padding: 2px 9px; border-radius: 999px; color: var(--faint);
           border: 1px solid transparent; }
   .slot.on { color: var(--text); border-color: var(--accent);
              background: color-mix(in srgb, var(--accent) 10%, transparent); }
-  .dsp { flex: 1; }
   .dbtn { font-size: 11.5px; padding: 4px 11px; border-radius: 999px; cursor: pointer;
           background: rgba(124,109,255,.14); border: 1px solid rgba(124,109,255,.35); color: var(--text); }
   .dbtn:hover:not(:disabled) { background: var(--accent); color: #0b0e14; }

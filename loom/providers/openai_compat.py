@@ -7,9 +7,14 @@ through `options`.
 
 Model `options`:
     base_url:   default "https://openrouter.ai/api/v1"
-    api_key:    bearer key (falls back to OPENROUTER_API_KEY / OPENAI_API_KEY)
+    api_key:    bearer key (falls back to the matching provider environment key:
+                DEEPSEEK_API_KEY for api.deepseek.com, otherwise
+                OPENROUTER_API_KEY / OPENAI_API_KEY)
     model:      e.g. "anthropic/claude-3.5-sonnet", "openai/gpt-4o-mini"
     max_tokens: int (default 40000)
+    request_timeout_s: end-to-end request budget for one HTTP attempt (default 120)
+    max_retries: number of extra retry attempts for transient/provider errors
+                 (default 5; set 0 for a bounded authoring turn)
 
 Sampling controls (any subset; omitted → the model/provider default): temperature,
 top_p, top_k, frequency_penalty, presence_penalty, repetition_penalty, min_p. These
@@ -35,24 +40,48 @@ _CTX_CAP: dict[str, int] = {}
 
 import httpx
 
-from .base import TextResult
+from .base import ModelRequestTimeout, TextResult
 
 
 class OpenAICompatProvider:
+    # ``model_task`` uses this to stop waiting for a thread after the same
+    # budget.  The streaming implementation already accepts ``cancel`` and
+    # checks it between chunks, so a timed-out authoring turn does not begin a
+    # second fallback request after the client has been released.
+    supports_cancellation = True
+
     def __init__(self, options: dict[str, Any]):
         self.base_url: str = options.get("base_url", "https://openrouter.ai/api/v1").rstrip("/")
-        self.api_key: str = (
-            options.get("api_key")
-            or os.environ.get("OPENROUTER_API_KEY")
-            or os.environ.get("OPENAI_API_KEY")
-            or ""
-        )
+        # A named direct-DeepSeek profile must not accidentally consume an
+        # OpenRouter key (nor require users to copy a secret into models.yaml).
+        # Gateway routes retain the existing OPENROUTER_API_KEY behavior.
+        base_url_lower = self.base_url.lower()
+        is_direct_deepseek = "api.deepseek.com" in base_url_lower
+        if is_direct_deepseek:
+            # Never leak an OpenRouter/OpenAI credential to a direct DeepSeek
+            # endpoint.  A direct profile has its own credential boundary.
+            self.api_key = options.get("api_key") or os.environ.get("DEEPSEEK_API_KEY") or ""
+        else:
+            self.api_key = (
+                options.get("api_key")
+                or os.environ.get("OPENROUTER_API_KEY")
+                or os.environ.get("OPENAI_API_KEY")
+                or ""
+            )
         self.model: str = options.get("model", "openai/gpt-4o-mini")
         # Default ceiling on OUTPUT tokens. It's just a cap (the model stops when done), so a
         # generous default avoids silently truncating large structured outputs into invalid JSON.
         # ponytail: 40k is a ceiling, not a reservation; if a provider rejects a too-large cap for a
         # given model, set a smaller per-preset `params.max_tokens`.
         self.max_tokens: int = int(options.get("max_tokens", 40000))
+        try:
+            self.request_timeout_s = max(1.0, float(options.get("request_timeout_s", 120)))
+        except (TypeError, ValueError):
+            self.request_timeout_s = 120.0
+        try:
+            self.max_retries = max(0, int(options.get("max_retries", 5)))
+        except (TypeError, ValueError):
+            self.max_retries = 5
         # Optional sampling controls — only those explicitly set are forwarded straight to
         # /chat/completions (OpenRouter forwards model-specific ones where supported).
         self.sampling: dict[str, Any] = {}
@@ -106,9 +135,14 @@ class OpenAICompatProvider:
         if cap and cap < self.max_tokens:
             self.max_tokens = cap   # use the previously-learned fit; no wasted failed request
         last: Exception | None = None
-        for attempt in range(6):
+        for attempt in range(self.max_retries + 1):
             try:
                 return self._generate_once(**kwargs)
+            except httpx.TimeoutException as exc:
+                # An HTTP timeout is never safe to retry implicitly for a
+                # writing route: the caller needs a clear, prompt result and
+                # must decide whether to retry or choose another model.
+                raise ModelRequestTimeout(model=self.model, timeout_s=self.request_timeout_s) from exc
             except RuntimeError as exc:
                 last = exc
                 s = str(exc)
@@ -120,9 +154,11 @@ class OpenAICompatProvider:
                     if safe < self.max_tokens:
                         _CTX_CAP[self.model] = min(_CTX_CAP.get(self.model, safe), safe)
                         self.max_tokens = safe
-                        continue
+                        if attempt < self.max_retries:
+                            continue
                     raise
-                if "429" in s or "rate" in s.lower() or "temporarily" in s.lower() or "overloaded" in s.lower():
+                if (attempt < self.max_retries and
+                        ("429" in s or "rate" in s.lower() or "temporarily" in s.lower() or "overloaded" in s.lower())):
                     time.sleep(min(30, 3 * 2 ** attempt))   # transient throttle → exponential back off
                     continue
                 raise                                   # anything else is a real error
@@ -164,7 +200,7 @@ class OpenAICompatProvider:
             body["tools"] = [{"type": "function", "function": {
                 "name": t["name"], "description": t.get("description", ""),
                 "parameters": t["parameters"]}} for t in tools]
-            resp = httpx.post(url, json=body, headers=self._headers(), timeout=120)
+            resp = httpx.post(url, json=body, headers=self._headers(), timeout=self.request_timeout_s)
             if resp.status_code >= 400:
                 raise RuntimeError(self._err(resp))
             msg = resp.json()["choices"][0]["message"]
@@ -195,7 +231,7 @@ class OpenAICompatProvider:
                         lmsgs = [{"role": "system", "content": instr}] + lmsgs
                     lbody = {"model": self.model, "messages": lmsgs,
                              "max_tokens": self.max_tokens, **self.sampling}
-                    lresp = httpx.post(url, json=lbody, headers=self._headers(), timeout=120)
+                    lresp = httpx.post(url, json=lbody, headers=self._headers(), timeout=self.request_timeout_s)
                     if lresp.status_code < 400:
                         ltext = lresp.json()["choices"][0]["message"].get("content") or ""
                         data = parse_schema_labeled(ltext, plan)
@@ -209,7 +245,7 @@ class OpenAICompatProvider:
             }
             # Non-streaming json_schema fallback — one blocking request.
             if on_delta is None:
-                resp = httpx.post(url, json=body, headers=self._headers(), timeout=120)
+                resp = httpx.post(url, json=body, headers=self._headers(), timeout=self.request_timeout_s)
                 if resp.status_code >= 400:
                     raise RuntimeError(self._err(resp))
                 content = resp.json()["choices"][0]["message"]["content"]
@@ -220,7 +256,7 @@ class OpenAICompatProvider:
             # then parse the whole thing. The schema still constrains the final object.
             body["stream"] = True
             chunks: list[str] = []
-            with httpx.stream("POST", url, json=body, headers=self._headers(), timeout=120) as resp:
+            with httpx.stream("POST", url, json=body, headers=self._headers(), timeout=self.request_timeout_s) as resp:
                 if resp.status_code >= 400:
                     resp.read()
                     raise RuntimeError(self._err(resp))
@@ -254,7 +290,7 @@ class OpenAICompatProvider:
                 # one clean blocking call. ponytail: this re-runs the model (2x cost) only on the empty
                 # path; when content DOES stream we keep the live tokens and never hit this.
                 body.pop("stream", None)
-                resp = httpx.post(url, json=body, headers=self._headers(), timeout=120)
+                resp = httpx.post(url, json=body, headers=self._headers(), timeout=self.request_timeout_s)
                 if resp.status_code >= 400:
                     raise RuntimeError(self._err(resp))
                 content = resp.json()["choices"][0]["message"]["content"]
@@ -264,7 +300,7 @@ class OpenAICompatProvider:
         # Streaming path.
         body["stream"] = True
         chunks: list[str] = []
-        with httpx.stream("POST", url, json=body, headers=self._headers(), timeout=120) as resp:
+        with httpx.stream("POST", url, json=body, headers=self._headers(), timeout=self.request_timeout_s) as resp:
             if resp.status_code >= 400:
                 resp.read()
                 raise RuntimeError(self._err(resp))

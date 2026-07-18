@@ -1,0 +1,1 @@
+# Runtime sidecars are staged here by `npm run desktop:prepare` and are not committed.

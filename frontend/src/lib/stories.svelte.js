@@ -1,12 +1,14 @@
 // Story UI state. Navigation is route-based (routes/stories/**); this store is data only —
 // the library list, the loaded story, the edit clone, and per-story canvas view state.
-// (Creating "from scratch" = POST /stories/new mints an empty story you build by conversation in
-// the editor — no wizard, no client-held draft.)
+// Creating from scratch mints one empty persisted card. There is no client-held
+// draft and no separate genesis state machine.
 import { browser } from '$app/environment';
 import { goto } from '$app/navigation';
-import { get, post, put, del } from './api.js';
-import { consumeSse } from './sse.js';
+import { get, post, del } from './api.js';
 import { loadChars } from './characters.svelte.js';
+import { isStoryHostDesktop, requestStoryHost } from './story-host-client';
+
+const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
 
 // Per-story canvas view state (graph pan/zoom + list-vs-graph mode), persisted
 // so swapping story stages and reloading keeps your place. Keyed by story key.
@@ -37,119 +39,81 @@ export const stories = $state({
 });
 
 export async function loadStories() {
-  try { stories.list = await get('/stories'); } catch { stories.list = []; }
+  try {
+    const desktop = isStoryHostDesktop();
+    const result = desktop ? await requestStoryHost('story.list') : await get('/stories');
+    stories.list = desktop && !Array.isArray(result) ? (Array.isArray(result?.stories) ? result.stories : []) : result;
+  } catch { stories.list = []; }
 }
 export async function loadStory(key) {
-  try { stories.current = await get(`/stories/${key}`); return stories.current; }
+  try {
+    const desktop = isStoryHostDesktop();
+    const result = desktop
+      ? await requestStoryHost('story.read', { key })
+      : await get(`/stories/${key}`);
+    const story = desktop ? result?.story : result;
+    if (!story || typeof story !== 'object' || Array.isArray(story)) throw new Error('Story Host returned no author card');
+    if (!desktop) {
+      try {
+        const authoring = await get(`/stories/${key}/interview-history`);
+        story.authoring_history = authoring?.history || [];
+      } catch { story.authoring_history = []; }
+    } else {
+      // Per-target author transcripts are a later IPC capability. The normal
+      // Story card remains usable without asking the desktop host for a raw
+      // conversation history that it does not yet own.
+      story.authoring_history = [];
+      // This opaque token covers only the desktop direct-edit domain. It is
+      // sent back with a narrow prose/cast save so a stale rendered card never
+      // overwrites a newer local author edit.
+      if (typeof result?.author_revision === 'string') story.author_revision = result.author_revision;
+    }
+    stories.current = story;
+    return stories.current;
+  }
   catch { stories.current = null; return null; }
 }
 export async function loadModels() {
+  if (isStoryHostDesktop()) {
+    // Desktop Architect configuration is sealed inside the sidecar. The
+    // legacy global model catalogue has no local IPC capability yet.
+    stories.textModels = [];
+    stories.imageModels = [];
+    return;
+  }
   try {
     stories.textModels = (await get('/text-models?kind=text')).models || [];
     stories.imageModels = (await get('/models')).image || [];
   } catch { /* offline */ }
 }
 
-export async function expandArc(storyKey, arcId, onDelta, onArc) {
-  const res = await fetch(`/api/stories/${storyKey}/arc/${arcId}/expand`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  await consumeSse(res, (ev) => {
-    if (ev.type === 'delta') onDelta?.(ev.text);
-    else if (ev.type === 'arc') onArc?.(ev);
-  });
-}
-
-export async function generateTimelines(storyKey, arcId, onEvent) {
-  const res = await fetch(`/api/stories/${storyKey}/arc/${arcId}/timelines`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({}),
-  });
-  await consumeSse(res, (ev) => onEvent?.(ev));
-}
-
-// Expand a development graph into a fleshed (chapter-bearing) graph via the faithful
-// expander. Returns the enriched graph (falls back to the input on failure).
-export async function expandGraphRequest(character, graph) {
-  let enriched = null;
-  try {
-    const res = await fetch('/api/stories/expand-graph', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ character, graph }),
-    });
-    await consumeSse(res, (ev) => { if (ev.type === 'graph') enriched = ev.graph; });
-  } catch { /* fall back to the raw graph */ }
-  return enriched || graph;
+export async function createStory({ name = 'Untitled story', type = 'novel' } = {}) {
+  if (isStoryHostDesktop()) {
+    const result = await requestStoryHost('story.create', { name, type });
+    if (!result?.key || typeof result.key !== 'string') {
+      throw new Error('Story Host could not create the story card.');
+    }
+    await loadStories();
+    return result.key;
+  }
+  const result = await post('/stories/new', { name, type });
+  if (!result.ok || !result.data?.key) {
+    throw new Error(result.data?.error || 'Could not create the story card.');
+  }
+  return result.data.key;
 }
 
 // --- saved-story actions (route-based) ------------------------------------ //
 export async function deleteStory(key) {
+  if (isStoryHostDesktop()) {
+    // Deletion needs an explicit local confirmation capability; do not let a
+    // desktop library control silently fall back to the legacy HTTP route.
+    throw new Error('Story deletion is not available in the local Story Host yet.');
+  }
   await del(`/stories/${key}`);
-  await Promise.all([loadStories(), loadChars()]);  // the story's generated cast is auto-pruned server-side
+  await loadStories();
+  // The lean API intentionally has no global character library; its cast data
+  // is always loaded through a specific Story.
+  if (!leanStoryMode) await loadChars();
   if (stories.current?.key === key) { stories.current = null; goto('/stories'); }
-}
-
-// --- edit page (clone of current; debounced auto-save) -------------------- //
-export function editStory() {
-  stories.editing = structuredClone(stories.current);
-  stories.editing.themes = stories.editing.themes || [];
-  stories.editing.locations = stories.editing.locations || [];
-  stories.editing.storyboard = stories.editing.storyboard || { logline: '', beats: [] };
-  stories.editing.storyboard.beats = stories.editing.storyboard.beats || [];
-  stories.editing.cast = stories.editing.cast || [];
-  stories.msg = null;
-}
-let editSaveTimer = null, editSaving = false;
-function editPayload(e) {
-  return { name: e.name, premise: e.premise, tone: e.tone, themes: e.themes,
-           art_style: e.art_style, premise_parts: e.premise_parts, storyboard: e.storyboard,
-           cast: e.cast, locations: e.locations, conditions: e.conditions, start: e.start };
-}
-
-// Persist edits made directly to the loaded story (e.g. a flat-beat card edited
-// from the graph modal) without going through the full edit clone.
-export async function persistCurrent() {
-  const e = stories.current; if (!e) return;
-  try { await put(`/stories/${e.key}`, editPayload(e)); } catch { /* keep local */ }
-}
-export function scheduleEditSave() { clearTimeout(editSaveTimer); editSaveTimer = setTimeout(autoSaveEdit, 700); }
-async function autoSaveEdit() {
-  const e = stories.editing; if (!e) return;
-  if (editSaving) { scheduleEditSave(); return; }
-  editSaving = true; stories.saving = true;
-  const r = await put(`/stories/${e.key}`, editPayload(e));
-  editSaving = false; stories.saving = false;
-  stories.msg = r.ok ? { ok: true, text: '✓ Saved' } : { err: true, text: r.data?.error || 'save failed' };
-}
-// Leave the editor — flush a final save, refresh the read copy, go to the overview.
-export async function finishEdit() {
-  clearTimeout(editSaveTimer);
-  const e = stories.editing;
-  if (e) {
-    try { await put(`/stories/${e.key}`, editPayload(e)); stories.current = await get(`/stories/${e.key}`); } catch { /* keep */ }
-    stories.editing = null;
-    goto(`/stories/${e.key}/structure`);
-  } else { goto('/stories'); }
-}
-export function eAddLocation() {
-  const id = `place-${stories.editing.locations.length + 1}`;
-  stories.editing.locations.push({ id, name: 'New location', description: '', background_prompt: '' });
-  if (!stories.editing.start) stories.editing.start = id;
-}
-export function eRemoveLocation(i) {
-  const [g] = stories.editing.locations.splice(i, 1);
-  if (stories.editing.start === g.id) stories.editing.start = stories.editing.locations[0]?.id || null;
-}
-export function eAddBeat() { stories.editing.storyboard.beats.push({ title: '', summary: '', location: '', characters: [] }); }
-export function eRemoveBeat(i) { stories.editing.storyboard.beats.splice(i, 1); }
-export function eMoveBeat(i, d) {
-  const b = stories.editing.storyboard.beats, j = i + d;
-  if (j < 0 || j >= b.length) return;
-  [b[i], b[j]] = [b[j], b[i]];
-}
-export function eRemoveCast(i) { stories.editing.cast.splice(i, 1); }
-export function eAddCast(charKey) {
-  if (!charKey || stories.editing.cast.some((m) => m.character === charKey)) return;
-  stories.editing.cast.push({ character: charKey, primary: false, outfit: null });
 }

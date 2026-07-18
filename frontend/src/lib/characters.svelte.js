@@ -5,10 +5,21 @@ import { goto } from '$app/navigation';
 import { get, post, del } from './api.js';
 import { loadStories } from './stories.svelte.js';
 import { refreshHealth, setActiveChar } from './app.svelte.js';
+import { isStoryHostDesktop } from './story-host-client';
 
 export const chars = $state({ list: [], importing: false, msg: null });
 
-export async function loadChars() { chars.list = await get('/characters'); }
+export async function loadChars(storyKey = null) {
+  if (isStoryHostDesktop()) {
+    // The desktop card carries its own cast projection. A general character
+    // library capability is intentionally not part of this first host slice.
+    chars.list = [];
+    return chars.list;
+  }
+  const path = storyKey ? `/stories/${encodeURIComponent(storyKey)}/cast` : '/characters';
+  const result = await get(path);
+  chars.list = Array.isArray(result) ? result : [];
+}
 
 // Resolve a character key → display name. Falls back to a de-slugified version of the key
 // (e.g. "riley_costello" → "Riley Costello") so a raw key never surfaces when chars.list is
@@ -54,7 +65,7 @@ async function finishImport(r, seedStory = false) {
       });
       if (seeded.data?.ok) {
         await loadStories();
-        goto(`/stories/${seeded.data.key}/structure?tab=overview`);
+        goto(`/stories/${seeded.data.key}`);
         return;
       }
       chars.msg = { err: true, text: seeded.data?.error || 'Character imported, but story seed failed' };

@@ -1368,7 +1368,7 @@ def exemplar_notes(root, query: str, k: int = 3, book: str = "_char_exemplars") 
     instructions get performed instead of obeyed. Decks: _char_exemplars, _location_exemplars,
     _premise_exemplars, _arc_exemplars (scripts/seed_*_exemplars.py). '' when absent."""
     try:
-        from ..server.services import lorebook_store as _LS
+        from ...server.services import lorebook_store as _LS
         hits = _LS.retrieve(root, query or "story", [book], top_k=k)
         return "\n\n".join(h.content for h in hits if h.content)
     except Exception:  # noqa: BLE001 — reference is best-effort, never block generation
@@ -1397,7 +1397,7 @@ BIRTH_SYS = (
 def _template_source(root, query: str, rank: int = 0) -> str:
     """The rank-th most similar real character from `_char_sources` (raw mirrored substance)."""
     try:
-        from ..server.services import lorebook_store as _LS
+        from ...server.services import lorebook_store as _LS
         hits = _LS.retrieve(root, query or "person", ["_char_sources"], top_k=max(3, rank + 1))
         return hits[rank].content if rank < len(hits) else (hits[-1].content if hits else "")
     except Exception:  # noqa: BLE001

@@ -36,7 +36,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 
-from .characters.labeled import parse_labeled, parse_records, run_labeled_records, run_text
+from .labeled import parse_labeled, parse_records, run_labeled_records, run_text
 
 # The fundamental directive, prepended to every pass: character data is clinical fact, never prose.
 _CLINICAL = (

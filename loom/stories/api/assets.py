@@ -32,7 +32,7 @@ def register(app, ctx):
         NOT a recap). This is the DM's conflict signal delivered as a dream — fired primarily when the
         player SLEEPS (see consolidate_on_rest), exposed here for a deliberate rest/dream. Pure read.
         Body: { sid?, present?[keys], you? } → { dream }."""
-        from ..server.services.story_sessions import load_session
+        from ...server.services.story_sessions import load_session
         from ..runtime import state as _SE
         from ..authoring import stages as _ST
 

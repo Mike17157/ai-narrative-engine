@@ -21,7 +21,7 @@
              images: [...new Set([...own, ...srcImgs])] };
   }));
 
-  async function reload() { await Promise.all([loadStory(st.key), loadChars()]); }
+  async function reload() { await Promise.all([loadStory(st.key), loadChars(st.key)]); }
 </script>
 
 <div class="page castpage"><div class="col full fillh">

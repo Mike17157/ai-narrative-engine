@@ -22,7 +22,9 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable
 
 import libsql
 
@@ -45,8 +47,13 @@ def _connect(root: Path):
             con.sync()
         except Exception:  # noqa: BLE001
             pass
-        return con
-    return libsql.connect(local)
+    else:
+        con = libsql.connect(local)
+    # WAL + busy_timeout so two concurrent browser windows queue instead of hitting
+    # "database is locked" on Windows' default rollback-journal exclusive-lock behavior.
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=5000")
+    return con
 
 
 def _conn(root: Path):
@@ -54,6 +61,7 @@ def _conn(root: Path):
     key = str(_db_path(root))
     if key not in _inited:
         con.executescript(_SCHEMA)
+        _migrate_schema(con)
         con.commit()
         _inited.add(key)
     return con
@@ -122,6 +130,7 @@ CREATE TABLE IF NOT EXISTS stories (
     art_style        TEXT NOT NULL DEFAULT '',
     premise_parts    TEXT NOT NULL DEFAULT '{}',        -- JSON object
     world            TEXT NOT NULL DEFAULT '{}',        -- JSON object
+    time_system      TEXT NOT NULL DEFAULT '{}',        -- JSON object (entity activity windows)
     storyboard       TEXT NOT NULL DEFAULT '{}',        -- JSON object (Storyboard)
     lorebook         TEXT NOT NULL DEFAULT '{}',        -- JSON object
     start            TEXT,
@@ -163,6 +172,7 @@ CREATE TABLE IF NOT EXISTS locations (
     id               TEXT NOT NULL,
     name             TEXT NOT NULL DEFAULT '',
     description      TEXT NOT NULL DEFAULT '',
+    history          TEXT NOT NULL DEFAULT '',
     background_prompt TEXT NOT NULL DEFAULT '',
     background       TEXT,
     parent           TEXT NOT NULL DEFAULT '',
@@ -297,6 +307,21 @@ CREATE INDEX IF NOT EXISTS idx_card_history_session ON card_history(story_key, s
 """
 
 
+def _migrate_schema(con) -> None:
+    """Apply additive migrations for stores created before a card field became a column.
+
+    ``CREATE TABLE IF NOT EXISTS`` intentionally leaves an existing table alone.  Keep
+    migrations immediately beside the schema so a new Story field cannot silently
+    vanish when an older local database is read and written again.
+    """
+    columns = {row[1] for row in con.execute("PRAGMA table_info(stories)").fetchall()}
+    if "time_system" not in columns:
+        con.execute("ALTER TABLE stories ADD COLUMN time_system TEXT NOT NULL DEFAULT '{}'")
+    location_columns = {row[1] for row in con.execute("PRAGMA table_info(locations)").fetchall()}
+    if "history" not in location_columns:
+        con.execute("ALTER TABLE locations ADD COLUMN history TEXT NOT NULL DEFAULT ''")
+
+
 # ── Story list / existence ───────────────────────────────────────────────────
 def list_stories(root: Path) -> list[str]:
     """All story keys, ordered by name."""
@@ -374,12 +399,17 @@ def apply_play_card_update(root: Path, story_key: str, session_id: str, *, kind:
 
 
 # ── LOAD: reconstruct the {story, characters} aggregate from rows ────────────
-def load_story(root: Path, key: str) -> tuple[dict, dict] | None:
+def load_story(root: Path, key: str, *, _connection=None) -> tuple[dict, dict] | None:
     """Reconstruct the (story_dict, characters_dict) aggregate from rows. Returns None if
-    the story key doesn't exist. The story_dict is ready for ``Story(**story_dict)``."""
-    con = _conn(root)
+    the story key doesn't exist. The story_dict is ready for ``Story(**story_dict)``.
+
+    ``_connection`` is an internal escape hatch for a caller that already owns
+    the write transaction.  Public callers continue to receive a fresh store
+    connection, preserving the normal read API.
+    """
+    con = _connection if _connection is not None else _conn(root)
     srow = con.execute(
-        "SELECT name, type, premise, tone, themes, art_style, premise_parts, world, "
+        "SELECT name, type, premise, tone, themes, art_style, premise_parts, world, time_system, "
         "storyboard, lorebook, \"start\", background, fields, start_scene, default_personas, "
         "recent_window FROM stories WHERE key=?", (key,)
     ).fetchone()
@@ -389,10 +419,10 @@ def load_story(root: Path, key: str) -> tuple[dict, dict] | None:
         "name": srow[0], "type": srow[1], "premise": srow[2], "tone": srow[3],
         "themes": _jloads(srow[4], list), "art_style": srow[5],
         "premise_parts": _jloads(srow[6], dict), "world": _jloads(srow[7], dict),
-        "storyboard": _jloads(srow[8], dict), "lorebook": _jloads(srow[9], dict),
-        "start": srow[10], "background": srow[11], "fields": _jloads(srow[12], dict),
-        "start_scene": srow[13], "default_personas": _jloads(srow[14], list),
-        "recent_window": srow[15],
+        "time_system": _jloads(srow[8], dict), "storyboard": _jloads(srow[9], dict),
+        "lorebook": _jloads(srow[10], dict), "start": srow[11], "background": srow[12],
+        "fields": _jloads(srow[13], dict), "start_scene": srow[14],
+        "default_personas": _jloads(srow[15], list), "recent_window": srow[16],
     }
 
     # cast
@@ -410,10 +440,10 @@ def load_story(root: Path, key: str) -> tuple[dict, dict] | None:
 
     # locations (with nested scenes)
     locs = []
-    for lid, lname, ldesc, lbp, lbg, lparent, lscenes in con.execute(
-            "SELECT id, name, description, background_prompt, background, parent, scenes "
+    for lid, lname, ldesc, lhist, lbp, lbg, lparent, lscenes in con.execute(
+            "SELECT id, name, description, history, background_prompt, background, parent, scenes "
             "FROM locations WHERE story_key=? ORDER BY ord", (key,)).fetchall():
-        locs.append({"id": lid, "name": lname, "description": ldesc,
+        locs.append({"id": lid, "name": lname, "description": ldesc, "history": lhist,
                      "background_prompt": lbp, "background": lbg, "parent": lparent,
                      "scenes": _jloads(lscenes, list)})
     story["locations"] = locs
@@ -499,33 +529,42 @@ def load_story(root: Path, key: str) -> tuple[dict, dict] | None:
 
 
 # ── SAVE: fan the validated aggregate to rows in one transaction ─────────────
-def save_story(root: Path, key: str, story: dict, characters: dict | None = None) -> None:
+def save_story(root: Path, key: str, story: dict, characters: dict | None = None, *, _connection=None) -> None:
     """Persist the whole story + its embedded characters. REPLACEs every row for `key` —
     callers MUST validate (``Story(**story)`` + cross-aggregate check) BEFORE calling, then
     this fans the validated dict to rows atomically. Mirrors the old story_db.save_story
-    contract: whole-document write, atomic via transaction."""
+    contract: whole-document write, atomic via transaction.
+
+    ``_connection`` is internal-only: it lets ``update_story_atomically`` save
+    inside the transaction that loaded and validated the aggregate.  Ordinary
+    callers keep the existing self-contained transaction behavior.
+    """
     characters = characters or {}
     now = time.time()
-    con = _conn(root)
+    con = _connection if _connection is not None else _conn(root)
+    owns_transaction = _connection is None
     try:
-        con.execute("BEGIN")
+        if owns_transaction:
+            con.execute("BEGIN")
         # upsert the stories row
         con.execute(
             "INSERT INTO stories (key, name, type, premise, tone, themes, art_style, "
-            "premise_parts, world, storyboard, lorebook, start, background, fields, "
+            "premise_parts, world, time_system, storyboard, lorebook, start, background, fields, "
             "start_scene, default_personas, recent_window, updated) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
             "ON CONFLICT(key) DO UPDATE SET name=excluded.name, type=excluded.type, "
             "premise=excluded.premise, tone=excluded.tone, themes=excluded.themes, "
             "art_style=excluded.art_style, premise_parts=excluded.premise_parts, "
-            "world=excluded.world, storyboard=excluded.storyboard, lorebook=excluded.lorebook, "
+            "world=excluded.world, time_system=excluded.time_system, storyboard=excluded.storyboard, "
+            "lorebook=excluded.lorebook, "
             "start=excluded.start, background=excluded.background, fields=excluded.fields, "
             "start_scene=excluded.start_scene, default_personas=excluded.default_personas, "
             "recent_window=excluded.recent_window, updated=excluded.updated",
             (key, story.get("name", ""), story.get("type", "novel"), story.get("premise", ""),
              story.get("tone", ""), _jdumps(story.get("themes", [])), story.get("art_style", ""),
              _jdumps(story.get("premise_parts", {})), _jdumps(story.get("world", {})),
-             _jdumps(story.get("storyboard", {})), _jdumps(story.get("lorebook", {})),
+             _jdumps(story.get("time_system", {})), _jdumps(story.get("storyboard", {})),
+             _jdumps(story.get("lorebook", {})),
              story.get("start"), story.get("background"), _jdumps(story.get("fields", {})),
              story.get("start_scene", ""), _jdumps(story.get("default_personas", [])),
              int(story.get("recent_window", 8)), now)
@@ -546,9 +585,9 @@ def save_story(root: Path, key: str, story: dict, characters: dict | None = None
 
         for i, l in enumerate(_dedup_by_id(story.get("locations", []))):
             con.execute(
-                "INSERT INTO locations (story_key, id, name, description, background_prompt, "
-                "background, parent, scenes, ord) VALUES (?,?,?,?,?,?,?,?,?)",
-                (key, l.get("id", ""), l.get("name", ""), l.get("description", ""),
+                "INSERT INTO locations (story_key, id, name, description, history, background_prompt, "
+                "background, parent, scenes, ord) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (key, l.get("id", ""), l.get("name", ""), l.get("description", ""), l.get("history", ""),
                  l.get("background_prompt", ""), l.get("background"), l.get("parent", ""),
                  _jdumps(l.get("scenes", [])), i))
 
@@ -618,9 +657,74 @@ def save_story(root: Path, key: str, story: dict, characters: dict | None = None
                 (key, ck, cdoc.get("name", ""), cdoc.get("system", ""), cdoc.get("greeting"),
                  _jdumps(cdoc.get("fields", {})), _jdumps(cdoc.get("image", {})),
                  1 if cdoc.get("playable") else 0, i, now))
-        con.execute("COMMIT")
+        if owns_transaction:
+            con.execute("COMMIT")
     except Exception:
-        con.execute("ROLLBACK")
+        if owns_transaction:
+            con.execute("ROLLBACK")
+        raise
+
+
+@dataclass(frozen=True)
+class AtomicStoryUpdate:
+    """Outcome from :func:`update_story_atomically`.
+
+    ``result`` is the caller-owned value returned by its updater.  The separate
+    booleans keep a deliberately aborted update distinct from a missing story
+    and from a successful no-op write.
+    """
+
+    found: bool
+    committed: bool
+    result: Any = None
+
+
+def update_story_atomically(
+    root: Path,
+    key: str,
+    updater: Callable[[dict, dict], tuple[dict, dict | None, Any] | None],
+) -> AtomicStoryUpdate:
+    """Load, validate/build, and replace one Story aggregate under one lock.
+
+    The callback runs after ``BEGIN IMMEDIATE`` has acquired the database write
+    lock and receives the current ``(story, embedded_characters)`` aggregate.
+    It returns ``(validated_story, validated_characters, result)`` to commit,
+    or ``None`` to abandon the transaction without writing.  This lets a
+    capability endpoint check its supplied revision *inside* the same
+    transaction in which it rebuilds and saves the candidate, rather than
+    losing a private concurrent edit between a read and a whole-aggregate save.
+
+    The callback must not perform slow external work while the lock is held;
+    model calls belong before this function.
+    """
+    con = _conn(root)
+    transaction_open = False
+    try:
+        # A deferred BEGIN would allow a second writer to change the aggregate
+        # after this read but before the replacement write.  IMMEDIATE makes
+        # the snapshot and whole-aggregate commit one serialized operation.
+        con.execute("BEGIN IMMEDIATE")
+        transaction_open = True
+        loaded = load_story(root, key, _connection=con)
+        if loaded is None:
+            con.execute("ROLLBACK")
+            transaction_open = False
+            return AtomicStoryUpdate(found=False, committed=False)
+
+        update = updater(*loaded)
+        if update is None:
+            con.execute("ROLLBACK")
+            transaction_open = False
+            return AtomicStoryUpdate(found=True, committed=False)
+
+        story, characters, result = update
+        save_story(root, key, story, characters, _connection=con)
+        con.execute("COMMIT")
+        transaction_open = False
+        return AtomicStoryUpdate(found=True, committed=True, result=result)
+    except Exception:
+        if transaction_open:
+            con.execute("ROLLBACK")
         raise
 
 
@@ -652,6 +756,28 @@ def character_keys(root: Path, key: str) -> list[str]:
     con = _conn(root)
     return [r[0] for r in con.execute(
         "SELECT char_key FROM characters WHERE story_key=? ORDER BY ord", (key,)).fetchall()]
+
+
+def all_character_keys(root: Path) -> set[str]:
+    """Return every embedded key so newly generated Story characters stay unique."""
+    con = _conn(root)
+    return {row[0] for row in con.execute("SELECT DISTINCT char_key FROM characters").fetchall()}
+
+
+def duplicate_character_keys(root: Path) -> dict[str, list[str]]:
+    """Report cast keys shared by more than one Story, deterministically.
+
+    Even a library-backed reference is relevant: once one Story embeds and
+    edits that key, older flat consumers can otherwise resolve it for another
+    Story too.
+    """
+    con = _conn(root)
+    owners: dict[str, list[str]] = {}
+    for char_key, story_key in con.execute(
+        "SELECT character, story_key FROM cast_members ORDER BY character, story_key"
+    ).fetchall():
+        owners.setdefault(char_key, []).append(story_key)
+    return {key: stories for key, stories in owners.items() if len(stories) > 1}
 
 
 def get_character(root: Path, story_key: str, char_key: str) -> dict | None:
@@ -791,6 +917,9 @@ def _self_test_body(root: Path) -> None:
         "themes": ["grief", "home"], "art_style": "cel-shaded",
         "premise_parts": {"root": "the drought", "question": "stay or go"},
         "world": {"genre": "low fantasy", "forces": [{"name": "Rootbound", "stance": "endure"}]},
+        "time_system": {"slots": ["morning", "evening", "night"], "entity_periods": [
+            {"id": "night-watch", "slots": ["night"], "state": "hunting",
+             "capabilities": ["mimicry"], "constraint": "cannot act by day"}]},
         "storyboard": {"heart": "the heart", "logline": "the logline", "beats": []},
         "lorebook": {"x": 1}, "start": "home", "background": "/img/cover.png",
         "fields": {"creator": "tester"}, "start_scene": "scene-1",
@@ -828,7 +957,7 @@ def _self_test_body(root: Path) -> None:
     for fld in ("name", "type", "premise", "tone", "art_style", "start", "background",
                 "start_scene", "recent_window"):
         assert s2[fld] == story[fld], f"{fld}: {s2[fld]!r} != {story[fld]!r}"
-    for fld in ("themes", "premise_parts", "world", "storyboard", "lorebook", "fields",
+    for fld in ("themes", "premise_parts", "world", "time_system", "storyboard", "lorebook", "fields",
                 "default_personas"):
         assert s2[fld] == story[fld], f"{fld}: {s2[fld]!r} != {story[fld]!r}"
 
@@ -866,7 +995,7 @@ def _self_test_body(root: Path) -> None:
 
     # node_hash stability: the reconstructed world dict must hash the same as the original.
     # (anchors.py hashes the live dict; if reconstruction drifts, every anchor breaks.)
-    from ...stories.anchors import node_hash
+    from ...stories.records.anchors import node_hash
     assert node_hash(s2["world"]) == node_hash(story["world"]), "world hash drifted"
     assert node_hash(s2["premise_parts"]) == node_hash(story["premise_parts"]), \
         "premise_parts hash drifted"

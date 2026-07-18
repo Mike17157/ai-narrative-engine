@@ -17,8 +17,8 @@ Every generator READS a projection of this card, and narrative functions MUTATE 
 
 The card accumulates tab by tab — each layer is OWNED by the tab that authors it:
 
-    overview       art style (L0 of every image) + premise/tone/themes (the frame)
-    plot           arcs / beats — plot points that DEMAND locations + characters
+    overview       art style (L0 of every image) + premise/tone (the setting-facing frame)
+    plot           storylines / beats — plot points that DEMAND locations + characters
     relationships  the roster: who exists, where they live, how they bond
     map            locations + scene prompts + rendered scene images
     cast           per-character identity/outfits/emotions (sprite coverage)
@@ -34,16 +34,16 @@ unfinished work at that step — so the card is checkable stage by stage.
 # discipline), not by artifact type: the controlling idea first, then the WORLD it happens in,
 # then the CAST + their bonds, then the PLOT that emerges from those people under pressure, then
 # PRODUCTION (rendered assets). Grouped into three tiers:
-#   • bible       — the constant truth (premise/theme, world, cast, fixed relationships)
-#   • progression — the staged plan that unfolds (arcs, scenes)
+#   • bible       — the constant truth (premise, world, cast, fixed relationships)
+#   • progression — the staged plan that unfolds (storylines, themes, scenes)
 #   • production  — rendered assets (sprites, wardrobe, scene images)
 # RUNTIME (intimacy drift, world state, memory) is play, evolved live — not authored here.
 # `mutators` declares which surfaces may write the layer (author = the tab UIs; play = the runtime).
 LAYERS: tuple[dict, ...] = (
-    {"id": "overview",      "tier": "bible",       "label": "Premise & theme", "source": "overview",      "mutators": ("author",)},
+    {"id": "overview",      "tier": "bible",       "label": "Story overview",  "source": "overview",      "mutators": ("author",)},
     {"id": "map",           "tier": "bible",       "label": "World",           "source": "map",           "mutators": ("author", "play")},
     {"id": "relationships", "tier": "bible",       "label": "Cast & bonds",    "source": "relationships", "mutators": ("author", "play")},
-    {"id": "plot",          "tier": "progression", "label": "Arc & scenes",    "source": "plot",          "mutators": ("author", "play")},
+    {"id": "plot",          "tier": "progression", "label": "Storylines & scenes", "source": "plot",        "mutators": ("author", "play")},
     {"id": "cast",          "tier": "production",  "label": "Production",      "source": "cast",          "mutators": ("author", "play")},
 )
 
@@ -58,10 +58,10 @@ TIERS: tuple[tuple[str, str], ...] = (
 # manifests are NOT story fields (they live per-character); the cast layer mutates
 # through the character endpoints instead.
 LAYER_FIELDS: dict[str, tuple[str, ...]] = {
-    "overview":      ("premise", "tone", "themes", "art_style", "premise_parts", "storyboard"),
-    "plot":          ("arcs", "chapters", "scenes", "storyboard"),
+    "overview":      ("premise", "tone", "art_style", "premise_parts", "storyboard"),
+    "plot":          ("themes", "arcs", "chapters", "scenes", "storyboard"),
     "relationships": ("relationships", "cast"),
-    "map":           ("locations", "start", "connections", "conditions", "world"),
+    "map":           ("locations", "start", "connections", "conditions", "world", "time_system"),
 }
 
 
@@ -90,7 +90,6 @@ def build_card(story: dict, manifests: dict[str, dict] | None = None,
         "art_style": style or global_style,
         "art_style_source": "story" if style else "global",
         "premise": story.get("premise", ""), "tone": story.get("tone", ""),
-        "themes": story.get("themes") or [],
         "premise_parts": parts,
         "premise_parts_total": len(part_ids),
     }
@@ -128,6 +127,7 @@ def build_card(story: dict, manifests: dict[str, dict] | None = None,
                  "has_image": bool(l.get("background"))} for l in locations]
     conditions = [{"id": c.get("id"), "name": c.get("name"), "kind": c.get("kind", "")}
                   for c in (story.get("conditions") or []) if (c.get("name") or "").strip()]
+    time_system = story.get("time_system") or {"slots": ["morning", "evening", "night"], "entity_periods": []}
     map_todo = []
     if not locations:
         map_todo.append("no locations yet")
@@ -155,7 +155,7 @@ def build_card(story: dict, manifests: dict[str, dict] | None = None,
 
     contents = {"overview": (overview, overview_todo), "plot": (plot, plot_todo),
                 "relationships": (relationships, rel_todo),
-                "map": ({"locations": map_locs, "conditions": conditions}, map_todo),
+                "map": ({"locations": map_locs, "conditions": conditions, "time_system": time_system}, map_todo),
                 "cast": ({"characters": cast_chars}, cast_todo)}
     return {"layers": [{**spec, "mutators": list(spec["mutators"]),
                         "content": contents[spec["id"]][0], "todo": contents[spec["id"]][1]}

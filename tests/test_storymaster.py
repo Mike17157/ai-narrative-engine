@@ -5,8 +5,8 @@ plan persistence, old-scene close into the log, and the consequence-context bloc
 """
 from types import SimpleNamespace
 
-from loom.stories.runtime.director import (StoryMaster, advance_arc, arc_milestone, plot_direction,
-                                      record_page, scene_block, state_card)
+from loom.stories.runtime.director import (StoryMaster, active_entity_periods, advance_arc, arc_milestone,
+                                      plot_direction, record_page, scene_block, state_card)
 
 
 def _sm(world, location="The Grove"):
@@ -98,6 +98,15 @@ def test_card_shows_arc():
     assert "war with himself" in state_card(w, st)
 
 
+def test_entity_activity_is_gated_by_day_slot():
+    st = SimpleNamespace(time_system={"entity_periods": [
+        {"id": "daylight", "slots": ["morning", "evening"], "state": "observing"},
+        {"id": "night", "slots": ["night"], "state": "hunting"},
+    ]}, fields={})
+    assert [p["id"] for p in active_entity_periods(st, {"day": {"n": 1, "slot": "morning"}})] == ["daylight"]
+    assert [p["id"] for p in active_entity_periods(st, {"day": {"n": 1, "slot": "night"}})] == ["night"]
+
+
 def test_manuscript_groups_by_scene():
     w = {"transcript": []}
     for i, (loc, txt) in enumerate([("Grove", "a"), ("Grove", "b"), ("Village", "c")]):
@@ -119,5 +128,6 @@ if __name__ == "__main__":
     test_state_card_is_a_free_view()
     test_arc_direction_and_advance()
     test_card_shows_arc()
+    test_entity_activity_is_gated_by_day_slot()
     test_manuscript_groups_by_scene()
     print("ok")

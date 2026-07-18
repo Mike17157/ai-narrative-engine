@@ -1,22 +1,47 @@
 <script>
   import { page } from '$app/stores';
   import { loadStory } from '$lib/stories.svelte.js';
+  import { loadChars } from '$lib/characters.svelte.js';
+  import { isStoryHostDesktop } from '$lib/story-host-client';
   import StoryNavigator from '$lib/components/story/StoryNavigator.svelte';
   import SectionChat from '$lib/components/story/SectionChat.svelte';
+  import InterviewWorkspace from '$lib/components/story/InterviewWorkspace.svelte';
 
   let { children } = $props();
   let key = $derived($page.params.key);
   let path = $derived($page.url.pathname);
   let search = $derived($page.url.search || '');
+  // The Story Card is the single authoring home for every story. Lifecycle
+  // status controls play readiness, never which editor a writer is dropped
+  // into. Specialised child routes (cards, outfits, play) keep their own view.
+  let isStoryCard = $derived(path === `/stories/${key}`);
+  // Images are the first specialised child route with a fully local boundary:
+  // sidecar image operations plus a descriptor-checked Tauri asset read.
+  let isLocalImageGallery = $derived(path === `/stories/${key}/images` || path === `/stories/${key}/images/`);
 
   // Load on key change inside an EFFECT (loadStory mutates the store; an impure $derived would loop).
   let storyPromise = $state(Promise.resolve(null));
   let reqKey = '';
+  let storyRevision = $state(0);
+  let loadedRevision = -1;
   $effect(() => {
     const k = key;
-    if (!k || reqKey === k) return;
+    const revision = storyRevision;
+    if (!k || (reqKey === k && loadedRevision === revision)) return;
     reqKey = k;
+    loadedRevision = revision;
     storyPromise = loadStory(k);
+    // Story-card cast details travel in `story.read` on desktop. The global
+    // character catalogue remains a later local capability.
+    if (!isStoryHostDesktop()) void loadChars(k);
+  });
+  $effect(() => {
+    if (typeof window === 'undefined') return;
+    const refresh = (event) => {
+      if (!event?.detail?.key || event.detail.key === key) storyRevision += 1;
+    };
+    window.addEventListener('story:refresh', refresh);
+    return () => window.removeEventListener('story:refresh', refresh);
   });
 
   // Explorer collapse — persisted; drives --storynav-w.
@@ -28,7 +53,7 @@
   // The section EDITOR now lives at the shell (outside individual panes) and FOLLOWS the current view:
   // its edit target (card layer) is derived from the route. Null → no editor (play / outfits).
   function editorFor(p, s) {
-    if (/\/play\/?$/.test(p) || /\/cast\/?$/.test(p) || /\/prompts\/?$/.test(p)) return null;
+    if (/\/play\/?$/.test(p) || /\/cast\/?$/.test(p) || /\/prompts\/?$/.test(p) || /\/images\/?$/.test(p)) return null;
     if (p.includes('/characters')) return { layer: 'relationships', label: 'Characters' };
     if (p.includes('/arcs') || p.includes('/scenes')) return { layer: 'plot', label: 'Arcs & scenes' };
     const tab = new URLSearchParams(s).get('tab') || 'overview';
@@ -52,6 +77,21 @@
   <div class="page"><div class="col"><p class="lo">Loading…</p></div></div>
 {:then story}
   {#if story && story.key === key}
+    {#if isStoryCard}
+      <InterviewWorkspace storyKey={key} {story} />
+    {:else if isStoryHostDesktop() && isLocalImageGallery}
+      {@render children()}
+    {:else if isStoryHostDesktop()}
+      <!-- These legacy child routes mount HTTP-only editors (including some
+           model calls on mount). Keep the desktop shell serverless until each
+           one has a narrow Story Host capability, rather than allowing an
+           invisible fallback to a loopback backend. -->
+      <div class="page"><div class="col desktop-route-notice">
+        <p class="lo">This Story view is not in the local Host yet.</p>
+        <p>Use the Story card for local authoring or the local image gallery. Director tools, specialised section chats, and live play will reappear here as their local boundaries are migrated.</p>
+        <a href={`/stories/${key}`}>Return to Story card</a>
+      </div></div>
+    {:else}
     <div class="storyshell" style:--storynav-w={navW} style:--storychat-h={chatH}>
       <StoryNavigator collapsed={navCollapsed} onToggle={toggleNav} />
       {#if editor}
@@ -67,6 +107,7 @@
       {/if}
       <div class="storybody">{@render children()}</div>
     </div>
+    {/if}
   {:else}
     <div class="page"><div class="col"><p class="lo">Story not found.</p></div></div>
   {/if}
@@ -76,6 +117,7 @@
 
 <style>
   .lo { color: var(--muted); font-size: 13px; }
+  .desktop-route-notice { max-width: 640px; margin: 64px auto; padding: 22px; border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--border)); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }.desktop-route-notice p { color: var(--muted); font-size: 13px; line-height: 1.5; }.desktop-route-notice a { display: inline-block; margin-top: 8px; color: var(--accent); font-size: 12px; font-weight: 750; }
   /* Content clears the fixed explorer (left) + the fixed editor (docked beside it). Both widths are
      inherited CSS vars so the fixed SectionChat docks at left:--storynav-w and the body offsets by both. */
   /* Both offsets transition; padding-bottom uses vh↔vh (see chatH) so it interpolates in sync with

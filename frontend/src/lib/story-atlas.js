@@ -117,10 +117,14 @@ function characterRows(story) {
     const strategy = firstText(core.protective_strategy, core.approach);
     const limitation = firstText(core.limitation, core.visible_limit);
     const visibleTell = firstText(core.visible_tell);
+    // A concrete, ordinary backstory (fields.character_wounds) — private author material,
+    // the same tier as an arc's truth/blind_spot; surfaced here for the author only.
+    const wound = firstText(detail.wound);
     const summary = coreText || want || belief || strategy || limitation || connection || role || 'Their present place in the story still needs definition.';
     const facts = [
       role && `Role · ${role}`,
       coreText && `Core · ${coreText}`,
+      wound && `Backstory · ${wound}`,
       want && `Wants · ${want}`,
       belief && `Believes · ${belief}`,
       strategy && `Protects themself by · ${strategy}`,
@@ -159,11 +163,16 @@ function arcRows(story) {
   return asList(outline.arcs).map((value, index) => {
     const arc = asRecord(value);
     const owner = firstText(arc.owner, arc.character, arc.name, `Arc ${index + 1}`);
+    const isProtagonist = firstText(arc.owner).toLowerCase() === 'player';
     const theme = firstText(arc.theme, themeLabel(outline, arc.theme_id), arc.theme_id);
     const question = firstText(arc.dramatic_question, arc.question);
-    const title = firstText(arc.title, arc.name, owner);
+    const title = (isProtagonist ? '★ ' : '') + firstText(arc.title, arc.name, owner);
     const summary = question || theme || 'The character pressure has not been sketched yet.';
-    const facts = [theme && `Theme · ${theme}`, question && `Dramatic question · ${question}`].filter(Boolean);
+    const facts = [
+      isProtagonist && 'The protagonist’s own arc — everything else relates back to it.',
+      theme && `Theme · ${theme}`,
+      question && `Dramatic question · ${question}`
+    ].filter(Boolean);
     const arcId = firstText(arc.id, arc.key, arc.owner, `arc-${index}`);
     return {
       id: `arc:${slug(arcId, `arc-${index}`)}`,
@@ -263,13 +272,16 @@ function worldRows(story) {
     const id = firstText(place.id, place.key, place.name, `place-${index}`);
     const label = firstText(place.name, id, `Place ${index + 1}`);
     const summary = firstText(place.description, place.summary, 'A place available to the story.');
-    return { id: `place:${slug(id, `place-${index}`)}`, label, summary, facts: [], target: { section: 'world', item: { kind: 'location', id } } };
+    const history = firstText(place.history);
+    const facts = history ? [`History · ${history}`] : [];
+    return { id: `place:${slug(id, `place-${index}`)}`, label, summary, facts, target: { section: 'world', item: { kind: 'location', id } } };
   });
   const facts = [
     firstText(world.genre) && `Genre · ${firstText(world.genre)}`,
     firstText(world.tone) && `Tone · ${firstText(world.tone)}`,
     firstText(world.setting) && `Setting · ${firstText(world.setting)}`,
-    firstText(world.atmosphere) && `Atmosphere · ${firstText(world.atmosphere)}`
+    firstText(world.atmosphere) && `Atmosphere · ${firstText(world.atmosphere)}`,
+    firstText(world.history) && `History · ${firstText(world.history)}`
   ].filter(Boolean);
   if (facts.length) return [{ id: 'world:foundation', label: 'World foundation', summary: firstText(world.setting, world.atmosphere, world.background, world.genre), facts, target: { section: 'world' } }, ...locations];
   return locations;

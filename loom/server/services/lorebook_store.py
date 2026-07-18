@@ -123,8 +123,13 @@ def _connect(root: Path):
             con.sync()
         except Exception:  # noqa: BLE001
             pass
-        return con
-    return libsql.connect(local)
+    else:
+        con = libsql.connect(local)
+    # WAL + busy_timeout so two concurrent browser windows queue instead of hitting
+    # "database is locked" on Windows' default rollback-journal exclusive-lock behavior.
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA busy_timeout=5000")
+    return con
 
 
 def _conn(root: Path):

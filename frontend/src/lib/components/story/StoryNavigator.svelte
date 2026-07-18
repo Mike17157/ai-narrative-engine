@@ -11,16 +11,19 @@
   let key = $derived(st?.key || $page.params.key || '');
   let path = $derived($page.url.pathname);
   let search = $derived($page.url.search || '');
-
-  const tab = (t) => `/stories/${key}/structure?tab=${t}`;
+  const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
 
   // The three durable authoring frames. Each frame has one clear owner and no nested navigation.
   let tree = $derived.by(() => {
     if (!st) return [];
     return [
-      { id: 'story', label: 'Story card', icon: '◈', href: tab('overview') },
+      { id: 'story', label: 'Story card', icon: '◈', href: `/stories/${key}` },
       { id: 'characters', label: 'Character cards', icon: '🪪', href: `/stories/${key}/characters` },
-      { id: 'outfits', label: 'Outfit cards', icon: '👗', href: `/stories/${key}/cast` },
+      ...(!leanStoryMode ? [{ id: 'outfits', label: 'Outfit cards', icon: '👗', href: `/stories/${key}/cast` }] : []),
+      { id: 'images', label: 'Story images', icon: '✦', href: `/stories/${key}/images` },
+      ...(st.fields?.status === 'active'
+        ? [{ id: 'play', label: 'Play', icon: '▶', href: `/stories/${key}/play` }]
+        : []),
     ];
   });
 
@@ -29,6 +32,7 @@
     if (!href) return false;
     const A = path + search;
     if (href.includes('?')) return A === href;          // ?tab= links match exactly
+    if (href === `/stories/${key}`) return path === href;
     return path === href || path.startsWith(href + '/');
   }
   function branchActive(node) {

@@ -29,17 +29,19 @@ PLAY_CRAFT = (
 
 
 def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
-                       story_scope: str, thread_scope: str) -> dict:
+                       story_scope: str, thread_scope: str,
+                       scenario: dict | None = None, runtime_state: dict | None = None,
+                       scenario_scene: dict | None = None) -> dict:
     """Assemble both passes' contexts for one turn. Returns {system, prompt, scribe_system,
     cur, prior_pov}: system/prompt drive the PROSE pass (free-text narration, craft register);
     scribe_system drives the SCRIBE pass (structured scene report from the fresh narration);
     cur/prior_pov let `story_play` resolve the reported location and carry the sticky POV."""
-    from ..server.services.emotions import EMOTION_KEYS, NORMAL_KEYS
-    from ..server.services import lorebook_store as _LS0
+    from ...server.services.emotions import EMOTION_KEYS, NORMAL_KEYS
+    from ...server.services import lorebook_store as _LS0
 
     # SETTING STAGES are arc-scoped: sync the active arc's conditions onto world_state `cond:` flags
     # before anything reads them, so this turn's situational content matches where we are in the plot.
-    from .runtime.director import sync_arc_conditions
+    from .director import sync_arc_conditions
     sync_arc_conditions(world_state)
 
     def _char_emotion_keys(char_key: str) -> list[str]:
@@ -74,7 +76,13 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         return "\n".join(lines)
 
     places = "\n".join(_place_block(l) for l in st.locations if l.scenes)
-    cur = body.get("location") or st.start or (st.locations[0].id if st.locations else "")
+    _compiled = bool(scenario)
+    _runtime = runtime_state if isinstance(runtime_state, dict) else {}
+    _scenario_state = _runtime.get("scenario_state") if isinstance(_runtime.get("scenario_state"), dict) else {}
+    # An activated scenario owns the starting place and clock.  A browser body
+    # is an input request, never authority to teleport its deterministic state.
+    cur = (_scenario_state.get("location") if _compiled else None) \
+        or body.get("location") or st.start or (st.locations[0].id if st.locations else "")
 
     # The protagonist. The frontend passes who *you* are this playthrough. Two shapes:
     #  - EMBODIED: player.character = a playable character KEY → the human puppets a real card.
@@ -96,6 +104,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         f"PLAYER (the human DRIVES this character — narrate TO them and react to their "
         f"actions; never decide their choices or speak for them): {player_name}"
         + (f" — {player_desc}" if player_desc else "")
+        + " (Their persona/backstory describes characterisation, not an unearned supernatural ability.)"
     )
 
     # HISTORY lane — bounded for any play length (the controlled-growth invariant: stores grow,
@@ -104,21 +113,66 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # below reads this bounded transcript, so a character mentioned once in turn 3 of a 200-turn
     # play no longer stays "referenced" forever.
     history = body.get("history") or []
+    history = [message for message in history if isinstance(message, dict)]
+    # Closed-world player abilities: entity capabilities and client-side persona
+    # prose never grant one.  An activated card gets its immutable compiled
+    # registry; an unactivated/legacy card reads the explicit authored field.
+    from .player_guard import assess_player_action, compile_player_capabilities
+    _capability_source = scenario if _compiled else (getattr(st, "fields", None) or {})
+    _player_capabilities = compile_player_capabilities(_capability_source)
+    if _compiled and not _player_capabilities:
+        _player_capabilities = compile_player_capabilities(getattr(st, "fields", None) or {})
+    _last_player_text = next((str(m.get("text", "")) for m in reversed(history)
+                              if m.get("role") == "user"), "")
+    _player_action_guard = assess_player_action(_last_player_text, _player_capabilities)
 
     def _hist_lines(msgs) -> str:
-        return "\n".join((player_name if m.get("role") == "user" else "Narrator")
-                         + f": {m.get('text', '')}" for m in msgs)
+        lines = []
+        for m in msgs:
+            is_player = m.get("role") == "user"
+            text = str(m.get("text", ""))
+            # A raw browser transcript is not a second authoring channel.  If
+            # a past player claim was unsupported, retain the words but append
+            # its deterministic outcome so it cannot harden into canon later.
+            if is_player:
+                text = assess_player_action(text, _player_capabilities)["history_text"]
+            lines.append((player_name if is_player else "Narrator") + f": {text}")
+        return "\n".join(lines)
 
     _K = 8                                   # verbatim turn-pairs kept in the window
-    recent_txt = _hist_lines(history[-2 * _K:]) or "(the story is just beginning)"
-    if len(history) > 2 * _K:
-        _beats = list(world_state.get("log") or [])[:-4]   # older beats; newest ~4 are verbatim below
-        _summary = "\n".join(f"- {b}" for b in _beats[-24:]) \
-            or f"({(len(history) - 2 * _K + 1) // 2} earlier turns compressed)"
-        transcript = ("STORY SO FAR (older turns, compressed to beats):\n" + _summary
-                      + "\n\nRECENT TURNS (verbatim):\n" + recent_txt)
+    shared_recent = ""
+    if _compiled:
+        # Do not give a newly-arrived character a browser transcript from scenes
+        # they never witnessed.  The scenario ledger is recorded with the
+        # authoritative roster, so it is the only safe history source here.
+        current_people = {str(k) for k in (_scenario_state.get("present") or []) if k}
+        observed = [turn for turn in (_scenario_state.get("turns") or [])
+                    if isinstance(turn, dict) and current_people <= {str(k) for k in (turn.get("present") or [])}]
+        observed = observed[-2 * _K:]
+        def _shared_line(turn: dict) -> str:
+            """Render one witnessed turn without letting a rejected claim become canon."""
+            label = player_name if turn.get("speaker") == "player" else "Narrator"
+            text = str(turn.get("text", ""))
+            if turn.get("speaker") == "player":
+                text = assess_player_action(text, _player_capabilities)["history_text"]
+            return f"{label}: {text}"
+
+        shared_recent = "\n".join(
+            _shared_line(turn) for turn in observed if turn.get("text")
+        )
+        transcript = ("SHARED SCENE MEMORY (only events every current person witnessed):\n"
+                      + (shared_recent or "(this group has no shared prior scene yet)"))
     else:
-        transcript = recent_txt
+        recent_txt = _hist_lines(history[-2 * _K:]) or "(the story is just beginning)"
+        if len(history) > 2 * _K:
+            _beats = list(world_state.get("log") or [])[:-4]   # older beats; newest ~4 are verbatim below
+            _summary = "\n".join(f"- {b}" for b in _beats[-24:]) \
+                or f"({(len(history) - 2 * _K + 1) // 2} earlier turns compressed)"
+            transcript = ("STORY SO FAR (older turns, compressed to beats):\n" + _summary
+                          + "\n\nRECENT TURNS (verbatim):\n" + recent_txt)
+        else:
+            transcript = recent_txt
+        shared_recent = recent_txt
 
     # Resolve a move (a scene/home/location the player chose) into an arrival `directive`
     # for the prompt AND the character keys it brings on stage.
@@ -159,15 +213,30 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # its people, its hook. Acts like a move for the roster; the hook is an opening, not an outcome.
     seed = body.get("scene_seed") if isinstance(body.get("scene_seed"), dict) else None
     if seed and not moved:
-        cur = seed.get("location") or cur
-        _n2k0 = {(_cname(m.character) or "").lower(): m.character for m in st.cast}
-        move_keys = {k for k in (_n2k0.get((n or "").lower()) for n in (seed.get("who") or [])) if k}
-        _who = ", ".join(n for n in (seed.get("who") or []) if n)
-        _ln = next((l.name for l in st.locations if l.id == cur), cur)
-        directive = (f"\n\n[A new scene opens: {seed.get('title', 'the next scene')} — at {_ln}."
-                     + (f" {_who} {'are' if ',' in _who else 'is'} here." if _who else "")
-                     + (f" {seed.get('hook', '')}" if seed.get("hook") else "")
-                     + " Narrate the player arriving into this situation — an opening, not an outcome.]")
+        if _compiled:
+            # The transition was already accepted by runtime.compiled before
+            # this prompt was made.  Project only its public title/hook.
+            cur = _scenario_state.get("location") or cur
+            _scene_people = (_scenario_state.get("present") or [])
+            move_keys = {str(k) for k in _scene_people if k}
+            _who = ", ".join(_cname(k) for k in move_keys)
+            _ln = next((l.name for l in st.locations if l.id == cur), cur)
+            _title = (scenario_scene or {}).get("title") or seed.get("title") or "the next scene"
+            _hook = (scenario_scene or {}).get("visible") or seed.get("hook") or ""
+            directive = (f"\n\n[An authored scene opens: {_title} — at {_ln}."
+                         + (f" {_who} {'are' if ',' in _who else 'is'} here." if _who else "")
+                         + (f" {_hook}" if _hook else "")
+                         + " Narrate the player arriving into this situation — an opening, not an outcome.]")
+        else:
+            cur = seed.get("location") or cur
+            _n2k0 = {(_cname(m.character) or "").lower(): m.character for m in st.cast}
+            move_keys = {k for k in (_n2k0.get((n or "").lower()) for n in (seed.get("who") or [])) if k}
+            _who = ", ".join(n for n in (seed.get("who") or []) if n)
+            _ln = next((l.name for l in st.locations if l.id == cur), cur)
+            directive = (f"\n\n[A new scene opens: {seed.get('title', 'the next scene')} — at {_ln}."
+                         + (f" {_who} {'are' if ',' in _who else 'is'} here." if _who else "")
+                         + (f" {seed.get('hook', '')}" if seed.get("hook") else "")
+                         + " Narrate the player arriving into this situation — an opening, not an outcome.]")
 
     # The persistent SCENE (space + co-located members + a sticky POV). It carries between
     # turns; the narrator maintains it (reports `present` + `pov`), story_play persists it.
@@ -183,41 +252,52 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         nm = _cname(k)
         toks = [t for t in re.split(r"\s+", (nm or "").lower()) if len(t) > 2]
         return any(re.search(rf"\b{re.escape(t)}\b", hay) for t in toks)
-    from .runtime import state as _PC0
+    from . import state as _PC0
     _cast_keys = [m.character for m in st.cast]
     _hay = transcript.lower()
-    _beat = " ".join(str(m.get("text", "")) for m in history[-2:]).lower()   # the current beat
+    _beat = " ".join(
+        assess_player_action(str(m.get("text", "")), _player_capabilities)["history_text"]
+        if m.get("role") == "user" else str(m.get("text", ""))
+        for m in history[-2:]
+    ).lower()   # the current beat
     _mentioned = {k for k in _cast_keys if _named_in(_hay, k)}
 
-    from .runtime.director import StoryMaster
+    from .director import StoryMaster
     _cur_ln = next((l.name for l in st.locations if l.id == cur), cur)
     _sm = StoryMaster(ctx, st, world_state, location=_cur_ln)
     _prior_space = (prior_scene.get("space") or "")
     _arrived = bool(_prior_space) and cur != _prior_space   # scene boundary by travel
 
-    if moved or seed:
-        on_screen = move_keys & set(_cast_keys)          # a move/scene-seed brings its anchors on
-    elif _arrived:
-        # Travel boundary: presence RE-DERIVES from the world model — only who is actually
-        # recorded AT the new place is here; the old room does NOT teleport along. An empty
-        # roster falls back to the scribe's arrival report in apply (then locks next turn).
-        _at_here = {n.lower() for n in _sm._names_at(_cur_ln)}
-        on_screen = {k for k in _cast_keys if _cname(k).lower() in _at_here}
-    else:                                                 # else the scene's members carry over
-        on_screen = (prior_members or set(_PC0.present_at(world_state, int(world_state.get("step") or 0) - 1))) & set(_cast_keys)
-    if not prior_members and not on_screen:
-        on_screen = set(_cast_keys)                       # true opening → whole (small) cast
+    if _compiled:
+        # Never fall back to "all cast" in a compiled opening.  The card has
+        # named the people physically present; any future entrance must be a
+        # later authored scene transition, not a convenient narrator invention.
+        on_screen = {str(k) for k in (_scenario_state.get("present") or []) if k} & set(_cast_keys)
+        roster = [_cname(k) for k in _cast_keys if k in on_screen]
+    else:
+        if moved or seed:
+            on_screen = move_keys & set(_cast_keys)          # a move/scene-seed brings its anchors on
+        elif _arrived:
+            # Travel boundary: presence RE-DERIVES from the world model — only who is actually
+            # recorded AT the new place is here; the old room does NOT teleport along. An empty
+            # roster falls back to the scribe's arrival report in apply (then locks next turn).
+            _at_here = {n.lower() for n in _sm._names_at(_cur_ln)}
+            on_screen = {k for k in _cast_keys if _cname(k).lower() in _at_here}
+        else:                                                 # else the scene's members carry over
+            on_screen = (prior_members or set(_PC0.present_at(world_state, int(world_state.get("step") or 0) - 1))) & set(_cast_keys)
+        if not prior_members and not on_screen:
+            on_screen = set(_cast_keys)                       # true opening → whole (small) cast
 
-    # AUTHORITATIVE ROSTER — the StoryMaster decides who is present; the narrator obeys absolutely.
-    # Sticky co-location + at most one CONTROLLED entrance (someone recorded at this place whom the
-    # player's action actually seeks). This governs `roster` (returned to apply as the real present)
-    # and the "PRESENT — exactly these" instruction; the narrator can't summon or drop anyone.
-    _last_u = next((m.get("text", "") for m in reversed(history) if m.get("role") == "user"), "")
-    roster = _sm.plan_scene(present=[_cname(k) for k in _cast_keys if k in on_screen], action=_last_u)
-    _n2k = {_cname(k).lower(): k for k in _cast_keys}
-    on_screen = {k for k in (_n2k.get(n.lower()) for n in roster) if k}   # cast members in the roster
-    if not on_screen and not roster:
-        on_screen = {k for k in _cast_keys if k in (move_keys or set())} or set(_cast_keys)
+        # AUTHORITATIVE ROSTER — the StoryMaster decides who is present; the narrator obeys absolutely.
+        # Sticky co-location + at most one CONTROLLED entrance (someone recorded at this place whom the
+        # player's action actually seeks). This governs `roster` (returned to apply as the real present)
+        # and the "PRESENT — exactly these" instruction; the narrator can't summon or drop anyone.
+        _last_u = _player_action_guard["safe_action"]
+        roster = _sm.plan_scene(present=[_cname(k) for k in _cast_keys if k in on_screen], action=_last_u)
+        _n2k = {_cname(k).lower(): k for k in _cast_keys}
+        on_screen = {k for k in (_n2k.get(n.lower()) for n in roster) if k}   # cast members in the roster
+        if not on_screen and not roster:
+            on_screen = {k for k in _cast_keys if k in (move_keys or set())} or set(_cast_keys)
     referenced = (_mentioned - on_screen) & set(_cast_keys)
     absent = set(_cast_keys) - on_screen - referenced
 
@@ -238,7 +318,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # WHEREABOUTS: off-screen characters are findable at their last-seen spot or in their
     # ORBIT (habitual spots from place anchors + home scenes) — the narrator is TOLD where
     # people plausibly are instead of inventing; the state engine enforces it (geography.py).
-    from .world.creation import orbit as _orbit
+    from ..world.creation import orbit as _orbit
 
     def _whereabouts(k: str) -> str:
         ent = (world_state.get("entities") or {}).get(_cname(k)) or {}
@@ -267,7 +347,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # surfaced up front (can't be ignored), everyone else is indexed under their location (a growing
     # cast stays bounded to the current scene + an index). Fleshed people get their card voiced when
     # they're on stage. See loom/stories/storymaster.py.
-    from .runtime.director import people_by_location
+    from .director import people_by_location
     _people = world_state.get("people") if isinstance(world_state.get("people"), dict) else {}
     _cur_locname = next((l.name for l in st.locations if l.id == cur), cur)
     _people_block = people_by_location(world_state, _cur_locname)
@@ -280,6 +360,116 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     _day = world_state.get("day") if isinstance(world_state.get("day"), dict) else {}
     _time_line = (f"TIME: day {_day.get('n')}, {_day.get('slot')}.\n"
                   if _day.get("slot") else "")
+    # Never hand a narrator raw entity capabilities or a private director plan.
+    # The deterministic runtime decides eligibility; prose only receives what a
+    # player could actually see in the selected authored scene.
+    _scenario_public = ""
+    _returner_memory = []
+    if _compiled:
+        _safe_scene = scenario_scene if isinstance(scenario_scene, dict) else {}
+        _visible = (_safe_scene.get("visible") or _safe_scene.get("hook") or "").strip()
+        _title = (_safe_scene.get("title") or _safe_scene.get("id") or "the current scene").strip()
+        _scenario_public = (f"AUTHORED SCENE: {_title}.\n"
+                            + (f"What is visibly true on arrival: {_visible}\n" if _visible else ""))
+        from .compiled import player_memory
+        _returner_memory = player_memory(_runtime)
+
+    # THEME-LED ARC SURFACE — an authored arc can hold the private reason a
+    # person cannot yet name what they want.  Do not hand that whole design to
+    # either prose or consequence generation: both can turn a private premise
+    # into a premature confession.  The shared helper admits only the present
+    # character's lived belief/protection/visible tell and the selected scene's
+    # public pressure.  It deliberately excludes wound, blind spot, need,
+    # recognition, revelation, private pressure, and planned change.
+    _arc_surface_block = ""
+    # Unlike the public dramatic surface, these locks are runtime-only.  They
+    # hold no text that is rendered to a model except the safe resistance
+    # instruction assembled below; private detector cues stay in ``tc`` for
+    # the post-generation repair guard.
+    _arc_resistance_locks: list[dict] = []
+    _arc_resistance_block = ""
+    _arc_design = (getattr(st, "fields", None) or {}).get("arc_design")
+    if _arc_design is not None:
+        try:
+            from ..authoring.arc_design import (
+                ArcDesignValidationError,
+                active_arc_resistance_locks,
+                narrator_arc_surface,
+            )
+            from .arc_guard import mark_direct_challenges, prompt_block as _arc_prompt_block
+
+            _scene_state = world_state.get("scenario") if isinstance(world_state.get("scenario"), dict) else {}
+            _arc_scene_id = str(
+                (scenario_scene or {}).get("id") if isinstance(scenario_scene, dict) else ""
+            ) or str(_scenario_state.get("active_scene") or _scene_state.get("active_scene") or "")
+            _arc_slot = str(_scenario_state.get("time") or _day.get("slot") or "")
+            # Both ledgers carry legitimate gates: the public world gets
+            # normal scribe deltas, while an activated scenario owns its
+            # deterministic eligibility flags.  Scenario values win on a
+            # collision because they are the executable contract.
+            _world_flags = world_state.get("flags") if isinstance(world_state.get("flags"), dict) else {}
+            _scenario_flags = (_scenario_state.get("flags")
+                               if isinstance(_scenario_state.get("flags"), dict) else {})
+            _arc_flags = {**_world_flags, **_scenario_flags}
+            _arc_surface = narrator_arc_surface(
+                _arc_design,
+                scene_id=_arc_scene_id,
+                slot=_arc_slot,
+                present=on_screen,
+                flags=_arc_flags,
+            )
+            _arc_resistance_locks = active_arc_resistance_locks(
+                _arc_design,
+                scene_id=_arc_scene_id,
+                slot=_arc_slot,
+                present=on_screen,
+                flags=_arc_flags,
+            )
+            for _lock in _arc_resistance_locks:
+                _lock["name"] = _cname(str(_lock.get("character") or ""))
+            _last_player_text = next((str(m.get("text") or "") for m in reversed(history)
+                                      if m.get("role") == "user"), "")
+            _arc_resistance_locks = mark_direct_challenges(_arc_resistance_locks, _last_player_text)
+            _arc_resistance_block = _arc_prompt_block(_arc_resistance_locks)
+        except (ArcDesignValidationError, TypeError, ValueError):
+            # A private authoring draft must never make a live turn fail.  The
+            # Director board reports its structural problems separately.
+            _arc_surface = []
+            _arc_resistance_locks = []
+        _arc_lines: list[str] = []
+        for _thread in (_arc_surface if isinstance(_arc_surface, list) else []):
+            if not isinstance(_thread, dict):
+                continue
+            _character = str(_thread.get("character") or "").strip()
+            if not _character:
+                continue
+            _facets = []
+            if _thread.get("starting_belief"):
+                _facets.append(f"holds to: {_thread['starting_belief']}")
+            if _thread.get("protective_strategy"):
+                _facets.append(f"protects themself by: {_thread['protective_strategy']}")
+            if _thread.get("limitation"):
+                _facets.append(f"is limited by: {_thread['limitation']}")
+            if _thread.get("visible_tell"):
+                _facets.append(f"on the surface: {_thread['visible_tell']}")
+            if _facets:
+                _arc_lines.append(f"- {_cname(_character)} — " + "; ".join(_facets))
+            for _public_pressure in (_thread.get("public_pressure") or []):
+                if isinstance(_public_pressure, str) and _public_pressure.strip():
+                    _arc_lines.append(f"- On stage now: {_public_pressure.strip()}")
+            for _turn in (_thread.get("possible_public_turns") or []):
+                if not isinstance(_turn, dict):
+                    continue
+                _public_turn = str(_turn.get("surface") or "").strip()
+                if _public_turn:
+                    _arc_lines.append(f"- The moment can press: {_public_turn}")
+        if _arc_lines:
+            _arc_surface_block = (
+                "CURRENT DRAMATIC SURFACE — these are only observable pressure and behavior. "
+                "Play them through choice, evasion, pause, and action; do not diagnose a buried "
+                "cause, force self-awareness, or turn them into a confession.\n"
+                + "\n".join(_arc_lines)
+            )
 
     system = (
         f"You are the narrator of an interactive novel titled \"{st.name}\".\n"
@@ -295,6 +485,30 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         "screenful at most; advance ONE beat, don't run ahead. Respond with the NARRATION "
         "ONLY — no headers, no lists, no JSON, no out-of-story commentary."
     )
+    # This is deliberately adjacent to the player's action, not buried in
+    # genre/world prose.  A player can attempt a thing; they cannot make an
+    # impossible result canonical merely by writing it in first person.
+    if _player_action_guard.get("prompt_block"):
+        system += "\n\n" + _player_action_guard["prompt_block"]
+    if _scenario_public:
+        system += "\n\n" + _scenario_public
+    if _arc_surface_block:
+        system += "\n\n" + _arc_surface_block
+    if _arc_resistance_block:
+        system += "\n\n" + _arc_resistance_block
+    if _compiled:
+        system += (
+            "\nKNOWLEDGE BOUNDARY — the authored runtime controls time, location, and who is "
+            "physically here. Do not introduce an unlisted person, make someone act on an event "
+            "they did not witness, or reveal hidden director actions. A character can learn a fact "
+            "only through this scene, a prior witnessed scene, or an explicit disclosure."
+        )
+        if _returner_memory:
+            system += (
+                "\n\nRETURNER MEMORY — these are private memories carried by the player alone. "
+                "Other characters do not know them and must not react to them unless the player "
+                "shares evidence in the scene:\n- " + "\n- ".join(_returner_memory)
+            )
 
     # SCENE + PERSPECTIVE — the co-location invariant and the sticky POV. The narrator holds one
     # viewpoint at a time and does not head-hop; who's in the room stays put unless someone
@@ -329,7 +543,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     # else the POV) could know about each character. surface = anyone; known = people they're
     # bonded to; secret = self only (a character's buried layer never leaks through mere presence —
     # it surfaces through the plot). Keeps deep secrets deep. See [[bond-depth-weave]].
-    from .pipeline.character_scaffold import (entry_tier as _entry_tier,
+    from ..pipeline.character_scaffold import (entry_tier as _entry_tier,
                                               entry_when as _entry_when,
                                               select_exemplars as _select)
     _observer = player_char or pov_key
@@ -434,7 +648,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
 
     # NSFW injection: when the recent transcript hits trigger keywords, prepend the matching
     # guidance — `_nsfw` + `_nsfw_acts`. Deterministic word-match; capped so the prompt stays lean.
-    from ..server.services import lorebook_store as _LS
+    from ...server.services import lorebook_store as _LS
     _recent = " ".join(str(m.get("text", "")) for m in history[-3:]).lower()
     _inject: list[str] = []
     for _scope in ("_nsfw", "_nsfw_acts"):
@@ -450,23 +664,38 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
     if _inject:
         system = "\n\n".join(_inject) + "\n\n" + system
 
-    # Canon retrieval: attached lorebooks + the story's own book + this thread's established facts.
-    from ..server.services.lorebook import format_lore_block
-    attached = body.get("lorebooks")
-    world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in (attached or []) if s]
-    world_scopes += [story_scope, thread_scope]
-    if player_scope:
-        world_scopes.append(player_scope)
-    hits = _LS.retrieve(ctx.root, _recent or transcript, world_scopes, top_k=6)
-    _lore_block = format_lore_block(hits) if hits else ""
+    # A compiled story may have a private director plan and author-only lore.
+    # Do not turn a generic retrieval query into a side channel around its
+    # presence ledger.  Its safe continuity comes from shared scene memory,
+    # selected public scene surface, and explicitly narrated facts instead.
+    if _compiled:
+        _lore_block = ""
+    else:
+        from ...server.services.lorebook import format_lore_block
+        attached = body.get("lorebooks")
+        world_scopes = [re.sub(r"[^\w\-]+", "_", str(s)) for s in (attached or []) if s]
+        world_scopes += [story_scope, thread_scope]
+        if player_scope:
+            world_scopes.append(player_scope)
+        hits = _LS.retrieve(ctx.root, _recent or transcript, world_scopes, top_k=6)
+        _lore_block = format_lore_block(hits) if hits else ""
     if _lore_block:
         system = system + "\n\n" + _lore_block
 
     # WORLD STATE: the mutable working memory of this playthrough. Scope the character list to the
     # scene (on-stage + referenced + pov); flags/inventory/log stay global.
-    from .runtime import state as _SE
+    from . import state as _SE
     _focus_names = {_cname(k).lower() for k in (immediate | ({pov_key} if pov_key else set()))}
-    _state_block = _SE.render_state(world_state, focus=_focus_names or None)
+    _state_for_prompt = world_state
+    if _compiled:
+        # These global ledgers are useful to the engine, but they are not a
+        # character's knowledge.  Their contents can only re-enter through a
+        # witnessed scene or the player's explicit disclosure.
+        _state_for_prompt = dict(world_state)
+        _state_for_prompt["flags"] = {}
+        _state_for_prompt["inventory"] = []
+        _state_for_prompt["log"] = []
+    _state_block = _SE.render_state(_state_for_prompt, focus=_focus_names or None)
     if _state_block:
         system = system + "\n\n" + _state_block
 
@@ -480,8 +709,8 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         tw = set(str(dd.get("text", "")).lower().split())
         return len(tw & _beat_words) * 2 + (1 if _step_now - int(dd.get("step") or 0) <= 3 else 0)
 
-    _dsel = sorted((world_state.get("details") or []), key=_dscore, reverse=True)[:3]
-    _open = [p for p in (world_state.get("promises") or []) if p.get("status") == "open"]
+    _dsel = [] if _compiled else sorted((world_state.get("details") or []), key=_dscore, reverse=True)[:3]
+    _open = [] if _compiled else [p for p in (world_state.get("promises") or []) if p.get("status") == "open"]
     _ripe = sorted(_open, key=lambda p: int(p.get("step") or 0))[:2]
     _cont_block = ""
     if _dsel or _ripe:
@@ -496,7 +725,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
 
     # RELATIONSHIP PROJECTION: inject ONLY the web edges among the on-stage/referenced set — never
     # the whole web every turn. project_web filters the loaded story's edges to the focus set.
-    from .world.creation import project_web
+    from ..world.creation import project_web
     _focus = set(immediate)
     _relset = [r.model_dump() for r in st.relationships]
     _rel_block = ""
@@ -599,10 +828,16 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         "Be thorough: a mood/rel delta for every present character who shifted; an empty list "
         "only if truly nothing changed."
     )
+    if _player_action_guard.get("blocked"):
+        scribe_system += (
+            "\n\nPLAYER ACTION AUTHORITY — this turn contains an unsupported supernatural claim. "
+            "Report only the visible attempt and genuine character reactions. Do not emit an item, "
+            "detail, promise, fact, flag, movement, entity change, or ability caused by that claim."
+        )
     # ARC MILESTONE WATCH: when a planned arc is active, the scribe (already reading every
     # turn) checks the narration against the current stage's completion condition — free
     # advancement, no extra call. See storymaster.arc_milestone/advance_arc.
-    from .runtime.director import arc_milestone
+    from .director import arc_milestone
     _ms = arc_milestone(world_state)
     if _ms:
         scribe_system += ("\n- arc_milestone: true ONLY if the narration just accomplished "
@@ -623,7 +858,7 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         _pres_line = ("SCENE OPENING — no one is established on stage yet. If the player's action "
                       "finds, meets, enters on, or addresses a cast member, that character IS here "
                       "— bring them in. Do NOT narrate an empty scene when the action seeks someone.")
-    from .runtime.director import plot_direction, scene_block
+    from .director import plot_direction, scene_block
     _plot_block = plot_direction(world_state, st)
     # The per-SCENE director's standing agenda (planned once at the scene boundary by
     # step_scene; here we surface it on every LATER turn of the same scene — zero LLM cost).
@@ -647,15 +882,29 @@ def build_turn_context(ctx, st, key: str, body: dict, world_state: dict, *,
         + (f"\n{_state_block}\n" if _state_block else "")
         + (f"\n{_cont_block}\n" if _cont_block else "")
         + (f"\n{_rel_block}\n" if _rel_block else "")
+        + (f"\n{_scenario_public}" if _scenario_public else "")
+        + (f"\n{_arc_surface_block}" if _arc_surface_block else "")
+        + (f"\n{_arc_resistance_block}" if _arc_resistance_block else "")
     )
+    if _player_action_guard.get("prompt_block"):
+        consequence_system += "\n\n" + _player_action_guard["prompt_block"]
 
     lanes = {"craft": len(PLAY_CRAFT), "cast": len(cast), "places": len(places),
              "embodiment": len(embodiment), "player_back": len(player_back),
              "lore": len(_lore_block), "state": len(_state_block), "relationships": len(_rel_block),
              "continuity": len(_cont_block), "history": len(transcript),
-             "scene_dir": len(_scene_dir), "consequence": len(consequence_system),
+              "scene_dir": len(_scene_dir), "arc_surface": len(_arc_surface_block),
+              "arc_resistance": len(_arc_resistance_block),
+              "player_authority": len(_player_action_guard.get("prompt_block") or ""),
+              "consequence": len(consequence_system),
              "system": len(system), "scribe": len(scribe_system)}
 
     return {"system": system, "prompt": prompt, "scribe_system": scribe_system,
-            "consequence_system": consequence_system, "roster": roster,
-            "cur": cur, "prior_pov": prior_pov, "lanes": lanes}
+             "consequence_system": consequence_system, "roster": roster,
+             "cur": cur, "prior_pov": prior_pov, "shared_recent": shared_recent,
+             # Server-only: includes private lexical guard terms and must never
+             # be returned by a route or interpolated into any model prompt.
+             "arc_resistance_locks": _arc_resistance_locks,
+             "player_action_guard": _player_action_guard,
+             "player_capabilities": _player_capabilities,
+             "lanes": lanes}

@@ -214,6 +214,44 @@ _SCENE_SCHEMA = {
 }
 
 
+def _location_history(st, loc_id: str) -> str:
+    """The present location's concrete grounding history, with any author-only
+    `[[hidden]]` spans stripped — safe to hand to a play-session-scoped generator."""
+    from ..visibility import strip_model_hidden
+    for loc in getattr(st, "locations", None) or []:
+        if loc.id == loc_id:
+            return strip_model_hidden(loc.history or "") or ""
+    return ""
+
+
+def _protagonist_surface(st, *, scene_id: str = "", slot: str = "", present=(), flags=None) -> str:
+    """The protagonist's already-redacted narrator surface — never the raw wound/truth/
+    blind_spot — '' when no protagonist arc exists. Shared by the scene planner and the
+    macro arc generator so neither invents a theme disconnected from the person this story
+    is actually about. Both callers are play-session-scoped (same privacy tier as the
+    narrator), so only `arc_design.narrator_arc_surface`'s existing safe fields are used."""
+    from ..authoring import arc_design
+    arc_design_raw = (getattr(st, "fields", None) or {}).get("arc_design")
+    if not arc_design_raw:
+        return ""
+    try:
+        surface = arc_design.narrator_arc_surface(
+            arc_design_raw, scene_id=scene_id, slot=slot, present={"player", *present}, flags=flags)
+    except Exception:  # noqa: BLE001 — a malformed private draft must never break generation
+        return ""
+    entry = next((item for item in surface if item.get("character") == "player"), None)
+    if not entry:
+        return ""
+    bits = [f"{key}: {entry[key]}" for key in
+            ("starting_belief", "protective_strategy", "limitation", "visible_tell") if entry.get(key)]
+    if entry.get("public_pressure"):
+        bits.append("public_pressure: " + "; ".join(entry["public_pressure"]))
+    if not bits:
+        return ""
+    return ("PROTAGONIST'S SITUATION (relate this to it as a facet or contrast — never invent "
+            "something unrelated): " + "; ".join(bits))
+
+
 @StoryMaster.on("scene")
 def _h_scene(sm: StoryMaster, d: dict) -> None:
     """Scene boundary → close the old scene into the log, direct the new one. The plan is
@@ -242,8 +280,12 @@ def _h_scene(sm: StoryMaster, d: dict) -> None:
                   "invent new named characters or beings. Key any role you assign by the exact "
                   "key before the parenthesis, e.g. 'shuri', never the display name):\n"
                   + "\n".join(cast_lines)) if cast_lines else ""
+    loc_history = _location_history(sm.st, d.get("loc_id") or "")
+    protagonist_surface = _protagonist_surface(sm.st, present=known_characters)
     bits = [b for b in (plot_direction(w, sm.st), cast_block,
-                        people_by_location(w, sm.location)) if b]
+                        people_by_location(w, sm.location),
+                        (f"LOCATION HISTORY: {loc_history}" if loc_history else ""),
+                        protagonist_surface) if b]
     system = ("You direct ONE scene of an interactive novel. Decide what the scene is FOR: the "
               "one concrete thing it should accomplish for the story, the tension to keep alive "
               "under its surface, and what would naturally end it. Concrete and causal, never "
@@ -253,7 +295,9 @@ def _h_scene(sm: StoryMaster, d: dict) -> None:
               "function in THIS scene (instigator, target, amplifier, witness, mediator...) and "
               "what they're pushing, protecting, or misreading right now — not a hidden wound, "
               "not a diagnosis, just their surface stance. Leave theme/tone/roles empty rather "
-              "than force one onto a scene that doesn't have it yet."
+              "than force one onto a scene that doesn't have it yet. When location history and/or "
+              "the protagonist's situation are given below, the scene's theme should relate to "
+              "one of them as a facet or contrast, not invent something unrelated to either."
               + ("\n\n" + "\n\n".join(bits) if bits else ""))
     prompt = (f"A new scene opens at: {sm.location or plan['space']}.\n"
               + (f"JUST BEFORE IT:\n{d['recent']}\n" if d.get("recent") else "")
@@ -361,8 +405,12 @@ def generate_arc(provider, ctx, st, world: dict, request: str) -> dict:
         "Use ONLY the people who exist. Fit the story's world and its pressures.\n"
         "SETTING: if the story has SETTING STAGES, pick the one(s) whose world this arc lives in "
         "and put their ids in `conditions` — the arc runs under those conditions, changing how the "
-        "cast behaves. Use only ids from the list, or leave empty if the arc is under none.")
+        "cast behaves. Use only ids from the list, or leave empty if the arc is under none.\n"
+        "When the protagonist's situation is given below, dramatize THAT over time — turn its "
+        "volume up through this arc's stages — rather than inventing an unrelated progression.")
+    protagonist_surface = _protagonist_surface(st)
     prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST:\n" + "\n".join(cast)
+              + (f"\n\n{protagonist_surface}" if protagonist_surface else "")
               + (f"\n\nSETTING STAGES (assign the arc's `conditions` from these ids):\n{stage_menu}"
                  if stage_menu else "")
               + f"\n\nARC REQUEST: {request}\n\nPlan the arc.")
@@ -406,10 +454,14 @@ def design_arc(provider, ctx, st, messages: list[dict], draft: dict | None) -> d
         "or question) and `arc` (the FULL current draft with everything agreed so far applied — "
         "it is the living document, keep unchanged parts intact).\n"
         + ("SETTING STAGES: pick the stage(s) whose world this arc lives in and keep their ids in "
-           "the draft's `conditions` (only ids from the list; empty if none).\n" if stage_menu else ""))
+           "the draft's `conditions` (only ids from the list; empty if none).\n" if stage_menu else "")
+        + "When the protagonist's situation is given below, dramatize THAT over time rather than "
+          "inventing an unrelated progression.")
+    protagonist_surface = _protagonist_surface(st)
     convo = "\n".join(f"{'Writer' if m.get('role') == 'user' else 'You'}: {m.get('text', '')}"
                       for m in (messages or []) if m.get("text"))
     prompt = (f"STORY: {st.premise}\nTONE: {st.tone}\nCAST:\n" + "\n".join(cast)
+              + (f"\n\n{protagonist_surface}" if protagonist_surface else "")
               + (f"\n\nSETTING STAGES:\n{stage_menu}" if stage_menu else "")
               + ("\n\nCURRENT DRAFT (update this, don't restart):\n"
                  + json.dumps(draft, ensure_ascii=False) if draft else "")

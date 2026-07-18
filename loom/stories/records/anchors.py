@@ -29,10 +29,6 @@ import hashlib
 import json
 from typing import Any
 
-# How many addressable nodes to surface in one anchored view. Past this the model
-# still gets the top-level fields, but deep per-item subfields are summarized. Keeps
-# the prompt bounded for big bibles without hiding the editable shape.
-_MAX_NODES = 60
 # blake2b digest size in bytes → 8 hex chars (4.3B space; plenty per story).
 _HASH_DIGEST = 4
 
@@ -109,12 +105,13 @@ def _parent_and_key(data: dict, path: str) -> tuple[Any, str]:
 
 
 # ── Addressable view ───────────────────────────────────────────────────────── #
-# Build the flat `path #hash preview` block the model reads. We surface:
-#   • every allowed top-level field (always — the model needs to see them)
+# Build the flat `path #hash preview` block the model reads. We surface EVERYTHING
+# in the layer's allowed fields — no size cap. `LAYER_FIELDS` (the caller's
+# whitelist) is what bounds relevance ("nothing else"); once a field is in scope
+# the model gets all of it ("everything it needs"):
+#   • every allowed top-level field
 #   • dict-key children of dict fields (premise_parts/*, world/*)
-#   • list items by id, plus a few of their most-edited scalar subfields, until the
-#     node budget runs out. Sibling items in the same list always surface together
-#     (you never see half a list's items) — the cap only trims deep subfields.
+#   • every list item by id, plus its high-churn scalar subfields
 # Deeply-nested noise (scenes inside places, nodes inside arcs) is NOT enumerated
 # field-by-field; the model can still target it by id path, it just writes the op
 # from the item-level anchor.
@@ -131,69 +128,49 @@ def _preview(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def _node_lines(field: str, value: Any, budget: int) -> list[tuple[str, str, Any]]:
-    """Yield (path, hash, value) rows for one top-level field and its addressable
-    children, respecting `budget` (the remaining node count)."""
+def _node_lines(field: str, value: Any) -> list[tuple[str, str, Any]]:
+    """Yield (path, hash, value) rows for one top-level field and all its
+    addressable children."""
     rows: list[tuple[str, str, Any]] = []
     # The field itself is always addressable — even if it's a big container, the
     # model can set/replace the whole thing.
     rows.append((field, node_hash(value), value))
-    budget -= 1
 
     if isinstance(value, dict):
         for k, v in value.items():
-            if budget <= 0:
-                break
             rows.append((f"{field}/{k}", node_hash(v), v))
-            budget -= 1
     elif isinstance(value, list):
-        # Always surface every item (never half a list) — the cap only trims
-        # subfields, not siblings.
         for item in value:
             if not isinstance(item, dict):
                 continue
             iid = _item_id(item)
             if not iid:
                 continue
-            if budget <= 0:
-                break
             rows.append((f"{field}/{iid}", node_hash(item), item))
-            budget -= 1
-            # Then a few high-churn scalar subfields, while budget allows.
+            # Then its high-churn scalar subfields.
             for k, v in item.items():
                 if k in _ID_KEYS or isinstance(v, (dict, list)):
                     continue
-                if budget <= 0:
-                    break
                 rows.append((f"{field}/{iid}/{k}", node_hash(v), v))
-                budget -= 1
     return rows
 
 
 def anchored_view(layer_data: dict, allowed_fields) -> str:
     """The flat `path #hash preview` block shown to the model. `layer_data` is the
-    raw story dict; `allowed_fields` is LAYER_FIELDS[layer] (the whitelist)."""
+    raw story dict; `allowed_fields` is LAYER_FIELDS[layer] (the whitelist) — the
+    only thing that bounds what's shown."""
     rows: list[tuple[str, str, Any]] = []
-    budget = _MAX_NODES
     for field in allowed_fields:
         value = layer_data.get(field)
         if value in (None, [], {}, ""):
             continue
-        if budget <= 0:
-            break
-        rows.extend(_node_lines(field, value, budget))
-        budget = _MAX_NODES - len(rows)
-        if budget <= 0:
-            break
+        rows.extend(_node_lines(field, value))
     if not rows:
         return "(this section is empty — use `set` to create its first field)"
     lines = []
     for path, h, value in rows:
         lines.append(f"{path:<34}#{h}  {_preview(value)}")
-    out = "\n".join(lines)
-    if budget <= 0:        # we trimmed something
-        out += "\n…(more nodes available — target any item by its id path)"
-    return out
+    return "\n".join(lines)
 
 
 # ── Apply ──────────────────────────────────────────────────────────────────── #
@@ -266,10 +243,19 @@ def apply_ops(data: dict, ops: list) -> dict:
     Stale-anchor ops are skipped (not applied) but do NOT abort the batch — the
     others still go through. `before` snapshots the WHOLE top-level field each
     touched op lives under, so the client's Undo (a PUT of {field: old}) restores it.
+
+    Anchors are checked against a snapshot of `data` taken BEFORE this batch —
+    not the live, progressively-mutated `data` — so an earlier op in the same
+    batch editing a child never falsely stales a later op on its parent/ancestor
+    (both anchors came from the SAME originally-shown view; only a change from
+    OUTSIDE this batch is real staleness). Existence ("was this node deleted?")
+    still checks the live data, since an earlier op in this batch really can
+    remove something a later op then targets.
     """
     applied: list[dict] = []
     rejected: list[dict] = []
     before: dict[str, Any] = {}
+    original = json.loads(json.dumps(data))   # pre-batch snapshot, for anchor freshness only
 
     for op in ops or []:
         if not isinstance(op, dict):
@@ -283,20 +269,30 @@ def apply_ops(data: dict, ops: list) -> dict:
             continue
         top = _top_field(path)
 
-        # Resolve the current node + its hash. A missing node is only valid when
-        # the op has no anchor (creating something new); otherwise it's stale/gone.
+        # Resolve the LIVE node — existence (deleted-by-an-earlier-op-this-batch or
+        # genuinely missing) is a live-data question. A missing node is only valid
+        # when the op has no anchor (creating something new); otherwise it's gone.
         try:
             current = resolve_path(data, path)
-            current_hash = node_hash(current)
         except KeyError:
             if anchor:
                 rejected.append({"path": path, "reason": "node not found (deleted?)", "current_hash": ""})
                 continue
             current = None
-            current_hash = ""
 
-        # Anchor verification — the hashline core. An empty anchor means "create",
-        # so we only reject when an anchor was claimed AND it no longer matches.
+        # Anchor verification — the hashline core. Checked against the PRE-BATCH
+        # snapshot (falling back to the live hash for a node that didn't exist
+        # pre-batch, e.g. one this same batch just created) so same-batch sub-edits
+        # never self-invalidate a sibling/ancestor op. An empty anchor means
+        # "create", so we only reject when an anchor was claimed AND it no longer
+        # matches what the model actually read.
+        if current is None:
+            current_hash = ""
+        else:
+            try:
+                current_hash = node_hash(resolve_path(original, path))
+            except KeyError:
+                current_hash = node_hash(current)   # didn't exist pre-batch — live hash is the only reference
         if anchor and current_hash and anchor != current_hash:
             rejected.append({"path": path, "reason": "stale — node changed since you read it",
                              "current_hash": current_hash})
@@ -455,6 +451,20 @@ if __name__ == "__main__":   # ponytail: a runnable check of the core contracts
     # anchored view renders
     view = anchored_view(story, ("premise", "premise_parts", "arcs", "locations"))
     assert "premise " in view and "arcs/arc-2 " in view and "arcs/arc-2/name" in view
+
+    # no node cap: a cast well past the old 60-node ceiling still surfaces every
+    # member's id AND every one of its prose fields — nothing trimmed, no hint text.
+    big_story = {"cast": [
+        {"character": f"c{i}", "name": f"Char {i}", "persona": "p" * 50, "want": "w" * 50,
+         "lie": "l" * 50, "wound": "wd" * 50, "secret": "s" * 50}
+        for i in range(30)
+    ]}
+    big_view = anchored_view(big_story, ("cast",))
+    for i in range(30):
+        assert f"cast/c{i} " in big_view, f"member c{i} header missing — cap still trimming"
+        for field in ("persona", "want", "lie", "wound", "secret"):
+            assert f"cast/c{i}/{field}" in big_view, f"c{i}/{field} trimmed — cap still trimming"
+    assert "more nodes available" not in big_view
 
     # set on a scalar field
     d = json.loads(json.dumps(story))
