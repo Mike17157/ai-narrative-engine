@@ -79,3 +79,40 @@ export async function deleteStory(key) {
   if (!leanStoryMode) await loadChars();
   if (stories.current?.key === key) { stories.current = null; goto('/stories'); }
 }
+
+// --- portable bundles (one file: story + sessions + beats + cards + art) --- //
+export async function exportStory(key, name = key) {
+  try {
+    const r = await fetch(`/api/stories/${key}/export`);
+    if (!r.ok) throw new Error(`export ${r.status}`);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${key}.story.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    stories.msg = { ok: true, text: `Exported “${name}” — one portable file (story, sessions, cards, art).` };
+  } catch {
+    stories.msg = { err: true, text: `Could not export “${name}”.` };
+  }
+}
+
+export async function importStory(file) {
+  let doc;
+  try { doc = JSON.parse(await file.text()); }
+  catch { stories.msg = { err: true, text: 'That file is not valid JSON.' }; return; }
+  const result = await post('/stories/import', doc);
+  if (!result.ok || !result.data?.ok) {
+    stories.msg = { err: true, text: result.data?.error || 'Import failed — not a story bundle?' };
+    return;
+  }
+  const s = result.data;
+  const renamed = s.renamed_from ? ` (kept as “${s.key}” — the name was taken)` : '';
+  stories.msg = {
+    ok: true,
+    text: `Imported “${s.name || s.key}”${renamed} — ${s.sessions} session${s.sessions === 1 ? '' : 's'}, ${s.beats} beats, ${s.assets} images.`,
+  };
+  await loadStories();
+  if (!leanStoryMode) await loadChars();
+}

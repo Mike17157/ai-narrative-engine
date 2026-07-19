@@ -4,12 +4,20 @@
   // CONVERSATION there (no wizard, no draft/commit).
   import { goto } from '$app/navigation';
   import { chars } from '$lib/characters.svelte.js';
-  import { stories, deleteStory, loadStories } from '$lib/stories.svelte.js';
+  import { stories, deleteStory, loadStories, exportStory, importStory } from '$lib/stories.svelte.js';
 
   async function newStory() {
     goto('/stories/new');
   }
   const open = (key) => goto(`/stories/${key}`);
+
+  // ── import: hidden file picker feeding POST /api/stories/import ──
+  let fileInput;
+  async function onBundlePicked(e) {
+    const f = e.target.files?.[0];
+    e.target.value = '';                    // allow re-picking the same file
+    if (f) await importStory(f);
+  }
 
   let complete = $derived(stories.list || []);
 
@@ -62,8 +70,12 @@
 
   <div class="sechead">
     <span class="sectitle">Finished{complete.length ? ` · ${complete.length}` : ''}</span>
-    <div class="newacts"><button onclick={newStory}>＋ New story</button></div>
+    <div class="newacts">
+      <button class="ghost" onclick={() => fileInput?.click()}>⤒ Import</button>
+      <button onclick={newStory}>＋ New story</button>
+    </div>
   </div>
+  <input bind:this={fileInput} type="file" accept=".json,application/json" style="display:none" onchange={onBundlePicked} />
 
   {#if complete.length}
     <!-- toolbar: search + filter button -->
@@ -95,6 +107,7 @@
               </div>
             {/if}
             <button class="playbtn" title="Play" onclick={(e) => { e.stopPropagation(); goto(`/stories/${s.key}/play`); }}>▶</button>
+            <button class="expbtn" title="Export as a portable file" onclick={(e) => { e.stopPropagation(); void exportStory(s.key, s.name); }}>⤓</button>
             <button class="del" title="Delete story" onclick={(e) => { e.stopPropagation(); void deleteStory(s.key); }}>🗑</button>
           </div>
         {/each}
@@ -222,15 +235,17 @@
   .cast-row { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
   .cast-chip { font-size: 10.5px; background: var(--elev-2); border: 1px solid var(--border-soft); border-radius: 6px; padding: 1px 7px; color: var(--muted); max-width: 90px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .del, .playbtn {
+  .del, .playbtn, .expbtn {
     position: absolute; top: 8px; width: 26px; height: 26px; padding: 0;
     border-radius: 7px; background: rgba(10,12,18,.6);
     border: 1px solid var(--border); font-size: 12px; opacity: 0;
   }
   .del { right: 8px; color: var(--muted); }
-  .playbtn { right: 40px; color: #fff; font-size: 11px; }
-  .card:hover .del, .card:hover .playbtn { opacity: 1; }
+  .playbtn { right: 72px; color: #fff; font-size: 11px; }
+  .expbtn { right: 40px; color: var(--muted); }
+  .card:hover .del, .card:hover .playbtn, .card:hover .expbtn { opacity: 1; }
   .del:hover { color: var(--bad); }
+  .expbtn:hover { color: var(--accent); border-color: var(--accent); }
   .playbtn:hover { color: var(--accent); border-color: var(--accent); }
 
   .no-match, .empty { margin: 50px auto; text-align: center; color: var(--muted); display: flex; flex-direction: column; align-items: center; gap: 8px; }
