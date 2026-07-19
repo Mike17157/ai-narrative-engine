@@ -16,6 +16,11 @@ def _lean_client():
     root = Path(tempfile.mkdtemp(prefix="loom-lean-app-"))
     shutil.copytree(Path("configs"), root / "configs")
     (root / "configs" / "stories.db").unlink(missing_ok=True)
+    # The global library lives in configs/stories.db now; seed one card so the
+    # cast tests have a library character to embed.
+    from loom.server.services import card_store
+    card_store.upsert_character(root, "shared", {"name": "Library Shared", "system": "",
+                                                 "fields": {"role": "Library role"}})
     client = TestClient(create_lean_app(root, comfy_enabled=False))
     try:
         yield client

@@ -187,11 +187,11 @@ def _rewrite_references(root: Path, maps: dict[str, dict[str, str]]) -> list[str
             lp.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
             changed.append("configs/loras.yaml")
 
-    # 2. character cards (image.loras[].name + image.checkpoint)
-    cdir = root / "configs" / "characters"
-    if cdir.is_dir() and (lora_map or ckpt_map):
-        for p in cdir.glob("*.yaml"):
-            doc = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    # 2. character cards (image.loras[].name + image.checkpoint) — the global library
+    # lives in the relational store now (configs/stories.db via card_store).
+    if lora_map or ckpt_map:
+        from ..server.services import card_store
+        for key, doc in card_store.load_characters(root).items():
             img = doc.get("image") or {}
             touched = False
             for l in img.get("loras", []) or []:
@@ -201,8 +201,8 @@ def _rewrite_references(root: Path, maps: dict[str, dict[str, str]]) -> list[str
             if img.get("checkpoint") and remap(img["checkpoint"], ckpt_map) != img["checkpoint"]:
                 img["checkpoint"] = remap(img["checkpoint"], ckpt_map); touched = True
             if touched:
-                p.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False), encoding="utf-8")
-                changed.append(f"configs/characters/{p.name}")
+                card_store.upsert_character(root, key, doc)
+                changed.append(f"characters/{key} (db)")
 
     # 3. workflows/*.json (LoraLoader / CheckpointLoaderSimple / UNETLoader)
     wdir = root / "workflows"

@@ -323,6 +323,14 @@ def _migrate_schema(con) -> None:
 
 
 # ── Story list / existence ───────────────────────────────────────────────────
+def story_updated_map(root: Path) -> dict[str, float]:
+    """{story_key: last-updated epoch} — the UI's recency sort, now that no per-story
+    file exists to stat."""
+    con = _conn(root)
+    return {k: float(u or 0) for k, u in
+            con.execute("SELECT key, updated FROM stories").fetchall()}
+
+
 def list_stories(root: Path) -> list[str]:
     """All story keys, ordered by name."""
     con = _conn(root)
@@ -744,6 +752,9 @@ def delete_story(root: Path, key: str) -> None:
                     "conditions", "arcs", "chapters", "scene_harnesses", "connections",
                     "features", "play_cards", "card_history"):
             con.execute(f"DELETE FROM {tbl} WHERE story_key=?", (key,))
+        # Sessions + beats are copackaged too — same story_key partition, same transaction.
+        from . import story_sessions as _SESS   # local import: story_sessions imports story_store
+        _SESS.delete_story_sessions(root, key, con=con)
         con.execute("DELETE FROM stories WHERE key=?", (key,))
         con.execute("COMMIT")
     except Exception:
@@ -853,21 +864,30 @@ def migrate_from_json(root: Path, *, verbose: bool = False) -> int:
     still renamed to .migrated so it stops appearing in the glob). Returns the count migrated.
 
     Run lazily on startup (see loader.load_settings) so the user just restarts. Reversible:
-    rename the ``.json.migrated`` files back to ``.json`` and they'll re-migrate. Mirrors the
-    shape of ``migrate_db_to_json.migrate_dir``.
+    rename the ``.json.migrated`` files back to ``.json`` and they'll re-migrate.
     """
     import json as _json
     story_dir = root / "configs" / "stories"
     if not story_dir.is_dir():
         return 0
-    from ...stories.records import store as _SDB  # JSON reader used for migration reads
+    # Inline the legacy per-story JSON read (records/store.py is gone): the folder form
+    # <key>/story.json wins, the legacy flat <key>.json is the fallback; the document is
+    # {story, characters}. Only this migration read path needs it.
+    def _iter_legacy_json(sdir):
+        out = {}
+        for p in sorted(sdir.glob("*/story.json")):
+            out[p.parent.name] = p
+        for p in sorted(sdir.glob("*.json")):
+            out.setdefault(p.stem, p)
+        return list(out.items())
     migrated = 0
-    for skey, path in _SDB.iter_story_files(story_dir):
+    for skey, path in _iter_legacy_json(story_dir):
         # Skip a key already in the DB (already migrated) — but still rename the leftover JSON.
         already = story_exists(root, skey)
         if not already:
             try:
-                sdata, embedded = _SDB.load_story(path)
+                _doc = _json.loads(path.read_text(encoding="utf-8"))
+                sdata, embedded = (_doc.get("story") or {}), (_doc.get("characters") or {})
             except Exception as exc:  # noqa: BLE001 — don't let one bad file sink the rest
                 if verbose:
                     print(f"  ✗ {path.name}: read failed ({exc}) — leaving as-is")
@@ -881,7 +901,7 @@ def migrate_from_json(root: Path, *, verbose: bool = False) -> int:
             migrated += 1
             if verbose:
                 print(f"  ✓ {skey}: migrated to relational store")
-        # Mark migrated: rename so iter_story_files stops seeing it. Reversible by renaming back.
+        # Mark migrated: rename so the legacy-file scan stops seeing it. Reversible by renaming back.
         try:
             path.rename(path.with_suffix(".json.migrated"))
         except Exception:  # noqa: BLE001 — best-effort; the data is already in the DB

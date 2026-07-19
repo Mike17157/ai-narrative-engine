@@ -119,7 +119,7 @@ def run(
 
 @app.command("generate-character")
 def generate_character(
-    key: str = typer.Argument(..., help="Character key (configs/characters/<key>.yaml)."),
+    key: str = typer.Argument(..., help="Character key (the global card library in configs/stories.db)."),
     root: Path = typer.Option(Path("."), "--root"),
 ):
     """Generate a full character end-to-end, headless: flesh → base prompt → base image → one outfit

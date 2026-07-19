@@ -169,7 +169,7 @@ def register(app, ctx):
 
     @app.get("/api/characters")
     def characters() -> list:
-        char_dir = ctx.char_dir()
+        # (the global library lives in the relational store; per-char asset dirs resolve via char_asset_dir)
         # Which story owns each GENERATED character — from the explicit `story` tag,
         # else derived from story cast membership (so pre-tag NPCs still group).
         owner: dict[str, str] = {}
@@ -1298,7 +1298,7 @@ def register(app, ctx):
         owning story DB (+ any global YAML), and remove its avatar/ref/portraits."""
         import shutil
 
-        from ..services import story_store as _SS
+        from ..services import card_store as _CS, story_store as _SS
         if key not in ctx.base_settings.characters:
             return JSONResponse({"error": "no such character"}, status_code=404)
         safe = re.sub(r"[^\w\-]+", "", key)
@@ -1314,6 +1314,7 @@ def register(app, ctx):
             if key in _SS.character_keys(ctx.root, skey):
                 _SS.delete_character(ctx.root, skey, key)
         # on-disk binaries (in the story folder for owned chars, else the global library) + any YAML
+        _CS.delete_character(ctx.root, safe)   # the global-library record (was <safe>.yaml)
         for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
             f = adir / fn
             if f.is_file():

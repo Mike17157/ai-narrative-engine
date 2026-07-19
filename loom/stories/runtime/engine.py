@@ -606,12 +606,20 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         on_names = {str(n) for n in (data.get("present") or []) if n} | {
             (appctx.base_settings.characters[k].name if k in appctx.base_settings.characters else k)
             for k in ((world_state.get("scene") or {}).get("members") or [])}
+        _beats: list = []
         world_state = _SE.apply_deltas(world_state, data.get("state_deltas") or [],
                                        root=appctx.root, scope=d.thread_scope,
-                                       validate_move=make_move_validator(st, on_names))
+                                       validate_move=make_move_validator(st, on_names),
+                                       beat_sink=_beats)
         world_state["location"] = loc or world_state.get("location") or ""
         # Index this turn as a STEP + record who witnessed it (runtime_state: join = no backlog).
         _turn_step = _PC.record_step(world_state, [k for k in present_keys if k])
+        # The permanent chronicle: every beat appended this turn lands in the
+        # session_beats table — the in-doc log is a capped window and would otherwise
+        # silently forget the oldest entries.
+        if _beats and getattr(d, "sid", ""):
+            from ...server.services.story_sessions import append_beats
+            append_beats(appctx.root, d.sid, _beats, step=_turn_step, story_key=d.key or "")
         world_state.setdefault("transcript", []).append(data.get("reply", ""))
         _PC.record_raw_turn(world_state, step=_turn_step, present=[k for k in present_keys if k],
                             location=loc, text=data.get("reply", ""), player_input=_safe_last_user)
@@ -637,7 +645,7 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
             saved_state = persist_runtime(d.sess.get("state"), world_state, d.runtime_state)
         else:
             saved_state = _SE.with_world(d.sess.get("state"), world_state)
-        save_session(appctx.root, d.sid, {**d.sess, "state": saved_state})
+        save_session(appctx.root, d.sid, {**d.sess, "state": saved_state}, story_key=d.key or "")
     except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
         pass
 
@@ -685,7 +693,7 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
                 saved_state = persist_runtime(d.sess.get("state"), world_state, d.runtime_state)
             else:
                 saved_state = _SE.with_world(d.sess.get("state"), world_state)
-            save_session(appctx.root, d.sid, {**d.sess, "state": saved_state})
+            save_session(appctx.root, d.sid, {**d.sess, "state": saved_state}, story_key=d.key or "")
 
     return {
         "reply": data.get("reply", ""), "location": world_state.get("location") or loc,

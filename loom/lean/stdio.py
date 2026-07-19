@@ -25,12 +25,10 @@ from types import SimpleNamespace
 import sys
 from typing import Any, Callable
 
-import yaml
-
 from ..config import load_settings
 from ..config.schema import Character, Story, story_reference_errors
 from ..server.context_storage import _self_heal_refs
-from ..server.services import story_store
+from ..server.services import card_store, story_store
 from ..stories.api.library import _play_readiness, _public_architect_model_card
 from ..stories.authoring.card_payload import public_story_card
 from ..stories.authoring.inline_text import InlineTextEditError, apply_inline_text_edit, parse_inline_text_edit
@@ -48,7 +46,6 @@ from ..stories.authoring.story_control_graph import (
     resolve_architect_work_order,
     work_order_prompt,
 )
-from ..stories.records.store import story_json_path
 from ..stories.visibility import preserve_model_hidden, strip_model_hidden
 
 
@@ -97,18 +94,13 @@ def _global_characters(root: Path) -> dict[str, Character]:
     ``load_settings`` intentionally merges every Story-local embedded card into
     ``settings.characters``. That is convenient for broad legacy routes, but
     unsafe for a per-Story author projection when two Stories share a stable
-    character key. The desktop bridge instead starts from YAML library cards
+    character key. The desktop bridge instead starts from the global card store
     and overlays the aggregate currently being read or committed.
     """
     characters: dict[str, Character] = {}
-    directory = root / "configs" / "characters"
-    if not directory.is_dir():
-        return characters
-    for path in sorted(directory.glob("*.yaml")):
+    for key, document in card_store.load_characters(root).items():
         try:
-            document = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            if isinstance(document, dict):
-                characters[path.stem] = Character(**document)
+            characters[key] = Character(**document)
         except Exception:  # noqa: BLE001 - mirrors the resilient settings loader.
             continue
     return characters
@@ -343,10 +335,10 @@ def story_list(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
     _empty_payload(payload, "story.list")
     settings = load_settings(root)
     entries: list[dict[str, Any]] = []
-    story_dir = root / "configs" / "stories"
+    from ..server.services import story_store as _SS
+    updated = _SS.story_updated_map(root)
     for key, story in settings.stories.items():
-        source = story_json_path(story_dir, key)
-        mtime = source.stat().st_mtime if source.is_file() else 0.0
+        mtime = updated.get(key, 0.0)
         entries.append({
             "key": key,
             "name": story.name,

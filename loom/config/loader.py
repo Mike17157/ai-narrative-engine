@@ -4,11 +4,12 @@ Layout (all paths relative to the project root passed in):
 
     configs/
       models.yaml            # { models: { <key>: ModelDef, ... } }  or bare mapping
-      characters/*.yaml      # one Character per file (filename stem = key)
+      stories.db             # relational store: stories, global characters, personas
       pipelines/*.yaml       # one Pipeline per file (filename stem = key)
 
-Keeping characters and pipelines as one-file-per-resource keeps diffs clean and
-makes a future visual editor trivial: each canvas/persona maps to a file.
+The global character library and the personas are rows in configs/stories.db (see
+server/services/card_store.py); only their binary assets (PNGs, portraits/) stay files.
+Pipelines stay one-file-per-resource to keep diffs clean.
 """
 
 from __future__ import annotations
@@ -39,18 +40,19 @@ def load_settings(root: str | Path) -> Settings:
     raw_models = models_doc.get("models", models_doc)
     models = {key: ModelDef(**val) for key, val in raw_models.items()}
 
+    # characters + personas — the global card library lives in the relational store
+    # (configs/stories.db; see server/services/card_store.py). The first touch lazily
+    # folds any legacy configs/characters|personas/*.yaml into the tables (renamed
+    # .yaml.migrated); binary assets (PNGs, portraits/) stay files.
+    from ..server.services import card_store as _CS
     characters: dict[str, Character] = {}
-    char_dir = configs / "characters"
-    if char_dir.is_dir():
-        for path in sorted(char_dir.glob("*.yaml")):
-            characters[path.stem] = Character(**_read_yaml(path))
+    for ckey, cdoc in _CS.load_characters(root).items():
+        characters[ckey] = Character(**cdoc)
 
-    # personas/*.yaml — who *you* are in the chat (the {{user}} side). One Persona per file.
+    # personas — who *you* are in the chat (the {{user}} side). One row per persona.
     personas: dict[str, Persona] = {}
-    persona_dir = configs / "personas"
-    if persona_dir.is_dir():
-        for path in sorted(persona_dir.glob("*.yaml")):
-            personas[path.stem] = Persona(**_read_yaml(path))
+    for pkey, pdoc in _CS.load_personas(root).items():
+        personas[pkey] = Persona(**pdoc)
 
     # stories — the source of truth is the relational store (configs/stories.db). On startup we
     # run a lazy JSON→DB migration (any configs/stories/<key>/story.json still on disk is folded
@@ -61,10 +63,8 @@ def load_settings(root: str | Path) -> Settings:
     stories: dict[str, Story] = {}
     story_dir = configs / "stories"
     if story_dir.is_dir():
-        # First the legacy .db→.json migration (so very-old installs are on the JSON form), then
-        # the JSON→relational migration. Both are idempotent and reversible.
-        from ..server.services.story_migration import migrate_dir as _legacy_migrate
-        _legacy_migrate(story_dir)
+        # Legacy per-story JSON files (installs predating the relational store) are folded
+        # into the DB and renamed .json.migrated. Idempotent and reversible.
         _SS.migrate_from_json(root)
         for skey in _SS.list_stories(root):
             loaded = _SS.load_story(root, skey)

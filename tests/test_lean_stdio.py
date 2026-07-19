@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import yaml
 
 from loom.config import load_settings
-from loom.server.services import story_store
+from loom.server.services import card_store, story_store
 from loom.stories.authoring.card_payload import public_story_card
 
 
@@ -194,7 +194,8 @@ def test_jsonl_bridge_mints_only_the_minimal_valid_story_card(tmp_path: Path):
         {"id": "read", "op": "story.read", "payload": {"key": "new_harbour"}},
     ])
     assert listed["ok"] is True
-    assert [item["key"] for item in listed["result"]["stories"]] == ["bridge", "new_harbour", "new_harbour_2"]
+    # newest-first by relational `updated` (matches the app library); the fixture save is oldest
+    assert [item["key"] for item in listed["result"]["stories"]] == ["new_harbour_2", "new_harbour", "bridge"]
     assert read["ok"] is True
     assert read["result"]["story"]["name"] == "New Harbour"
     assert read["result"]["story"]["type"] == "vn"
@@ -326,7 +327,7 @@ def test_jsonl_bridge_scopes_cast_text_to_one_story_and_clones_global_source(tmp
     assert first_context_after_second["result"]["revision"] == first_context["result"]["revision"]
 
     # An initially global source is copied into this Story on its first local
-    # author edit; neither the YAML source nor another Story is rewritten.
+    # author edit; neither the global source card nor another Story is rewritten.
     cloned = _run(root, [{
         "id": "clone-global",
         "op": "story.cast_text",
@@ -339,7 +340,7 @@ def test_jsonl_bridge_scopes_cast_text_to_one_story_and_clones_global_source(tmp
     stored_global, embedded_global = story_store.load_story(root, "global_source")
     assert stored_global["name"] == "Global Source"
     assert embedded_global["shared"]["fields"]["appearance"] == "Raincoat"
-    source = yaml.safe_load((root / "configs" / "characters" / "shared.yaml").read_text(encoding="utf-8"))
+    source = card_store.load_characters(root)["shared"]   # the global card (was shared.yaml)
     assert source["fields"] == {"role": "Library role"}
 
     rejected = _run(root, [{

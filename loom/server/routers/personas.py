@@ -1,6 +1,6 @@
 """Personas — who *you* are in the chat (the {{user}} side).
 
-Server-side (one YAML per persona under configs/personas/, with a <key>.png avatar
+Server-side (one row per persona in configs/stories.db, with a <key>.png avatar
 alongside), mirroring characters/scenarios. Endpoints cover CRUD + avatar serving,
 plus the one-click generation flow:
 
@@ -19,6 +19,7 @@ import re
 from fastapi import UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
 
+from ..services import card_store
 from ..services.images import _clean_reference_png, _randomize_seeds, _render
 from ..services.prompts import (
     PERSONA_SCHEMA,
@@ -51,7 +52,8 @@ def register(app, ctx):
         body = body or {}
         name = (body.get("name") or "New persona").strip() or "New persona"
         key, base, n = _slug(name), _slug(name), 2
-        while (ctx.persona_dir() / f"{key}.yaml").is_file():
+        taken = set(card_store.load_personas(ctx.root))
+        while key in taken:
             key, n = f"{base}_{n}", n + 1
         data = {"name": name, "description": body.get("description", "")}
         try:
@@ -76,7 +78,8 @@ def register(app, ctx):
             if not name or name in existing:
                 continue
             key, base, n = _slug(name), _slug(name), 2
-            while (ctx.persona_dir() / f"{key}.yaml").is_file():
+            taken = set(card_store.load_personas(ctx.root))
+            while key in taken:
                 key, n = f"{base}_{n}", n + 1
             data = {"name": name, "description": it.get("description", "") or ""}
             for fld in ("summary", "appearance"):

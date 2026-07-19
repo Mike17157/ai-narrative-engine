@@ -2186,36 +2186,9 @@ def genesis_state_from(d: dict) -> GenesisState:
     return GenesisState(**{k: v for k, v in (d or {}).items() if k in names})
 
 
-# ── Run checkpoint store — a plain JSON file per run_id (NOT story_sessions, which forces its own
-# schema and would drop the state). This IS the resume substrate: the accumulated graph state. ──
-
-def _runs_dir(root):
-    import pathlib
-    d = pathlib.Path(root) / "configs" / "genesis_runs"
-    d.mkdir(parents=True, exist_ok=True)
-    return d
-
-
-def save_run(root, run_id: str, state_dict: dict) -> None:
-    import json
-    import re
-    safe = re.sub(r"[^\w\-]+", "_", str(run_id or "")).strip("_")
-    if safe:
-        (_runs_dir(root) / f"{safe}.json").write_text(
-            json.dumps(state_dict, ensure_ascii=False), encoding="utf-8")
-
-
-def load_run(root, run_id: str) -> dict | None:
-    import json
-    import re
-    safe = re.sub(r"[^\w\-]+", "_", str(run_id or "")).strip("_")
-    p = _runs_dir(root) / f"{safe}.json"
-    if not p.is_file():
-        return None
-    try:
-        return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
-        return None
+# Run checkpoint persistence used to live here as per-run JSON files (configs/genesis_runs/);
+# removed with the move of all data handling to the relational store — the graph checkpoints
+# in-process via `deps.on_checkpoint` and nothing called save_run/load_run anymore.
 
 
 async def run_genesis(state: GenesisState, deps: GenesisDeps) -> dict:

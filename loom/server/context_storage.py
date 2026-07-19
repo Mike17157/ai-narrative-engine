@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-import yaml
+# (yaml no longer used here — cards are JSON rows in configs/stories.db)
 from fastapi import UploadFile, File  # noqa: F401 — kept for parity; methods don't define routes
 from fastapi.responses import JSONResponse
 
@@ -15,6 +15,7 @@ from ..config import load_settings
 from ..config.schema import Character, ModelDef, Settings
 from ..connections import ConnectionStore  # noqa: F401 — type reference for callers
 
+from .services import card_store
 from .services import config_files
 from .services import prompts as _prompts
 
@@ -146,23 +147,24 @@ class StorageContextMixin:
         return f"/api/personas/{key}/avatar"
 
     def write_persona(self, key: str, data: dict) -> dict:
-        """Validate + persist a persona YAML (configs/personas/<key>.yaml), then reload.
-        `key` is the filename stem; the caller is responsible for slug/dedup."""
+        """Validate + persist a persona to the relational store (personas table, configs/stories.db), then reload.
+        `key` is the record key (the old filename stem); the caller is responsible for slug/dedup."""
         from ..config.schema import Persona
         Persona(**{k: v for k, v in data.items() if k != "key"})  # validate (drops a stray 'key')
         self.persona_dir(create=True)
         payload = {k: v for k, v in data.items() if k in ("name", "description", "summary",
                                                           "appearance", "fields") and v not in (None, "")}
-        (self.persona_dir() / f"{key}.yaml").write_text(
-            yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        card_store.upsert_persona(self.root, key, payload)
+        # (the avatar PNG stays a file — see save_persona_avatar)
         self.reload_settings()
         return {"ok": True, "key": key}
 
     def delete_persona(self, key: str) -> bool:
-        """Remove a persona's YAML + avatar PNG, then reload. Returns whether anything was removed."""
+        """Remove a persona's DB record + avatar PNG, then reload. Returns whether anything was removed."""
         safe = re.sub(r"[^\w\-]+", "", key)
-        removed = False
-        for fn in (f"{safe}.yaml", f"{safe}.png"):
+        removed = safe in card_store.load_personas(self.root)
+        card_store.delete_persona(self.root, safe)   # no-op when the key is absent
+        for fn in (f"{safe}.png",):
             p = self.persona_dir() / fn
             if p.is_file():
                 p.unlink()
@@ -328,7 +330,7 @@ class StorageContextMixin:
         from ..server.services import story_store as SS
         char_dir = self.char_dir()
         char_dir.mkdir(parents=True, exist_ok=True)
-        taken = {p.stem for p in char_dir.glob("*.yaml")}
+        taken = set(card_store.load_characters(self.root))
         if story_key:
             # Runtime and image helpers historically address a character by
             # key alone. Keep Story-generated keys globally unique so a later
@@ -361,8 +363,8 @@ class StorageContextMixin:
         if story_key:
             SS.upsert_character(self.root, story_key, key, cdata)   # embedded (authoritative)
         else:
-            (char_dir / f"{key}.yaml").write_text(
-                yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            card_store.upsert_character(self.root, key, cdata)   # global library (DB)
+            # (the card JSON now lives in the relational store — no per-key YAML)
         if ref_from:
             ref = self.reference_path(ref_from)
             if ref and ref.is_file():
@@ -376,18 +378,19 @@ class StorageContextMixin:
         return key
 
     def write_character(self, cdata: dict, avatar_png: bytes | None) -> dict:
-        """Validate + persist a normalized character: one configs/characters/
-        <key>.yaml, the avatar PNG alongside (loader globs *.yaml, so the .png is
-        ignored by config loading), then reload settings so it's selectable."""
+        """Validate + persist a normalized character: one row in the relational store's
+        global_characters table (configs/stories.db), the avatar PNG alongside as a file,
+        then reload settings so it's selectable."""
         Character(**cdata)  # raises on a malformed card
         char_dir = self.char_dir()
         char_dir.mkdir(parents=True, exist_ok=True)
         base = re.sub(r"[^a-z0-9]+", "_", cdata["name"].lower()).strip("_") or "character"
         key, i = base, 2
-        while (char_dir / f"{key}.yaml").exists():
+        taken = set(card_store.load_characters(self.root))   # DB keys (legacy YAMLs fold in first)
+        while key in taken:
             key, i = f"{base}_{i}", i + 1
-        (char_dir / f"{key}.yaml").write_text(
-            yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        card_store.upsert_character(self.root, key, cdata)
+        # (the card JSON now lives in the relational store — the .png stays a file)
         if avatar_png and avatar_png.startswith(b"\x89PNG\r\n\x1a\n"):
             (char_dir / f"{key}.png").write_bytes(avatar_png)
         self.reload_settings()
@@ -397,7 +400,7 @@ class StorageContextMixin:
     def prune_orphan_characters(self) -> list[str]:
         """Auto-delete GENERATED characters that no longer belong to any story — their owning
         story was deleted, or they were never cast. Library / imported cards (not `_generated`)
-        are NEVER touched; they're independent. Removes the yaml + avatar/ref + portraits, like
+        are NEVER touched; they're independent. Removes the DB record + avatar/ref + portraits, like
         delete_character. Idempotent — safe to call after any story/cast change or at startup.
         Returns the keys removed."""
         import shutil
@@ -414,7 +417,8 @@ class StorageContextMixin:
             if has_story:
                 continue
             safe = re.sub(r"[^\w\-]+", "", k)
-            for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
+            card_store.delete_character(self.root, k)
+            for fn in (f"{safe}.png", f"{safe}.ref.png"):
                 fp = cdir / fn
                 if fp.is_file():
                     fp.unlink()
@@ -435,16 +439,9 @@ class StorageContextMixin:
         self._write_story_data(key, data)
         return f"/api/stories/{key}/bg/{loc}.png"
 
-    # ── Persistence routing ── A story is JSON-backed: one self-contained <key>.json file that
+    # ── Persistence routing ── A story lives in the relational store (story_store) and
     # embeds its characters (authoritative for them). A character not embedded in any story is a
-    # global YAML card. These helpers hide the split so read/write paths are store-agnostic.
-    # See loom/stories/records/store.py.
-    def _story_file(self, key: str):
-        # Kept for callers that still resolve a path (mostly the asset dirs + the migrator). The
-        # store is the source of truth now; this returns the JSON path if one lingers on disk.
-        from ..stories.records import store as SDB
-        p = SDB.story_json_path(self.story_dir(), key)   # folder form, legacy flat as fallback
-        return p if p.is_file() else None
+    # global card in the relational store (card_store). These helpers hide the split so read/write paths are store-agnostic.
 
     def _read_story_data(self, key: str) -> dict:
         from ..server.services import story_store as SS
@@ -524,9 +521,7 @@ class StorageContextMixin:
         owner = self._char_owner(key)
         if owner is not None:
             return SS.get_character(self.root, owner, key)
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = self.char_dir() / f"{safe}.yaml"
-        return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
+        return card_store.load_characters(self.root).get(key)
 
     def _read_story_character_data(self, story_key: str, key: str) -> dict | None:
         """Read a cast card from one explicit Story before considering its library source.
@@ -540,13 +535,11 @@ class StorageContextMixin:
         embedded = SS.get_character(self.root, story_key, key)
         if embedded is not None:
             return embedded
-        safe = re.sub(r"[^\w\-]+", "", key)
-        path = self.char_dir() / f"{safe}.yaml"
-        return (yaml.safe_load(path.read_text(encoding="utf-8")) or {}) if path.is_file() else None
+        return card_store.load_characters(self.root).get(key)
 
     def _write_character_data(self, key: str, cdata: dict) -> None:
         """Persist a character to its OWNING story (embedded in the relational store) or the
-        global YAML library."""
+        global library (global_characters table)."""
         from ..config.schema import Character
         from ..server.services import story_store as SS
         Character(**cdata)   # validate FIRST
@@ -555,8 +548,8 @@ class StorageContextMixin:
             SS.upsert_character(self.root, owner, key, cdata)
         else:
             safe = re.sub(r"[^\w\-]+", "", key)
-            (self.char_dir() / f"{safe}.yaml").write_text(
-                yaml.safe_dump(cdata, allow_unicode=True, sort_keys=False), encoding="utf-8")
+            card_store.upsert_character(self.root, safe, cdata)
+            # (the card JSON now lives in the relational store — no per-key YAML)
         self.reload_settings()
 
     def _write_story_character_data(self, story_key: str, key: str, cdata: dict) -> None:

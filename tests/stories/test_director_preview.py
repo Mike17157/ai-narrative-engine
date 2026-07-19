@@ -89,6 +89,11 @@ def _isolated_client():
     root = Path(tempfile.mkdtemp(prefix="loom-director-preview-"))
     shutil.copytree(Path("configs"), root / "configs")
     (root / "configs" / "stories.db").unlink(missing_ok=True)
+    # The cast below references these two library cards; seed them into the fresh
+    # relational store (the global library lives in configs/stories.db now).
+    from loom.server.services import card_store
+    card_store.upsert_character(root, "player", {"name": "Player"})
+    card_store.upsert_character(root, "shuri", {"name": "Shuri"})
     client = TestClient(create_app(root))
     try:
         yield client

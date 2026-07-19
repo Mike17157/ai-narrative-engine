@@ -593,9 +593,10 @@ def register(app, ctx):
     @app.get("/api/stories")
     def list_stories() -> list:
         out = []
+        from ...server.services import story_store as _SS
+        updated = _SS.story_updated_map(ctx.root)
         for k, st in ctx.base_settings.stories.items():
-            f = ctx._story_file(k)                 # folder form or legacy flat
-            mtime = f.stat().st_mtime if f else 0.0
+            mtime = updated.get(k, 0.0)
             out.append({"key": k, "name": st.name, "premise": st.premise, "tone": st.tone,
                         "themes": st.themes, "locations": len(st.locations), "start": st.start,
                         "cast": [m.character for m in st.cast], "_mtime": mtime})
@@ -3921,7 +3922,6 @@ Respond to the latest author turn."""
     def delete_story(key: str):
         import shutil
         from ...server.services import story_store as _SS
-        from ..records.store import delete_db
         safe = re.sub(r"[^\w\-]+", "", key)
         if not _SS.story_exists(ctx.root, safe):
             # fall back to legacy on-disk forms (pre-migration yaml/json/folder)
@@ -3938,7 +3938,8 @@ Respond to the latest author turn."""
         folder = ctx.story_dir() / safe
         if yaml_p.is_file():
             yaml_p.unlink()
-        delete_db(legacy_json)                           # legacy flat (+ any <safe>.db)
+        if legacy_json.is_file():
+            legacy_json.unlink()                         # legacy flat form
         shutil.rmtree(folder, ignore_errors=True)        # folder form: story's embedded chars' assets
         ctx.reload_settings()
         removed = ctx.prune_orphan_characters()  # cascade: any pre-migration global-pool leftovers
@@ -4043,6 +4044,7 @@ Respond to the latest author turn."""
                 cast.append({"character": nk, "primary": False}); created.append(nk)
             ctx.update_story_fields(key, {"cast": cast})   # DB-backed or YAML — routed + validated
             keep = {source, *created}
+            from ...server.services import card_store as _CS, story_store as _SS
             cdir = ctx.char_dir()
             # Sweep EVERY character bound to THIS story that isn't part of the new cast — not just the
             # previous st.cast — so duplicate/orphan members left by earlier or cancelled regenerations
@@ -4051,6 +4053,8 @@ Respond to the latest author turn."""
                 if ck in keep or (ch.fields or {}).get("story") != key:
                     continue
                 safe = re.sub(r"[^\w\-]+", "", ck)
+                _SS.delete_character(ctx.root, key, ck)   # embedded record, if any
+                _CS.delete_character(ctx.root, safe)      # global-pool record (was the yaml)
                 for fn in (f"{safe}.yaml", f"{safe}.png", f"{safe}.ref.png"):
                     f = cdir / fn
                     if f.is_file():

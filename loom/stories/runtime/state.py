@@ -114,7 +114,7 @@ def from_session(sess: dict | None) -> dict:
         # document root and blur the two state layers).
         return document_normalize(st)
 
-    st = empty_state()
+    st = document_empty_state()
     for fld, level in _LEGACY_MAP.items():
         v = sess.get(fld)
         if v not in (None, {}, []):
@@ -229,6 +229,10 @@ class _WorldCtx:
     # Geography hook (loom/stories/geography.py): (ws, name, target) → allow? Blocks
     # implausible off-screen teleports at the ENGINE level (prompt rules alone leak).
     validate_move: _Callable | None = None
+    # Durable beat archive: when set (a list), every line appended to the episodic log is
+    # ALSO collected here, so the caller can persist the full history (the session_beats
+    # table) — the in-doc log is capped at _LOG_CAP and would otherwise forget.
+    beat_sink: list | None = None
 
 
 def world_op(name: str) -> _Callable:
@@ -323,15 +327,25 @@ def _coerce_scalar(v: str):
 
 # ── Apply deltas (with lorebook write-back) ──────────────────────────────────────
 
+def _beat(ws: dict, ctx: "_WorldCtx", line: str) -> None:
+    """Append one line to the episodic log — and to the durable beat sink when the
+    caller collects one (the in-doc log is capped; the archive is not)."""
+    ws["log"].append(line)
+    if ctx is not None and ctx.beat_sink is not None:
+        ctx.beat_sink.append(line)
+
+
 def apply_deltas(ws: dict, deltas: list[dict], *, root: Path | None = None,
-                 scope: str | None = None, validate_move=None) -> dict:
+                 scope: str | None = None, validate_move=None,
+                 beat_sink: list | None = None) -> dict:
     """Apply a list of delta ops to *ws* (mutates + returns) by DISPATCHING each to its
     registered handler in `WORLD_OPS`. `fact` ops are written back into the lorebook
     *scope* (provenance source='auto') so they become retrievable canon. `log` ops append
     to episodic memory. Unknown ops are ignored. `validate_move` (geography.py) gates
-    `move` ops — implausible off-screen teleports are dropped."""
+    `move` ops — implausible off-screen teleports are dropped. Set `beat_sink` (a list)
+    to also collect every appended log line for durable archiving (session_beats)."""
     ws = normalize(ws)
-    ctx = _WorldCtx(root=root, scope=scope, validate_move=validate_move)
+    ctx = _WorldCtx(root=root, scope=scope, validate_move=validate_move, beat_sink=beat_sink)
     for d in (deltas or []):
         if not isinstance(d, dict):
             continue
@@ -372,7 +386,7 @@ def _op_move(ws, d, ctx):
     if ctx.validate_move is not None and not ctx.validate_move(ws, d["name"], d["value"]):
         # Implausible off-screen teleport → drop the move, note it in the episodic log so
         # the narrator (which reads the log) knows the world didn't actually change.
-        ws["log"].append(f"({d['name']} could not have reached {d['value']} yet)")
+        _beat(ws, ctx, f"({d['name']} could not have reached {d['value']} yet)")
         ws["log"][:] = ws["log"][-_LOG_CAP:]
         return
     e = _entity(ws, d["name"])
@@ -416,7 +430,7 @@ def _op_entity(ws, d, ctx):
 @world_op("log")
 def _op_log(ws, d, ctx):
     if d["value"]:
-        ws["log"].append(d["value"])
+        _beat(ws, ctx, d["value"])
 
 
 # ── Continuity ledger ops (the harness plan's Phase 3) ───────────────────────────
@@ -470,7 +484,7 @@ def _op_payoff(ws, d, ctx):
             best, score = p, s
     if best is not None and score >= 2:
         best["status"] = "paid"
-        ws["log"].append(f"(paid off: {best['setup'][:70]})")
+        _beat(ws, ctx, f"(paid off: {best['setup'][:70]})")
 
 
 @world_op("fact")
