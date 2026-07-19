@@ -49,5 +49,13 @@ configs/genesis_runs/
 configs/stories/drafts/
 configs/story_sessions/
 
+# Session backups and bench artifacts (regenerable outputs, not source).
+# The bench scenario stays tracked; only its reports are ignored.
+configs/_backups/
+configs/bench_*.json
+!configs/bench_first_day.json
+configs/bench_transcripts.md
+configs/last_school_arc.html
+
 # Third-party trainer clone
 trainer/
