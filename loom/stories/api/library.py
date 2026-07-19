@@ -3945,6 +3945,31 @@ Respond to the latest author turn."""
         removed = ctx.prune_orphan_characters()  # cascade: any pre-migration global-pool leftovers
         return {"ok": True, "removed_characters": removed}
 
+    @app.get("/api/stories/{key}/export")
+    def export_story(key: str):
+        """Download the whole story as ONE portable bundle: authored aggregate + copackaged
+        library cards + referenced personas + every session (beats, play cards, history) +
+        image assets. Import anywhere with POST /api/stories/import."""
+        from ...server.services import story_bundle as _SB
+        safe = re.sub(r"[^\w\-]+", "", key)
+        if not _SS.story_exists(ctx.root, safe):
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        bundle = _SB.export_story(ctx.root, safe)
+        return JSONResponse(bundle, headers={
+            "Content-Disposition": f'attachment; filename="{safe}.story.json"'})
+
+    @app.post("/api/stories/import")
+    async def import_story(body: dict):
+        """Restore a bundle produced by the export route. Never clobbers: an existing story
+        key is suffixed (_2, _3…) and session/card/persona collisions are remapped."""
+        from ...server.services import story_bundle as _SB
+        try:
+            summary = _SB.import_story(ctx.root, body)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        ctx.reload_settings()
+        return summary
+
     @app.post("/api/stories/{key}/regenerate-cast")
     async def regenerate_cast(key: str, body: dict):
         """DESTRUCTIVE: re-derive the whole cast from the story's storyboard, STREAMED live as a
