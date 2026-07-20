@@ -211,13 +211,23 @@ TEXT_ROLES_DEFAULT = {"narrator": "", "scribe": "", "fallback": ""}
 
 
 def load_text_roles(root: Path) -> dict:
+    roles = None
     path = root / "configs" / "text_roles.json"
     if path.is_file():
         try:
-            return {**TEXT_ROLES_DEFAULT, **(json.loads(path.read_text(encoding="utf-8")) or {})}
+            roles = {**TEXT_ROLES_DEFAULT, **(json.loads(path.read_text(encoding="utf-8")) or {})}
         except (ValueError, OSError):
-            return dict(TEXT_ROLES_DEFAULT)
-    return dict(TEXT_ROLES_DEFAULT)
+            roles = dict(TEXT_ROLES_DEFAULT)
+    if roles is None:
+        roles = dict(TEXT_ROLES_DEFAULT)
+    # Per-process overrides for A/B bench runs: LOOM_TEXT_ROLE__NARRATOR=story_glm52 etc.
+    # let two parallel benches ride different narrators without touching the shared file.
+    import os
+    for role in list(roles):
+        override = os.environ.get(f"LOOM_TEXT_ROLE__{role.upper()}")
+        if override:
+            roles[role] = override
+    return roles
 
 
 def save_text_roles(root: Path, data: dict) -> dict:
