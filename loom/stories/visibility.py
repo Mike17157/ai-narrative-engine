@@ -239,6 +239,18 @@ class ModelVisibilityImageProvider:
             **kwargs,
         )
 
+    def __deepcopy__(self, memo):
+        """Keep batch image rendering compatible with the redaction wrapper.
+
+        ``copy.deepcopy`` otherwise asks ``__getattr__`` for ``__deepcopy__``;
+        forwarding that lookup to the wrapped provider re-enters the wrapper
+        indefinitely. Batch rendering deliberately clones each provider so
+        concurrent Comfy jobs cannot mutate the same workflow graph.
+        """
+        clone = type(self)(deepcopy(self._provider, memo))
+        memo[id(self)] = clone
+        return clone
+
     def __getattr__(self, name: str):
         return getattr(self._provider, name)
 

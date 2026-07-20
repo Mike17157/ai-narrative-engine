@@ -2,6 +2,35 @@
   "active": "none",
   "presets": [
     {
+      "id": "krea2_manga",
+      "name": "Krea2 Manga Mimic",
+      "description": "Crisp glossy manga key-visual finish from the approved Krea2 mimic sweep.",
+      "family": "krea2",
+      "category": "Manga",
+      "base_checkpoint": "",
+      "loras": [
+        { "name": "AquarelleKrea2.safetensors", "weight": 1.0 }
+      ],
+      "enabled": true,
+      "builtin": true,
+      "order": 10
+    },
+    {
+      "id": "krea2_manga_body",
+      "name": "Krea2 Manga Mimic — subtle body",
+      "description": "Approved glossy manga finish plus the tested body LoRA; only for petite, athletic, or slender casts.",
+      "family": "krea2",
+      "category": "Manga",
+      "base_checkpoint": "",
+      "loras": [
+        { "name": "AquarelleKrea2.safetensors", "weight": 1.0 },
+        { "name": "sagging-krea2-v0.1.safetensors", "weight": 1.4 }
+      ],
+      "enabled": true,
+      "builtin": true,
+      "order": 11
+    },
+    {
       "id": "none",
       "name": "None",
       "description": "No preset — the base model as-is.",

@@ -962,7 +962,8 @@ def register(app, ctx):
                                  for i, text in enumerate(world["transcript"])
                                  if (text or "").strip()]}]
         prologue = ((story.fields or {}).get("prologue") or {}).get("sections") or []
-        return {"prologue": prologue, "scenes": scenes}
+        return {"prologue": prologue, "scenes": scenes,
+                "manga_plan": world.get("manga_plan") or {"panels": []}}
 
     @app.post("/api/stories/{key}/manuscript/bake")
     def story_manuscript_bake(key: str, body: dict):
@@ -1086,6 +1087,184 @@ OUTPUT
         world["baked_story"] = chapters
         save_session(ctx.root, sid, {**session, "state": state.with_world(session.get("state"), world)})
         return {"images": images, "chapters": chapters}
+
+    @app.post("/api/stories/{key}/manuscript/manga-plan")
+    def story_manuscript_manga_plan(key: str, body: dict):
+        """Turn baked prose into one reviewable, ensemble panel plan per chapter.
+
+        Planning is deliberately separate from rendering: the author can inspect the
+        camera/cast choices before the local GPU starts, and Krea2 receives visual
+        direction rather than an unbounded chapter dump.
+        """
+        from ...server.services.story_sessions import load_session, save_session
+        from ..runtime import state
+        from ..manga import MANGA_PLAN_SCHEMA, MANGA_PLAN_SYSTEM, normalize_panel_plan
+
+        story = ctx.base_settings.stories.get(key)
+        if story is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        session = load_session(ctx.root, sid) or {}
+        world = state.world_of(session.get("state"))
+        chapters = world.get("baked_story") or []
+        if not chapters:
+            return JSONResponse({"error": "bake the manuscript before planning manga panels"}, status_code=400)
+
+        cast: dict[str, dict[str, str]] = {}
+        for member in story.cast:
+            ckey = member.character
+            record = ctx._read_story_character_data(key, ckey) or {}
+            fields = record.get("fields") or {}
+            cast[ckey] = {"name": str(record.get("name") or ckey),
+                          "appearance": str(fields.get("appearance") or "")}
+        if len(cast) < 2:
+            return JSONResponse({"error": "manga panels require at least two story cast members"}, status_code=400)
+
+        provider = ctx.text_provider_for(body.get("plan_model") or "story_deepseek_v4p",
+                                         {"reasoning_effort": "low"})
+        if provider is None:
+            return JSONResponse({"error": "no manga planning model configured"}, status_code=400)
+        cast_context = "\n".join(
+            f"- KEY: {ckey} | NAME: {member['name']} | APPEARANCE: {member['appearance'][:900]}"
+            for ckey, member in cast.items()
+        )
+        chapter_context = "\n\n".join(
+            f"CHAPTER {index}\nTITLE: {chapter.get('title', '')}\nPROSE:\n{chapter.get('text', '')[:5000]}"
+            for index, chapter in enumerate(chapters)
+        )
+        try:
+            raw = (provider.generate_text(
+                system=MANGA_PLAN_SYSTEM,
+                prompt=("CAST — use the exact KEY values in `characters`:\n" + cast_context +
+                        "\n\nCHAPTERS — use their zero-based CHAPTER number in `chapter`:\n" + chapter_context),
+                emits=MANGA_PLAN_SCHEMA,
+            ).data) or {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"manga planning failed: {exc}"}, status_code=502)
+        panels = normalize_panel_plan(raw, chapters=chapters, cast=cast)
+        if len(panels) != len(chapters):
+            return JSONResponse({"error": "the planner did not produce one valid multi-character panel for every chapter"},
+                                status_code=502)
+        plan = {"panels": panels}
+        world["manga_plan"] = plan
+        save_session(ctx.root, sid, {**session, "state": state.with_world(session.get("state"), world)})
+        return {"plan": plan}
+
+    @app.post("/api/stories/{key}/manuscript/manga-render")
+    def story_manuscript_manga_render(key: str, body: dict):
+        """Render one coherent two-character manga panel with pure Krea2 text-to-image."""
+        from ...server.services.batch_images import render_batch
+        from ...server.services.story_sessions import load_session, save_session
+        from ..runtime import state
+        from ..manga import build_composed_t2i_prompt
+
+        story = ctx.base_settings.stories.get(key)
+        if story is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        session = load_session(ctx.root, sid) or {}
+        world = state.world_of(session.get("state"))
+        plan = world.get("manga_plan") or {}
+        panels = [panel for panel in plan.get("panels") or [] if isinstance(panel, dict)]
+        if not panels:
+            return JSONResponse({"error": "plan the manga panels before rendering"}, status_code=400)
+
+        cast: dict[str, dict[str, str]] = {}
+        for member in story.cast:
+            ckey = member.character
+            record = ctx._read_story_character_data(key, ckey) or {}
+            fields = record.get("fields") or {}
+            cast[ckey] = {"name": str(record.get("name") or ckey),
+                          "appearance": str(fields.get("appearance") or "")}
+        style = ctx.art_style(story_key=key)
+        outputs: dict[str, str] = {}
+        outdir = ctx.story_bg_dir(key)
+        outdir.mkdir(parents=True, exist_ok=True)
+        for index, panel in enumerate(panels):
+            if len(panel.get("characters") or []) != 2:
+                return JSONResponse({"error": "guided manga panels require exactly two characters"}, status_code=400)
+            provider, model_id = ctx.role_image_provider(
+                "scene", body.get("image_model") or "krea2_turbo_scene", image_preset="krea2_manga")
+            if provider is None:
+                return JSONResponse({"error": model_id}, status_code=400)
+            # Pure text-to-image: no plate, pose guide, initial image, or composited layers.
+            # The layout becomes explicit left/right character grammar in one scene brief.
+            final_png = render_batch(
+                provider,
+                [{"prompt": build_composed_t2i_prompt(panel, cast, style=style)}],
+                out_prefix_template=ctx.output_prefix_for(model_id, "manga_t2i", key),
+            )[0]
+            if not final_png:
+                return JSONResponse({"error": f"could not render guided panel for {panel.get('id')}"}, status_code=502)
+
+            filename = f"manga_chapter_{int(panel.get('chapter', index)) + 1}.png"
+            (outdir / filename).write_bytes(final_png)
+            url = f"/api/stories/{key}/bg/{filename}"
+            panel["image"] = url
+            if panel.get("body_lora"):
+                panel["body_lora_note"] = "withheld for this multi-character composition pass; global anatomy LoRA duplicated cast members in validation"
+            panel["render_pipeline"] = "single-pass Krea2 text-to-image with explicit two-character composition"
+            outputs[str(panel.get("id") or index)] = url
+        world["manga_plan"] = {"panels": panels}
+        save_session(ctx.root, sid, {**session, "state": state.with_world(session.get("state"), world)})
+        return {"plan": world["manga_plan"], "images": outputs}
+
+    @app.post("/api/stories/{key}/manuscript/agent/turn")
+    def story_manuscript_agent_turn(key: str, body: dict):
+        """One chat turn with the manga production agent.
+
+        The agent proposes at most one pipeline action per turn; the user
+        confirms it in the UI, and the frontend runs the matching endpoint.
+        """
+        from ...server.services.story_sessions import load_session, save_session
+        from ..runtime import state
+        from ..manga_agent import (MANGA_AGENT_SCHEMA, MANGA_AGENT_SYSTEM,
+                                   bootstrap_turn, normalize_agent_turn, structure_digest)
+
+        story = ctx.base_settings.stories.get(key)
+        if story is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        sid = body.get("sid") or f"play-{key}"
+        session = load_session(ctx.root, sid) or {}
+        world = state.world_of(session.get("state"))
+        digest = structure_digest(story.fields or {}, world)
+        history = world.get("manga_agent_chat") or []
+
+        message = str(body.get("message") or "").strip()
+        if not message:
+            return {**bootstrap_turn(digest), "structure": digest, "history": history}
+
+        provider = ctx.text_provider_for(body.get("model") or "story_deepseek_v4p",
+                                         {"reasoning_effort": "low"})
+        if provider is None:
+            return JSONResponse({"error": "no agent model configured"}, status_code=400)
+
+        import json
+        recent = "\n".join(
+            f"{'USER' if entry.get('role') == 'user' else 'ASSISTANT'}: {entry.get('text', '')}"
+            for entry in history[-12:] if isinstance(entry, dict)
+        )
+        prompt = ("STRUCTURE DIGEST (JSON):\n" + json.dumps(digest, ensure_ascii=False) +
+                  ("\n\nRECENT CONVERSATION:\n" + recent if recent else "") +
+                  "\n\nUSER: " + message)
+        try:
+            raw = (provider.generate_text(
+                system=MANGA_AGENT_SYSTEM,
+                prompt=prompt,
+                emits=MANGA_AGENT_SCHEMA,
+            ).data) or {}
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"agent turn failed: {exc}"}, status_code=502)
+
+        turn = normalize_agent_turn(raw, digest)
+        history = (history + [{"role": "user", "text": message},
+                              {"role": "assistant", "text": turn["reply"]}])[-40:]
+        world["manga_agent_chat"] = history
+        save_session(ctx.root, sid, {**session, "state": state.with_world(session.get("state"), world)})
+        return {**turn, "structure": digest, "history": history}
 
     @app.post("/api/stories/{key}/manuscript/edit")
     def story_manuscript_edit(key: str, body: dict):

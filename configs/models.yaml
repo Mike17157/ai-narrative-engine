@@ -219,6 +219,16 @@ models:
         positive: { node: "4", field: "text" }
       output_node: "13"
       timeout_s: 600
+  krea2_turbo_region:           # one-pass spatial conditioning for ensemble manga panels
+    provider: comfyui
+    kind: image
+    options:
+      base_url: http://127.0.0.1:8188
+      workflow: ./workflows/krea2_turbo_region_api.json
+      inputs:
+        positive: { node: "4", field: "text" }
+      output_node: "13"
+      timeout_s: 600
   krea2_turbo_img2img:          # init image via LoadImage, denoise 0.6
     provider: comfyui
     kind: image

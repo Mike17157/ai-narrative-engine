@@ -277,6 +277,18 @@ def test_image_prompts_use_the_same_visibility_boundary():
     assert raw.calls[0]["latent"] == b"not-text"
 
 
+def test_visibility_wrapped_image_provider_can_be_cloned_for_batch_rendering():
+    from copy import deepcopy
+
+    raw = _CaptureImageProvider()
+    provider = model_visibility_provider(raw)
+    clone = deepcopy(provider)
+
+    assert isinstance(clone, ModelVisibilityImageProvider)
+    assert clone is not provider
+    assert clone._provider is not raw
+
+
 def test_story_runtime_never_sends_hidden_card_or_player_text_to_any_model_pass():
     root = _root()
     story = _story()

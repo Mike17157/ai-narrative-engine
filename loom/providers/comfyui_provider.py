@@ -54,11 +54,13 @@ class ComfyUIProvider:
 
     def _inject(self, prompt: str, negative_prompt: str | None = None, out_prefix: str | None = None,
                 latent: tuple[int, int] | None = None,
-                flags: dict[str, bool] | None = None) -> tuple[dict, str | None]:
+                flags: dict[str, bool] | None = None,
+                template_values: dict[str, str] | None = None) -> tuple[dict, str | None]:
         # Pure graph prep (prompt token, out_prefix, latent, negative, trigger suffix, BREAK
         # regions) lives in loom/providers/_workflow.py.
         graph = _workflow.inject(self.workflow, self.inputs, prompt, negative_prompt, out_prefix,
-                                 latent, flags, prompt_suffix=self.prompt_suffix)
+                                 latent, flags, prompt_suffix=self.prompt_suffix,
+                                 template_values=template_values)
         # Same-OS ComfyUI: model names must use the host separator (backslash on Windows),
         # else nested paths injected with '/' fail loader validation ("Value not in list").
         _workflow.localize_model_paths(graph)
@@ -91,6 +93,7 @@ class ComfyUIProvider:
         out_prefix: str | None = None,
         latent: tuple[int, int] | None = None,
         flags: dict[str, bool] | None = None,
+        template_values: dict[str, str] | None = None,
         cancel: Callable[[], bool] | None = None,
     ) -> ImageResult:
         # Make sure ComfyUI is reachable — connect to a running instance, or
@@ -99,7 +102,8 @@ class ComfyUIProvider:
 
         get_server(self.base_url).ensure_up()
 
-        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent, flags or self.flags)
+        graph, out_node = self._inject(prompt, negative_prompt, out_prefix, latent, flags or self.flags,
+                                       template_values=template_values)
         with httpx.Client(base_url=self.base_url, timeout=60) as client:
             if init_image:
                 self._set_init_image(client, graph, init_image)

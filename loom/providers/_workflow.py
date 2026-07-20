@@ -47,6 +47,23 @@ def substitute_token(graph: dict, value: str) -> bool:
     return found
 
 
+def substitute_named_tokens(graph: dict, values: dict[str, str] | None) -> None:
+    """Replace additional explicit workflow tokens (for example regional prompts).
+
+    Unlike ``{{image}}``, these are never broadcast blindly: every region has its own
+    conditioning node and therefore gets only its own brief.
+    """
+    for token, value in (values or {}).items():
+        marker = "{{" + str(token).strip("{} ") + "}}"
+        for node in graph.values():
+            ins = node.get("inputs") if isinstance(node, dict) else None
+            if not isinstance(ins, dict):
+                continue
+            for key, current in ins.items():
+                if isinstance(current, str) and marker in current:
+                    ins[key] = current.replace(marker, str(value or ""))
+
+
 def apply_out_prefix(graph: dict, out_prefix: str) -> None:
     """Point every SaveImage-family node at `out_prefix` (ComfyUI nests on '/'), so renders land
     under loom/<family>/<role>/<character>/. No-op if the graph has no such node."""
@@ -338,6 +355,7 @@ def inject(
     latent: tuple[int, int] | None = None,
     flags: dict[str, bool] | None = None,
     prompt_suffix: str | None = None,
+    template_values: dict[str, str] | None = None,
 ) -> dict:
     """Deep-copy `workflow` and return a prepared graph: prompt substituted, optional
     out_prefix/latent applied, negative set, LoRA trigger suffix appended, BREAK regions chained.
@@ -358,6 +376,7 @@ def inject(
         apply_latent(graph, latent)
 
     used_token = substitute_token(graph, prompt)
+    substitute_named_tokens(graph, template_values)
 
     # Negative still targets its designated node (not tokenised).
     if negative_prompt is not None:
