@@ -422,11 +422,21 @@ def record_observation(runtime: dict, *, text: str, player_input: str, present: 
         [str(k) for k in scenario_state["present"] if k]
         + [str(k) for k in present if k]
     ))
-    _scenario.record_turn(scenario_state, text, speaker="narrator", addressed="")
-    # A concise player action is a separate record: later per-character actor calls can
-    # distinguish what was said from how it was narrated without replaying global history.
+    # The PLAYER witnesses every turn — they are the story's one constant
+    # observer.  Stamp that witness onto the ledger entry itself (a shallow
+    # state copy shares the ``turns`` list, so the roster stays untouched)
+    # rather than into scenario_state["present"], where it would pollute
+    # roster/location projection.  Chronological order: the player's action
+    # first, then the narration it caused.
+    witnessed = dict(scenario_state)
+    witnessed["present"] = list(dict.fromkeys(
+        [str(k) for k in scenario_state["present"] if k] + ["player"]
+    ))
     if (player_input or "").strip():
-        _scenario.record_turn(scenario_state, player_input, speaker="player", addressed="")
+        # A concise player action is a separate record: later per-character actor calls can
+        # distinguish what was said from how it was narrated without replaying global history.
+        _scenario.record_turn(witnessed, player_input, speaker="player", addressed="")
+    _scenario.record_turn(witnessed, text, speaker="narrator", addressed="")
     runtime["scenario_state"] = scenario_state
     # The active scene has now been narrated at least once; later turns in the
     # same scene stay on the tighter mid-scene budget until a scene opens again.

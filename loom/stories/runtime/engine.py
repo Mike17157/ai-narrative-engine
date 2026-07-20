@@ -199,10 +199,14 @@ async def step_compile(ctx: StepContext[PlayState, PlayDeps, None]) -> dict:
         except ScenarioTransitionError as exc:
             s.error = f"scenario transition: {exc}"
             return {}
+    from . import state as _SE0
     s.tc = await _thread(build_turn_context, d.ctx, d.st, d.key, s.body, s.world_state,
                          story_scope=d.story_scope, thread_scope=d.thread_scope,
                          scenario=d.scenario, runtime_state=d.runtime_state,
-                         scenario_scene=scenario_scene)
+                         scenario_scene=scenario_scene,
+                         # The scene-keyed loader's persisted cache (State doc `ctx` level) —
+                         # read-only here; the updated copy returns in tc and is saved by apply.
+                         scene_cache=_SE0.get_level(d.sess.get("state"), "ctx", {}))
     # Compiled stories intentionally skip the free-form StoryMaster scene
     # planner.  Give their consequence pass one deterministic *public* scene
     # anchor instead: it establishes a playable pressure but cannot reveal a
@@ -645,6 +649,10 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
             saved_state = persist_runtime(d.sess.get("state"), world_state, d.runtime_state)
         else:
             saved_state = _SE.with_world(d.sess.get("state"), world_state)
+        # The scene-keyed loader's cache travels with the save file (State doc `ctx` level).
+        _scn = (s.tc or {}).get("scene_cache")
+        if isinstance(_scn, dict):
+            saved_state = _SE.set_level(saved_state, "ctx", _scn)
         save_session(appctx.root, d.sid, {**d.sess, "state": saved_state}, story_key=d.key or "")
     except Exception:  # noqa: BLE001 — a state-write failure must not drop the turn
         pass
@@ -670,7 +678,11 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
                     pass
                 save_session(appctx.root, d.sid, {
                     **d.sess,
-                    "state": persist_runtime(d.sess.get("state"), world_state, d.runtime_state),
+                    # Loop reset also clears the scene-context cache: a fresh loop cannot
+                    # inherit last loop's loaded scene through this side channel either.
+                    "state": _SE.set_level(
+                        persist_runtime(d.sess.get("state"), world_state, d.runtime_state),
+                        "ctx", {}),
                 })
             else:
                 consolidation = _ST.consolidate_on_rest(appctx, key, world_state, status)
@@ -693,6 +705,8 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
                 saved_state = persist_runtime(d.sess.get("state"), world_state, d.runtime_state)
             else:
                 saved_state = _SE.with_world(d.sess.get("state"), world_state)
+            # A new day opens fresh scenes — the scene-context cache turns over with it.
+            saved_state = _SE.set_level(saved_state, "ctx", {})
             save_session(appctx.root, d.sid, {**d.sess, "state": saved_state}, story_key=d.key or "")
 
     return {
