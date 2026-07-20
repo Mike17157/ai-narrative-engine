@@ -9,7 +9,7 @@
     "params": {
       "temperature": 0.35,
       "reasoning_effort": "low",
-      "max_tokens": 4096,
+      "max_tokens": 12288,
       "request_timeout_s": 60,
       "max_retries": 0
     }

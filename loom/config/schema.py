@@ -17,6 +17,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from ..prose import tighten
+
 
 # --------------------------------------------------------------------------- #
 # Models (named provider instances)
@@ -360,9 +362,10 @@ class Relationship(BaseModel):
     # ── A bond READS BOTH WAYS — one edge, two sides. `dynamic`/`stance` = how SOURCE regards target;
     # `target_dynamic`/`target_stance` = how TARGET regards source. The two CAN DIFFER (unrequited love,
     # one trusts while the other exploits). Empty target_* → symmetric (mirror the source side).
-    dynamic: str = ""     # 2-3 WORDS: how SOURCE feels toward target right now; drift edits this
+    dynamic: str = ""     # ONE observable daylight habit of SOURCE toward TARGET, one short
+                          # complete sentence ("steals her pens, denies it badly"); drift edits this
     stance: str = "neutral"   # categorical, colour only (source side): devoted/warm/neutral/strained/hostile
-    target_dynamic: str = ""  # 2-3 WORDS: how TARGET feels toward source ("" → mirror source)
+    target_dynamic: str = ""  # same shape, TARGET toward SOURCE ("" → mirror source)
     target_stance: str = ""   # categorical (target side); "" → mirror source's stance
     note: str = ""        # optional extra history
     # ── The POTENTIAL — the story SEED (relationship-first genesis): what could GROW between them.
@@ -386,12 +389,14 @@ class Relationship(BaseModel):
                            else "neutral" if v == 0 else "warm" if v == 1 else "devoted")
         if not self.dynamic:
             self.dynamic = self.note or self.nature
-        self.dynamic = " ".join(self.dynamic.split()[:6])   # keep it to 2-3 words (backstop)
+        # Sentence-safe budget (the old 6-word slice produced mid-clause fragments like
+        # "deflects Rinka's pitches with a new" — the narrator read those every turn).
+        self.dynamic = tighten(self.dynamic, 30)
         # The reverse side reads both ways: validate its stance, trim its phrase. Empty = mirror source.
         if self.target_stance and self.target_stance not in _STANCES:
             self.target_stance = "neutral"
         if self.target_dynamic:
-            self.target_dynamic = " ".join(self.target_dynamic.split()[:6])
+            self.target_dynamic = tighten(self.target_dynamic, 30)
         return self
 
 

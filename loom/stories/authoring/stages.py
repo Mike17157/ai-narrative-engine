@@ -8,9 +8,10 @@ from __future__ import annotations
 STANCES = ("devoted", "warm", "neutral", "strained", "hostile")
 
 
-def short(s, n: int = 6) -> str:
-    """Limit relationship dynamics to a compact phrase."""
-    return " ".join(str(s or "").split()[:n])
+def short(s, n: int = 30) -> str:
+    """Budget a relationship dynamic to one tight unit — SENTENCE-safe (the old 6-word
+    slice stored mid-clause fragments like "deflects Rinka's pitches with a new")."""
+    return tighten(str(s or ""), n)
 
 
 def character(ctx, body: dict):
@@ -66,6 +67,8 @@ def as_agent(ctx, agent_id: str):
 
 from dataclasses import dataclass, field
 from typing import Callable
+
+from ...prose import tighten
 
 
 @dataclass

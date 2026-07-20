@@ -43,6 +43,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from ...prose import tighten
+
 
 @dataclass
 class ScriptDef:
@@ -447,9 +449,9 @@ def set_relationship(doc, *, _id, source, target, nature="", dynamic="", stance=
                "dynamic": "", "stance": "neutral", "note": "", "potential": "", "trajectory": ""}
         rels.append(cur)
     if dynamic:
-        dynamic = " ".join(str(dynamic).split()[:6])   # 2-3 words; backstop a sentence
+        dynamic = tighten(str(dynamic), 30)   # one tight sentence; never a mid-clause slice
     if target_dynamic:
-        target_dynamic = " ".join(str(target_dynamic).split()[:6])
+        target_dynamic = tighten(str(target_dynamic), 30)
     for k, v in (("nature", nature), ("dynamic", dynamic), ("note", note),
                  ("potential", potential), ("trajectory", trajectory),
                  ("target_dynamic", target_dynamic)):

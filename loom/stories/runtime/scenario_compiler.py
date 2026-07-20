@@ -135,6 +135,12 @@ def compile_authored_scenario(story: dict | Any) -> dict[str, Any]:
     """
     card = _story_data(story)
     issues: list[dict[str, str]] = []
+    # Prose-units lint: every narrator-facing text field must read as COMPLETE units,
+    # not fragments (warning-level — readiness is structural, but the author sees every cut).
+    from ...prose import lint_story_texts
+    for _li in lint_story_texts(card):
+        _issue(issues, str(_li["code"]), str(_li["severity"]), str(_li["path"]),
+               str(_li["message"]), str(_li["fix"]))
     fields = _mapping(card.get("fields"))
     world = _mapping(card.get("world"))
     plan = _mapping(fields.get("first_day_plan"))

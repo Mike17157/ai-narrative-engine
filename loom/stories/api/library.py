@@ -1198,8 +1198,11 @@ Day One is a flexible set of possible playable encounters, not a list of general
                                 status_code=400)
         # One bounded card-development pass shares the named Story Agent with
         # the interview/organizer/reviewer.  A deliberate body.model override
-        # remains a hard override for experiments.
-        provider, model_route = ctx.story_agent_provider(body)
+        # remains a hard override for experiments.  The develop proposal is the
+        # largest single structured output in the system — give it real headroom
+        # so a first-day plan can never truncate mid-record (fragments are the
+        # bug class this data layer exists to prevent).
+        provider, model_route = ctx.story_agent_provider(body, params={"max_tokens": 16384})
         if provider is None:
             return JSONResponse({"error": model_route.get("error") or "no Story Agent model configured",
                                  "model_route": model_route}, status_code=400)
@@ -3297,6 +3300,9 @@ Respond to the latest author turn."""
             "- potential = a present-tense hidden FACT (who knows what, who is really what, what "
             "actually happened between them). NOT a prediction.\n"
             "- trajectory = the prediction: from → to when the hidden fact surfaces.\n"
+            "- EVERY prose field is a COMPLETE UNIT: tight declarative sentences with terminal "
+            "punctuation, each under 25 words. Never a fragment, never a clause that trails off. "
+            "If a thought runs long, drop the sentence — never cut one short.\n"
             "The best undercurrents make the innocent surface RE-READ as something else entirely "
             "once known. Asymmetry is good: the two sides may misread each other. Not every bond is "
             "dark. Propose only bonds that matter; skip pairs with nothing real between them.")
@@ -3314,11 +3320,16 @@ Respond to the latest author turn."""
                 if effort == "none":
                     return JSONResponse({"error": f"weave failed: {exc}"}, status_code=500)
         bonds = []
+        from ...prose import tighten as _ptighten
         for b in out.get("bonds") or []:
             s, t = b.get("source"), b.get("target")
             if not s or not t or s == t or (s, t) in existing:
                 continue
             existing.add((s, t)); existing.add((t, s))   # dedupe within the proposal too
+            # Sentence-safe budgeting at the gate: a fragment never reaches the work queue.
+            for _f in ("dynamic", "target_dynamic", "potential", "trajectory", "note"):
+                if isinstance(b.get(_f), str):
+                    b[_f] = _ptighten(b[_f], 30)
             bonds.append({"id": f"r-{s}-{t}", **b})
         if bonds:   # pipe into the work queue: proposals survive navigation until reviewed
             from ..records.cards import set_pending

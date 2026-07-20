@@ -234,6 +234,7 @@ Return a proposal with these principles:
 - When referring to an existing Day One event id, never rewrite its scene. You may only supply a missing public `evidence` trace or blank `knowledge` entries; leave every other field empty in that proposal item.
 - If this is a loop story, make its policy executable: trigger, restart, memory rules, and what resets. If it is not a loop story, leave loop fields empty.
 - Empty strings and empty lists mean no proposal for that field. Do not add generic filler or overwrite a fact just because it could be phrased better.
+- PROSE DISCIPLINE, for EVERY text field: tight declarative COMPLETE sentences with terminal punctuation — one idea per field. Budgets: `visible`/`hook`/location `description`/`setting`/`atmosphere` ≤ 40 words; relationship `dynamic`/`persona`/`connection` ≤ 25 words. Never a fragment, never a clause that trails off mid-thought. If a thought runs long, drop the sentence — never cut one short. The narrator reads these fields verbatim on every turn; every word must be load-bearing.
 
 {public_only_rule}
 

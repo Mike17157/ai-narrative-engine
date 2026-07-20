@@ -11,6 +11,8 @@ import asyncio
 from dataclasses import asdict, dataclass, field, fields as _dc_fields
 from typing import Any, Callable
 
+from ...prose import tighten
+
 from pydantic_graph import GraphBuilder, StepContext, reduce_null
 
 """Relationship-first story genesis — harnesses → web → derived stories.
@@ -39,9 +41,10 @@ def _data(res) -> dict:
     return getattr(res, "data", None) or {}
 
 
-def _short(s, n: int = 6) -> str:
-    """Relationship dynamics are 2-3 words — backstop a model that writes a sentence."""
-    return " ".join(str(s or "").split()[:n])
+def _short(s, n: int = 30) -> str:
+    """Budget a relationship dynamic to one tight unit — SENTENCE-safe (the old 6-word
+    slice stored mid-clause fragments)."""
+    return tighten(str(s or ""), n)
 
 
 _STANCES = ("devoted", "warm", "neutral", "strained", "hostile")
