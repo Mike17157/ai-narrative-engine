@@ -30,7 +30,7 @@
       {/each}
     </div>
   {:else}
-    <p class="empty">No playable characters yet — make one in <a href="/characters/personas">Characters ▸ Personas</a>.</p>
+    <p class="empty">No playable characters yet — make one in <a href="/settings/personas">Settings ▸ Personas</a>.</p>
   {/if}
 </Section>
 

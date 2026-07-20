@@ -73,9 +73,9 @@
     await save();
     if (key) setActivePlayerChar(key);
     await loadChars();
-    goto('/characters/personas');
+    goto('/settings/personas');
   }
-  function cancel() { goto('/characters/personas'); }
+  function cancel() { goto('/settings/personas'); }
 </script>
 
 <div class="wiz">
@@ -138,9 +138,7 @@
         <p class="hint">🏠 Home <b>scenes</b> are coming with the story scene/place model — for now this is just a note saved on your card.</p>
 
         {#if key}
-          <a class="link" href={`/characters/selected`} onclick={() => { try { localStorage.setItem('loom.activeChar', key); } catch {} }}>
-            Add a portrait & outfits in the character editor →
-          </a>
+          <p class="hint">🎨 Portraits &amp; outfits: cast “{name}” in a story, then open that story’s <b>Portrait studio</b>.</p>
         {/if}
 
         <div class="nav">

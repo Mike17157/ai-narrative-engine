@@ -47,7 +47,7 @@
   // The section EDITOR now lives at the shell (outside individual panes) and FOLLOWS the current view:
   // its edit target (card layer) is derived from the route. Null → no editor (play / outfits).
   function editorFor(p, s) {
-    if (/\/play\/?$/.test(p) || /\/cast\/?$/.test(p) || /\/prompts\/?$/.test(p) || /\/images\/?$/.test(p)) return null;
+    if (/\/play\/?$/.test(p) || /\/cast\/?$/.test(p) || /\/prompts\/?$/.test(p) || /\/images\/?$/.test(p) || /\/studio\/?$/.test(p)) return null;
     if (p.includes('/characters')) return { layer: 'relationships', label: 'Characters' };
     if (p.includes('/arcs') || p.includes('/scenes')) return { layer: 'plot', label: 'Arcs & scenes' };
     const tab = new URLSearchParams(s).get('tab') || 'overview';

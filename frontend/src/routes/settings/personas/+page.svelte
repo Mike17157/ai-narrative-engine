@@ -1,8 +1,8 @@
 <script>
   // Personas = PLAYABLE character cards (the portable "you" puppets). This page is the
-  // gallery + active-puppet selector; "New persona" launches the guided wizard, and any
-  // card can be opened in the full character editor. (The legacy thin-Persona system still
-  // backs free-chat as a fallback; it's no longer surfaced here — personas are cards now.)
+  // gallery + active-puppet selector; "New persona" launches the guided wizard. (The legacy
+  // thin-Persona system still backs free-chat as a fallback; it's no longer surfaced here —
+  // personas are cards now.)
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
   import { app, setActivePlayerChar } from '$lib/app.svelte.js';
@@ -12,7 +12,6 @@
     .sort((a, b) => (a.name || a.key).localeCompare(b.name || b.key)));
 
   function choose(key) { setActivePlayerChar(key === app.activePlayerChar ? '' : key); }
-  function edit(key) { try { localStorage.setItem('loom.activeChar', key); } catch { /* ignore */ } goto('/characters/selected'); }
 
   onMount(loadChars);
 </script>
@@ -23,7 +22,7 @@
       <h2 class="page-title">Personas</h2>
       <p class="page-sub">Who <b>you</b> are in a story. A persona is a playable character card — pick one as your “you”, and its backstory rides into every scene. Portable across stories.</p>
     </div>
-    <button onclick={() => goto('/characters/personas/new')}>✨ New persona</button>
+    <button onclick={() => goto('/settings/personas/new')}>✨ New persona</button>
   </div>
 
   {#if playable.length}
@@ -43,8 +42,6 @@
             <div class="card-summ">{blurb(c)}</div>
           </div>
           {#if c.key === app.activePlayerChar}<span class="active-badge">active</span>{/if}
-          <button class="edit" title="Edit in character editor"
-            onclick={(e) => { e.stopPropagation(); edit(c.key); }}>✎</button>
         </div>
       {/each}
     </div>
@@ -52,8 +49,8 @@
     <div class="empty">
       <div class="emk">🎭</div>
       <p>No personas yet.</p>
-      <span>Build a “you” to embody — or mark any existing character <b>Playable</b> in its editor.</span>
-      <button onclick={() => goto('/characters/personas/new')}>✨ New persona</button>
+      <span>Build a “you” to embody in any story.</span>
+      <button onclick={() => goto('/settings/personas/new')}>✨ New persona</button>
     </div>
   {/if}
 </div>

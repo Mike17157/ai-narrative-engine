@@ -20,6 +20,7 @@
       { id: 'story', label: 'Story card', icon: '◈', href: `/stories/${key}` },
       { id: 'characters', label: 'Character cards', icon: '🪪', href: `/stories/${key}/characters` },
       ...(!leanStoryMode ? [{ id: 'outfits', label: 'Outfit cards', icon: '👗', href: `/stories/${key}/cast` }] : []),
+      ...(!leanStoryMode ? [{ id: 'studio', label: 'Portrait studio', icon: '🎨', href: `/stories/${key}/studio` }] : []),
       { id: 'images', label: 'Story images', icon: '✦', href: `/stories/${key}/images` },
       ...(st.fields?.status === 'active'
         ? [{ id: 'play', label: 'Play', icon: '▶', href: `/stories/${key}/play` }]
