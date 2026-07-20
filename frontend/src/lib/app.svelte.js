@@ -31,8 +31,8 @@ export const app = $state({
   imgUpscale: false,                  // run the heavy 4K upscale chain (USDU + hi-res)
   activity: { jobs: [], running: 0 }, // live server-resident workloads
   localJobs: [],                      // client-driven workloads (renders, generation) + history
-  // pending deep-link target (consumed by +page / panels), e.g. Settings ↔ Train
-  nav: { screen: null, imageTab: null },
+  // pending deep-link target (consumed by +page / panels) for cross-section jumps
+  nav: { screen: null },
   // client-side selections
   activeChar: ls(() => localStorage.getItem(LS_ACTIVE_CHAR) || '', ''),
   activePipeline: '',
@@ -42,8 +42,6 @@ export const app = $state({
   // The playable character card you embody in stories (a key into chars.list). '' = none
   // (falls back to the legacy persona). Persisted; the puppet ports across all stories.
   activePlayerChar: ls(() => localStorage.getItem(LS_ACTIVE_PLAYER) || '', ''),
-  // Chat conversation lives in the store so it survives route navigation.
-  chat: { messages: [], input: '', demoTurn: 0, seededFor: undefined }
 });
 
 // Set + persist the active character. '' is a valid choice (No character), so we

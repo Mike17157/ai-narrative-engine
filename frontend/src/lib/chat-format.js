@@ -1,5 +1,5 @@
 // Shared formatter for chat / roleplay model output — the ONE place every chat surface
-// (/chat, LlmConsole, Player) turns raw model text into rendered HTML. Models emit
+// (LlmConsole, Player) turns raw model text into rendered HTML. Models emit
 // emphasis the markdown way: *italics* and **bold** (roleplay actions like *[he smiles]*
 // included), plus `inline code`. We convert those to <em>/<strong>/<code>.
 //

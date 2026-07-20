@@ -47,7 +47,7 @@
   }
   function confirm() { browse.onConfirm?.([...local]); closeBrowse(); }
 
-  let manageHref = $derived(browse.kind === 'preset' ? '/library/presets' : '/library/lorebooks');
+  let manageHref = $derived(browse.kind === 'preset' ? '/presets' : '/lorebooks');
 </script>
 
 <Modal open={browse.open} onClose={closeBrowse} flush width="520px" height="min(80vh, 560px)" zIndex={260}>

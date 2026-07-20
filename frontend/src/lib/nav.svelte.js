@@ -4,47 +4,16 @@
 // section; no in-page menu fragments anywhere. The root layout renders these as
 // a horizontal subnav bar (+ dropdowns for nodes with children).
 
-import { chars } from './characters.svelte.js';
 import { stories } from './stories.svelte.js';
-import { app } from './app.svelte.js';
 
-export function charactersTree() {
-  const n = chars.list?.length || 0;
-  const sel = chars.list?.find((c) => c.key === app.activeChar);
-  return [
-    { id: 'selected', label: sel ? `Selected · ${sel.name || sel.key}` : 'Selected', href: '/characters/selected' },
-    { id: 'search', label: `Browse${n ? ` (${n})` : ''}`, href: '/characters/search' },
-    { id: 'import', label: 'Import card', href: '/characters/import' },
-    { id: 'personas', label: 'Personas', href: '/characters/personas' },
-  ];
-}
-
-// Images subnav — the bespoke header that used to live in images/+layout.svelte
-// is gone; everything here renders in the unified subnav bar.
-export function imagesTree() {
-  return [
-    { id: 'models',      label: 'Models',     href: '/images/models' },
-    { id: 'lora',        label: 'Preset Lab', href: '/images/lora/library' },
-    { id: 'poses',       label: 'Poses',      href: '/images/poses' },
-  ];
-}
-
-// Training subnav — the LoRA-making pipeline (formerly a collapsed <details>
-// inside the LoRA library page), now a first-class section.
-export function trainingTree() {
-  return [
-    { id: 'pipeline',  label: 'Pipeline',  href: '/training' },
-    { id: 'datasets',  label: 'Datasets',  href: '/training/datasets' },
-    { id: 'trainer',   label: 'Trainer',   href: '/training/trainer' },
-  ];
-}
-
-// Settings subnav — just System now (environment, ComfyUI, trainer). Models,
-// connections AND the generation pipeline configs all live on the per-chat ⚙ config
-// modal (every chat surface has the gear), not in navigation. Personas → Characters.
+// Settings subnav — System (environment, ComfyUI, trainer) + Personas (the
+// portable "you" cards). Models, connections AND the generation pipeline configs
+// all live on the per-chat ⚙ config modal (every chat surface has the gear), not
+// in navigation.
 export function settingsTree() {
   return [
     { id: 'system', label: 'System', href: '/settings/system' },
+    { id: 'personas', label: 'Personas', href: '/settings/personas' },
   ];
 }
 
@@ -68,26 +37,10 @@ export function storiesTree(path = '') {
   return [];
 }
 
-// Library subnav — the two first-class entities you author: Presets (the model side:
-// connection + model + mode + params) and Lorebooks (rules/data + function books). Models
-// live INSIDE presets and connections are part of a preset, so neither is a tab here.
-export function libraryTree() {
-  return [
-    { id: 'lib-presets',   label: 'Agents',    href: '/library/presets' },
-    { id: 'lib-lorebooks', label: 'Lorebooks', href: '/library/lorebooks' },
-    { id: 'lib-tools',     label: 'Tools',     href: '/library/tools' },
-    { id: 'lib-image-presets', label: 'Image Presets', href: '/library/image-presets' },
-  ];
-}
-
 export function treeFor(section, path = '') {
   switch (section) {
-    case 'characters': return charactersTree();
-    case 'images':     return imagesTree();
-    case 'training':   return trainingTree();
     case 'settings':   return settingsTree();
     case 'stories':    return storiesTree(path);
-    case 'library':    return libraryTree(path);
     default: return [];
   }
 }

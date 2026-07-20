@@ -3,11 +3,21 @@ from __future__ import annotations
 import time
 
 from ...comfy.server import get_server
+from ..services import config_files as _cf
 
 _SERVER_STARTED = time.time()  # for uptime in Settings → Server
 
 
 def register(app, ctx):
+    # ── app-wide flags (global content gate, etc.) ───────────────────────────
+    @app.get("/api/app-flags")
+    def get_app_flags() -> dict:
+        return _cf.load_app_flags(ctx.root)
+
+    @app.put("/api/app-flags")
+    def put_app_flags(body: dict):
+        return {"ok": True, **_cf.save_app_flags(ctx.root, body or {})}
+
     @app.get("/api/health")
     def health() -> dict:
         server = get_server(ctx.comfy_url)

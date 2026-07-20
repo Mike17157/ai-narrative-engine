@@ -2,8 +2,8 @@
   // The reusable point-of-use ⚙ modal, opened at every chat/generation surface. Two tabs:
   //   Configs   — the active PRESET for this surface (scoped to its function group)
   //   Lorebooks — attach books to the thread + AI-augment a book
-  // Deep management (presets, models, connections) lives in the Library. Mounted once in
-  // the root layout; driven by the configModal store.
+  // Deep management (presets, models, connections) lives in the Presets section. Mounted
+  // once in the root layout; driven by the configModal store.
   import { onMount } from 'svelte';
   import { get, post, put } from '$lib/api.js';
   import { app, refreshAll } from '$lib/app.svelte.js';
@@ -14,7 +14,7 @@
   import Modal from '$lib/components/shared/Modal.svelte';
 
   // Point-of-use picker: just the per-surface chat Config + attached Lorebooks. Models &
-  // connections live INSIDE presets now (Library ▸ Presets), not here.
+  // connections live INSIDE presets now (the Presets section), not here.
   const TABS = [
     { id: 'configs',   label: 'Configs' },
     { id: 'lorebooks', label: 'Lorebooks' },
@@ -35,7 +35,7 @@
 
   // ════════════════════════════ Configs tab — chat preset picker ════════════════════════════
   // The Configs tab is purely a PRESET picker now: free chat (and every surface) is driven by a
-  // preset. Pipeline stages live on presets (Library), not here.
+  // preset. Pipeline stages live on presets (the Presets section), not here.
   let presetLib = $state({ active: '', presets: [] });
   let presetGroups = $derived.by(() => {
     const m = new Map();
@@ -188,7 +188,7 @@
                picker when there's a real choice; one option needs no picking. -->
           {#if scopedPresets.length}
             <section class="card presetpick">
-              <div class="pphead"><h4>{pickTitle}</h4><a class="liblink" href="/library/presets" onclick={closeConfigModal}>Edit in Library →</a></div>
+              <div class="pphead"><h4>{pickTitle}</h4><a class="liblink" href="/presets" onclick={closeConfigModal}>Edit in Presets →</a></div>
               {#if scopedPresets.length === 1}
                 {@const only = scopedPresets[0]}
                 <p class="hint">Using <b>{only.name}</b> — the only {configModal.presetGroup || 'chat'} preset.
@@ -214,7 +214,7 @@
           <!-- Provider/model toggle for the active preset — flip cloud ⇄ local here. -->
           {#if activePreset}
             <section class="card presetpick">
-              <div class="pphead"><h4>Model</h4><a class="liblink" href="/library/presets" onclick={closeConfigModal}>Edit in Library →</a></div>
+              <div class="pphead"><h4>Model</h4><a class="liblink" href="/presets" onclick={closeConfigModal}>Edit in Presets →</a></div>
               <p class="hint">Provider &amp; model for <b>{activePreset.name}</b>. Pick a <b>· local</b> connection (Ollama) to run on your machine instead of the cloud.</p>
               <div class="erow">
                 <label>Provider</label>
@@ -229,7 +229,7 @@
 
           <!-- Image preset: the global-default LoRA-stack "look" for all image generation. -->
           <section class="card presetpick">
-            <div class="pphead"><h4>Image preset</h4><a class="liblink" href="/library/image-presets" onclick={closeConfigModal}>Edit in Library →</a></div>
+            <div class="pphead"><h4>Image preset</h4></div>
             <p class="hint">The LoRA stack applied to generated images. “None” = the base model as-is.</p>
             <ImagePresetPicker value={imgPresetActive} onchange={activateImagePreset} />
           </section>

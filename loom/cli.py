@@ -1,11 +1,7 @@
-"""Loom CLI — drive a pipeline from the terminal.
+"""Loom CLI — validate configs, list models, manage ComfyUI, generate characters.
 
     loom validate                       # load + cross-check all configs
     loom models                         # list configured models (chat vs image)
-    loom run chat_with_optional_image -m "hi" -c aria
-
-Phase 1 surface: enough to prove the engine and the chat/image decoupling
-end-to-end before any web UI exists.
 """
 
 from __future__ import annotations
@@ -17,10 +13,9 @@ import typer
 
 from .comfy.server import ComfyServer, LaunchConfig, detect_desktop_install, get_server, register_server
 from .config import load_settings, load_user
-from .engine import Runner
 from . import cli_story
 
-app = typer.Typer(add_completion=False, help="Declarative chat + image pipelines.")
+app = typer.Typer(add_completion=False, help="Loom — local story studio backend tooling.")
 comfy_app = typer.Typer(help="Manage the ComfyUI image backend (connect or launch headless).")
 app.add_typer(comfy_app, name="comfy")
 app.add_typer(cli_story.app, name="story", help="Inspect/edit story data directly (no server).")
@@ -75,48 +70,6 @@ def models(root: Path = typer.Option(Path("."), "--root")):
     settings = _load(root)
     for key, model in settings.models.items():
         typer.echo(f"  {key:16} {model.kind:6} {model.provider}")
-
-
-@app.command()
-def run(
-    pipeline: str = typer.Argument(..., help="Pipeline name (filename stem under configs/pipelines)."),
-    message: str = typer.Option(..., "--message", "-m", help="The user message."),
-    character: str | None = typer.Option(None, "--character", "-c", help="Character/persona key."),
-    out_dir: Path = typer.Option(Path("out"), "--out", help="Where generated images are written."),
-    root: Path = typer.Option(Path("."), "--root"),
-):
-    """Run a pipeline and print the reply; save any generated images."""
-    settings = _load(root)
-    if pipeline not in settings.pipelines:
-        typer.secho(f"unknown pipeline '{pipeline}' (have: {sorted(settings.pipelines)})", fg=typer.colors.RED, err=True)
-        raise typer.Exit(1)
-
-    # Register the ComfyUI backend (connect-or-launch) before any image step runs.
-    _setup_comfy(root)
-
-    runner = Runner(settings)
-    # Stream the chat reply to stdout as it arrives.
-    result = runner.run(
-        pipeline,
-        user_message=message,
-        character=character,
-        on_delta=lambda chunk: (sys.stdout.write(chunk), sys.stdout.flush()),
-    )
-    sys.stdout.write("\n")
-
-    # If the reply came from a structured step (no streaming), print it now.
-    if result.text and not _streamed(result):
-        typer.echo(result.text)
-
-    images = result.images
-    if images:
-        out_dir.mkdir(parents=True, exist_ok=True)
-        for i, data in enumerate(images):
-            path = out_dir / f"{pipeline}_{i}.png"
-            path.write_bytes(data)
-            typer.secho(f"image -> {path}", fg=typer.colors.CYAN)
-
-
 @app.command("generate-character")
 def generate_character(
     key: str = typer.Argument(..., help="Character key (the global card library in configs/stories.db)."),
@@ -402,14 +355,6 @@ def comfy_down(root: Path = typer.Option(Path("."), "--root")):
     user = _setup_comfy(root)
     get_server(user.comfyui.base_url).shutdown()
     typer.echo("shutdown requested (only affects a Loom-launched instance)")
-
-
-def _streamed(result) -> bool:
-    """A structured chat step returns data; a streamed one doesn't."""
-    for o in result.outcomes:
-        if o.type == "chat":
-            return not o.data
-    return False
 
 
 if __name__ == "__main__":

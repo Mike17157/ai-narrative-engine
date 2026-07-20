@@ -12,7 +12,6 @@
   import Lightbox from '$lib/components/shared/Lightbox.svelte';
   import ConfirmModal from '$lib/components/shared/ConfirmModal.svelte';
   import NewPersonaModal from '$lib/components/shared/NewPersonaModal.svelte';
-  import TagGraphModal from '$lib/components/image/TagGraphModal.svelte';
   import ConfigModal from '$lib/components/ConfigModal.svelte';
   import EntityBrowseModal from '$lib/components/shared/EntityBrowseModal.svelte';
 
@@ -29,7 +28,7 @@
   // full app's health/activity/persona machinery. `loom serve` is unchanged.
   const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
   let section = $derived(path.split('/')[1] || '');
-  let tree = $derived(new Set(['characters', 'stories', 'images', 'training', 'settings', 'library']).has(section) ? treeFor(section, path) : []);
+  let tree = $derived(new Set(['stories', 'settings']).has(section) ? treeFor(section, path) : []);
   let activeHref = $derived(path + search);
 
   let comfyUp = $derived(app.health?.comfyui?.up);
@@ -39,12 +38,9 @@
   function closeMenus() { showActivity = false; openDrop = null; }
 
   const nav = [
-    { id: 'chat',       label: 'Chat',       icon: '💬', href: '/chat' },
-    { id: 'characters', label: 'Characters', icon: '👥', href: '/characters/selected' },
     { id: 'stories',    label: 'Stories',    icon: '📖', href: '/stories', home: true },
-    { id: 'library',    label: 'Library',    icon: '🗂', href: '/library/presets' },
-    { id: 'images',     label: 'Images',     icon: '🖼', href: '/images/models' },
-    { id: 'training',   label: 'Training',   icon: '🎓', href: '/training' },
+    { id: 'lorebooks',  label: 'Lorebooks',  icon: '📚', href: '/lorebooks' },
+    { id: 'presets',    label: 'Presets',    icon: '🎛', href: '/presets' },
     { id: 'settings',   label: 'Settings',   icon: '⚙',  href: '/settings/system' },
   ];
 
@@ -66,7 +62,7 @@
   // others resume where you left off.
   function go(n) { goto(n.home ? n.href : (lastRoute[n.id] || n.href)); }
 
-  // Programmatic deep-link from child components (e.g. Train → Settings).
+  // Programmatic deep-link from child components (cross-section jumps).
   $effect(() => {
     if (!leanStoryMode && app.nav.screen) {
       const s = app.nav.screen;
@@ -216,7 +212,6 @@
 <Lightbox />
 <ConfirmModal />
 <NewPersonaModal />
-<TagGraphModal />
 <ConfigModal />
 <EntityBrowseModal />
 {/if}

@@ -6,10 +6,7 @@ import re
 import yaml
 from fastapi import UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel
 
-from ...cards import extract_card_json, to_character
-from ...card_sources import fetch_card
 from ..safe_downloads import DOWNLOAD_TIMEOUT, MAX_REFERENCE_DOWNLOAD_BYTES, DownloadError, get_public_response, read_limited
 from ..services import config_files
 from ..services.emotions import EMOTION_KEYS, EMOTION_LABELS
@@ -30,108 +27,7 @@ from ..services.prompts import (
 )
 
 
-class CharacterImportRequest(BaseModel):
-    data_b64: str            # PNG or JSON card bytes, base64-encoded
-    filename: str = ""
-
-
 def register(app, ctx):
-    @app.get("/api/poses")
-    def get_poses() -> dict:
-        """Global shot GEOMETRY per emotion (+ neutral): camera framing (cowboy 3/4 vs full body) and
-        latent aspect. Body language itself is generated per character (not global), so this is geometry
-        only. Returns each emotion's effective framing/aspect + whether it overrides the default."""
-        from ..services.poses import FRAMING_TAGS, ASPECT_DIMS, geometry_default, resolve_geometry
-        ov = config_files.load_poses(ctx.root)
-        labels = EMOTION_LABELS
-        keys = EMOTION_KEYS  # neutral is now a first-class key in the taxonomy
-        def row(k):
-            g = resolve_geometry(k, ov)
-            return {"key": k, "label": labels.get(k, k), "framing": g["framing"], "aspect": g["aspect"],
-                    "custom": g != geometry_default(k)}
-        return {"poses": [row(k) for k in keys],
-                "framings": list(FRAMING_TAGS.keys()), "aspects": list(ASPECT_DIMS.keys())}
-
-    @app.get("/api/pose-library")
-    def get_pose_library() -> dict:
-        """The curated body-language pose palette generated poses pick from — real Danbooru pose
-        tags grouped by body facet. Returns {facets:[{key,desc,tags}], count}."""
-        lib = ctx.load_pose_library()
-        facets = [{"key": k, "desc": (v or {}).get("desc", ""), "tags": list((v or {}).get("tags") or [])}
-                  for k, v in lib.items() if isinstance(v, dict) and v.get("tags")]
-        return {"facets": facets, "count": sum(len(f["tags"]) for f in facets)}
-
-    @app.post("/api/poses")
-    def set_poses(body: dict):
-        """Save shot-geometry overrides. Accepts one {key, framing?, aspect?} or {config:{key:entry}}.
-        An entry equal to the built-in geometry default is dropped. Read fresh per render — no restart."""
-        from ..services.poses import FRAMING_TAGS, ASPECT_DIMS, geometry_default
-        body = body or {}
-        updates = body.get("config")
-        if updates is None and body.get("key"):
-            updates = {body["key"]: {kk: body[kk] for kk in ("framing", "aspect") if kk in body}}
-        if not isinstance(updates, dict):
-            return JSONResponse({"error": "expected {key,framing,aspect} or {config:{key:entry}}"}, status_code=400)
-        valid = set(EMOTION_KEYS)  # neutral is now included in EMOTION_KEYS
-        ov = config_files.load_poses(ctx.root)
-        for k, v in updates.items():
-            if k not in valid:
-                return JSONResponse({"error": f"unknown emotion '{k}'"}, status_code=400)
-            entry = {}
-            if (v or {}).get("framing") in FRAMING_TAGS:
-                entry["framing"] = v["framing"]
-            if (v or {}).get("aspect") in ASPECT_DIMS:
-                entry["aspect"] = v["aspect"]
-            # keep only the fields that differ from the geometry default
-            d = geometry_default(k)
-            entry = {kk: vv for kk, vv in entry.items() if vv != d.get(kk)}
-            if entry:
-                ov[k] = entry
-            else:
-                ov.pop(k, None)
-        config_files.save_poses(ctx.root, ov)
-        return {"ok": True}
-
-    @app.get("/api/characters/{key}/poses")
-    def get_character_poses(key: str):
-        """A character's per-emotion body-language tags (composed from persona, stored on the manifest).
-        Empty until composed (regenerate / wardrobe). Editable as prose → tags."""
-        if key not in ctx.base_settings.characters:
-            return JSONResponse({"error": "no such character"}, status_code=404)
-        pp = ctx.portrait_manifest(key).get("pose_prompts") or {}
-        return {"poses": [{"key": k, "label": EMOTION_LABELS[k], "tags": (pp.get(k) or "")} for k in EMOTION_KEYS]}
-
-    @app.post("/api/characters/{key}/poses")
-    def set_character_pose(key: str, body: dict):
-        """Edit ONE emotion's body-language for a character. `tags` is snapped to booru tags (prose ok);
-        empty clears it. Or {compose:true} (re)generates the whole set from the persona."""
-        c = ctx.base_settings.characters.get(key)
-        if c is None:
-            return JSONResponse({"error": "no such character"}, status_code=404)
-        body = body or {}
-        m = ctx.portrait_manifest(key)
-        pp = dict(m.get("pose_prompts") or {})
-        if body.get("compose"):
-            ctx.ensure_fleshed(key)          # thin seed → disciplined prose first
-            c = ctx.base_settings.characters.get(key)
-            from loom.stories.pipeline import compose_poses as _compose_poses
-            from ..services import config_files as _cfiles
-            _w_cfg = ctx.load_story_builder()
-            _w_prov = ctx.stage_provider("wardrobe")
-            pp = _compose_poses(_w_prov, _persona_text(c), ctx.load_pose_library())
-        else:
-            emo = (body.get("emotion") or "").strip()
-            if emo not in EMOTION_KEYS:
-                return JSONResponse({"error": f"unknown emotion '{emo}'"}, status_code=400)
-            tags = _snap_prompt(_safe_image_tags((body.get("tags") or "").strip()))
-            if tags:
-                pp[emo] = tags
-            else:
-                pp.pop(emo, None)
-        m["pose_prompts"] = pp
-        ctx.save_portrait_manifest(key, m)
-        return {"ok": True, "poses": {k: pp.get(k, "") for k in EMOTION_KEYS}}
-
     @app.post("/api/characters/{key}/generate-all")
     def generate_all(key: str, body: dict):
         """Headless end-to-end: flesh → base prompt → base image → one outfit → expressions + poses →
@@ -330,31 +226,6 @@ def register(app, ctx):
         data["fields"] = {**(data.get("fields") or {}), "appearance": appearance}
         ctx._write_character_data(key, data)   # validates + routes + reloads
         return {"appearance": appearance}
-
-    @app.post("/api/prompt/mutate")
-    def prompt_mutate(body: dict):
-        """Rewrite an image prompt per a plain-English instruction — the Base Studio's mutate
-        box, powered by DeepSeek V4 Pro (non-thinking; a prompt edit needs no reasoning chain).
-        Body: { prompt, instruction } → { prompt }."""
-        body = body or {}
-        prompt = (body.get("prompt") or "").strip()
-        instruction = (body.get("instruction") or "").strip()
-        if not prompt or not instruction:
-            return JSONResponse({"error": "need prompt + instruction"}, status_code=400)
-        prov = ctx.text_provider_for("deepseek/deepseek-v4-pro", {"reasoning_effort": "none"})
-        if prov is None or not hasattr(prov, "generate_text"):
-            return JSONResponse({"error": "no text model available"}, status_code=400)
-        system = ("You revise IMAGE-GENERATION prompts. Apply the INSTRUCTION to the PROMPT: "
-                  "change exactly what it asks for, keep every other detail (identity, garments, "
-                  "colours, pose) intact, keep the same prose format and similar length. "
-                  "Output ONLY the revised prompt — no preamble, no quotes.")
-        try:
-            out = _gen_text(prov, system, f"PROMPT:\n{prompt}\n\nINSTRUCTION: {instruction}")
-        except Exception as exc:  # noqa: BLE001
-            return JSONResponse({"error": f"mutate failed: {exc}"}, status_code=500)
-        if not out:
-            return JSONResponse({"error": "the model returned nothing"}, status_code=502)
-        return {"prompt": out}
 
     @app.get("/api/style")
     def style_get():
@@ -1322,31 +1193,6 @@ def register(app, ctx):
         shutil.rmtree(pdir, ignore_errors=True)
         ctx.reload_settings()
         return {"ok": True}
-
-    @app.post("/api/characters/import")
-    def import_character(body: CharacterImportRequest):
-        """Import a SillyTavern character card from an uploaded file (PNG with an
-        embedded `chara` chunk, or a raw JSON card)."""
-        try:
-            raw = base64.b64decode(body.data_b64)
-            cdata = to_character(extract_card_json(raw))
-            avatar = raw if raw.startswith(b"\x89PNG\r\n\x1a\n") else None
-            return ctx.write_character(cdata, avatar)
-        except Exception as exc:  # malformed card / unreadable PNG / bad JSON
-            return JSONResponse({"error": f"could not parse card: {exc}"}, status_code=400)
-
-    @app.post("/api/characters/import-url")
-    def import_character_url(body: dict):
-        """Import a card from a site URL (Chub, JanitorAI, AICC, Pygmalion, or a
-        direct Tavern-PNG link) — the SillyTavern import-from-URL feature."""
-        url = (body or {}).get("url", "").strip()
-        if not url:
-            return JSONResponse({"error": "no url provided"}, status_code=400)
-        try:
-            card, avatar = fetch_card(url)
-            return ctx.write_character(to_character(card), avatar)
-        except Exception as exc:
-            return JSONResponse({"error": f"import failed: {exc}"}, status_code=400)
 
     @app.post("/api/characters/{key}/portraits/wardrobe")
     def portraits_apply_wardrobe(key: str, body: dict):

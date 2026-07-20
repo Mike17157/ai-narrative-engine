@@ -1,4 +1,3 @@
-from .manifest import ModelRef, build_manifest, manifest_to_dict, scan_workflow
 from .server import (
     ComfyServer,
     LaunchConfig,
@@ -9,10 +8,6 @@ from .server import (
 )
 
 __all__ = [
-    "ModelRef",
-    "build_manifest",
-    "manifest_to_dict",
-    "scan_workflow",
     "ComfyServer",
     "LaunchConfig",
     "detect_desktop_install",

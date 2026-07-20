@@ -6,8 +6,8 @@
 
   let { onnavigate } = $props();
 
-  // Server-resident jobs (LoRA/training) + client-driven workloads (renders/generation),
-  // running first. Both carry a `screen` to jump back to the output.
+  // Server-resident jobs + client-driven workloads (renders/generation), running first.
+  // Both carry a `screen` to jump back to the output.
   let jobs = $derived([...(app.localJobs || []), ...(app.activity?.jobs || [])]
     .map((j, i) => ({ j, i }))
     .sort((a, b) => (a.j.status === 'running' ? 0 : 1) - (b.j.status === 'running' ? 0 : 1) || a.i - b.i)
@@ -81,7 +81,7 @@
 
   <div class="mhd">Workloads</div>
   {#if !jobs.length}
-    <div class="empty">Nothing running. Start a LoRA batch, training, or setup and it'll show here — and keep running while you move around the app.</div>
+    <div class="empty">Nothing running. Start a render or generation and it'll show here — and keep running while you move around the app.</div>
   {:else}
     {#each jobs as j (j.id)}
       <div class="job" class:run={j.status === 'running'}>

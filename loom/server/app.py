@@ -27,11 +27,9 @@ from .security import configure_api_auth
 from ..stories import router as stories  # story domain lives in loom/stories/, not routers/
 from .routers import (
     characters,
-    chat,
     comfy,
     image_presets,
     jobs,
-    lora,
     lorebooks,
     models_conn,
     personas,
@@ -41,7 +39,6 @@ from .routers import (
     tags,
     trainer,
     tts,
-    workflow,
 )
 
 
@@ -86,12 +83,9 @@ def _register_comfy(user, root: Path) -> str:
 _ROUTERS = (
     (server, "admin"),
     (characters, "characters"),
-    (chat, "conversations"),
     (stories, "stories"),
     (tags, "images"),
     (models_conn, "models"),
-    (workflow, "images"),
-    (lora, "models"),
     (trainer, "admin"),
     (comfy, "images"),
     (personas, "profiles"),
