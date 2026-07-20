@@ -59,3 +59,7 @@ configs/last_school_arc.html
 
 # Third-party trainer clone
 trainer/
+
+# Scratch experiments and debug trace dumps (regenerable outputs, not source)
+experiments/
+configs/trace_*/
