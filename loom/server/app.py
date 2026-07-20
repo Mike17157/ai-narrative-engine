@@ -1,4 +1,4 @@
-"""Loom web server — connection flow + decoupled chat/image selection.
+"""Loom web server — Stories, Lorebooks, Presets, and Settings over decoupled text/image providers.
 
 `create_app()` is a thin assembler: it builds the shared `AppContext` (root, connection
 store, settings, user, ComfyUI url) and wires each domain's router onto the FastAPI app.

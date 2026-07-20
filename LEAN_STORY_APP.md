@@ -57,7 +57,9 @@ npm run dev
 ```
 
 The ordinary `loom serve` command remains unchanged and continues to run the
-legacy full application on its usual port.
+full application on its usual port (now converged on Stories, Lorebooks,
+Presets, and Settings — the standalone chat/images/library/training surfaces
+have been retired).
 
 ## What the lean API contains today
 
@@ -104,9 +106,10 @@ tool-editor, text-role, lorebook, global-character import, or old pending-work
 queue API families. It also does not mount the legacy SPA as a production
 application surface.
 
-The source code for those features is untouched for now. Parallel operation is
-the safety mechanism: we cut imports/routes first, prove the replacement, then
-retire code only after it has no remaining callers.
+The source code for those features has since been retired as well: the legacy
+chat/images/library/training routers, services, and packages were removed once
+nothing called them. What remains in the main app is the Stories, Lorebooks,
+Presets, and Settings surface described in the README.
 
 ## Cutover plan
 

@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "loom"
 version = "0.1.0"
-description = "Declarative pipeline engine for chat + image generation. Chat models and image models are fully decoupled, independently-configured resources."
+description = "A local story studio: architect, author, and play stories. Text models and image models are fully decoupled, independently-configured resources."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
