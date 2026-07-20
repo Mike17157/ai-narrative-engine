@@ -1313,6 +1313,74 @@ Day One is a flexible set of possible playable encounters, not a list of general
             },
         }
 
+    @app.post("/api/stories/{key}/card/develop-sheets")
+    async def develop_story_card_sheets(key: str, body: dict):
+        """Co-author the starting set as six small sheets in dependency order.
+
+        Same explicit batch opt-in as ``/card/develop``, but each section is a
+        separate structured call that sees only the compact digest of the sheets
+        already committed — cross-references name real ids, and no single call
+        can truncate a sibling section.  Each sheet is validated and saved
+        before the next runs; a sheet failure aborts the pass with every prior
+        sheet still committed and consistent.
+        """
+        from ..authoring.sheets import develop_story_in_sheets
+        from ..authoring.starter_set import DevelopError
+
+        st = ctx.base_settings.stories.get(key)
+        if st is None:
+            return JSONResponse({"error": "no such story"}, status_code=404)
+        body = body or {}
+        brief = str(body.get("brief") or "").strip()
+        public_only = bool(body.get("public_only"))
+        if len(brief) > 8000:
+            return JSONResponse({"error": "brief is too long"}, status_code=400)
+        try:
+            raw = ctx._read_story_data(key)
+        except FileNotFoundError:
+            raw = st.model_dump()
+        has_canon = bool(raw.get("premise") or raw.get("world") or raw.get("locations")
+                         or raw.get("cast") or ((raw.get("fields") or {}).get("first_day_plan") or {}).get("events"))
+        if not brief and not has_canon:
+            return JSONResponse({"error": "give the co-author a starting spark before building a blank card"},
+                                status_code=400)
+        # Six structured calls share the named Story Agent.  Sheets are small,
+        # but the day-one sheet carries a full scene list — one generous token
+        # cap for all calls (a cap, not a target) keeps truncation impossible.
+        provider, model_route = ctx.story_agent_provider(body, params={"max_tokens": 16384})
+        if provider is None:
+            return JSONResponse({"error": model_route.get("error") or "no Story Agent model configured",
+                                 "model_route": model_route}, status_code=400)
+        try:
+            result = await develop_story_in_sheets(
+                ctx, key, brief=brief, public_only=public_only, provider=provider,
+            )
+        except ModelRequestTimeout as exc:
+            return JSONResponse({
+                "error": str(exc),
+                "retryable": True,
+                "model_route": model_route,
+            }, status_code=504)
+        except DevelopError as exc:
+            return JSONResponse({"error": f"invalid developer response: {exc}"}, status_code=502)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"error": f"could not develop card: {exc}"}, status_code=500)
+        updated = result["updated"]
+        readiness = _play_readiness(updated)
+        readiness.pop("_contract", None)
+        public = public_story_card(ctx, key, updated)
+        from ...prose import lint_story_texts
+        return {
+            "ok": True,
+            "sheets": [{k: v for k, v in report.items() if k != "patch"} for report in result["sheets"]],
+            "patches": {report["sheet"]: report["patch"] for report in result["sheets"]},
+            "story": public,
+            "card": public,  # compatibility alias, as on /card/develop
+            "readiness": readiness,
+            "prose_issues": lint_story_texts(updated),
+            "model_route": model_route,
+        }
+
     async def _run_story_interview(
         key: str,
         body: dict,
