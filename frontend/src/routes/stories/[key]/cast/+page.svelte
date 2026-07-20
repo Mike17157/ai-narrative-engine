@@ -17,6 +17,7 @@
       : [];
     return { character: m.character, name: charName(m.character), hasRef: !!ci?.reference,
              primary: m.primary, role: (ci?.fields?.role) || '', desc: ci?.system || '',
+             outfit: m.outfit || '',          // the CastMember's active wardrobe selection
              height: ci?.fields?.height_cm ?? null,
              images: [...new Set([...own, ...srcImgs])] };
   }));

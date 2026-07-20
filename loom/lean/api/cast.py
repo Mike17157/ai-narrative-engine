@@ -40,6 +40,8 @@ def _story_image_url(story_key: str, character_key: str, suffix: str) -> str:
 
 
 def _cast_list(ctx, story_key: str, keys: list[str]) -> list[dict]:
+    story = ctx.base_settings.stories.get(story_key)
+    worn = {m.character: m.outfit for m in (story.cast if story else [])}
     payload: list[dict] = []
     for key in keys:
         data = ctx._read_story_character_data(story_key, key)
@@ -59,6 +61,7 @@ def _cast_list(ctx, story_key: str, keys: list[str]) -> list[dict]:
             "fields": fields,
             "playable": bool(getattr(character, "playable", False)),
             "imported": _is_imported(character),
+            "outfit": worn.get(key) or None,   # the CastMember's selected wardrobe look
             "home_scenes": [scene.model_dump() for scene in getattr(character, "home_scenes", []) or []],
             "image": character.image.model_dump(),
             "avatar": _story_image_url(story_key, key, "avatar") if (ctx.char_asset_dir(key, story_key=story_key) / f"{safe_key}.png").is_file() else None,

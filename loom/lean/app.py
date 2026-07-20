@@ -25,7 +25,7 @@ from ..server.routing import register_domain
 from ..server.security import configure_api_auth
 from ..stories.api import library, runtime
 from . import images as image_capability
-from .api import cast as cast_api, images as image_api, session as session_api
+from .api import cast as cast_api, images as image_api, outfits as outfits_api, session as session_api
 from .routing import register_filtered_domain
 
 
@@ -98,6 +98,9 @@ _STORY_RUNTIME_ROUTES = frozenset({
     ("get", "/api/stories/{key}/manuscript"),
     ("post", "/api/stories/{key}/manuscript/bake"),
     ("post", "/api/stories/{key}/manuscript/edit"),
+    ("post", "/api/stories/{key}/manuscript/manga-plan"),
+    ("post", "/api/stories/{key}/manuscript/manga-render"),
+    ("post", "/api/stories/{key}/manuscript/agent/turn"),
     ("get", "/api/stories/{key}/state-card"),
     ("get", "/api/stories/{key}/live-cards"),
 })
@@ -244,6 +247,7 @@ def create_lean_app(root: str | Path = ".", *, comfy_enabled: bool | None = None
     register_filtered_domain(library, app, ctx, "stories", _story_library_route)
     register_filtered_domain(runtime, app, ctx, "stories", _story_runtime_route)
     register_domain(cast_api, app, ctx, "stories")
+    register_domain(outfits_api, app, ctx, "stories")
     register_domain(image_api, app, ctx, "images")
     register_domain(session_api, app, ctx, "stories")
     return app

@@ -520,6 +520,40 @@ def _player_particulars(text: str) -> list[str]:
     return out
 
 
+def _resolved_outfits(appctx, st, story_key: str, keys) -> dict:
+    """Each present character's ACTIVE portrait outfit id for the UI's sprite
+    lookup: the CastMember's explicit selection when it still exists in the
+    manifest, else the wardrobe's EVERYDAY default — the first outfit whose
+    name isn't a base/swim look (mirrors the catalogue's everydayIdx). A
+    missing manifest or an empty wardrobe simply omits the character."""
+    import re as _re
+    selected = {m.character: (getattr(m, "outfit", None) or "") for m in st.cast}
+    resolved: dict = {}
+    for k in keys:
+        try:
+            manifest = appctx.portrait_manifest(k, story_key=story_key) or {}
+        except TypeError:     # test doubles predate story-scoped manifests
+            try:
+                manifest = appctx.portrait_manifest(k) or {}
+            except Exception:  # noqa: BLE001
+                continue
+        except Exception:      # noqa: BLE001 — no manifest, no outfit
+            continue
+        outfits = manifest.get("outfits") or []
+        if not outfits:
+            continue
+        oid = selected.get(k) or ""
+        if oid and any(o.get("id") == oid for o in outfits):
+            resolved[k] = oid
+            continue
+        everyday = next((o for o in outfits
+                         if not _re.search(r"base|swim", str(o.get("name") or ""), _re.I)),
+                        outfits[0])
+        if everyday.get("id"):
+            resolved[k] = everyday["id"]
+    return resolved
+
+
 def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
     from ...server.services.story_sessions import save_session
     from ...server.services.emotions import EMOTION_KEYS
@@ -536,7 +570,10 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
             "reply": s.narration, "location": cur,
             "present": [k for k in ((world_state.get("scene") or {}).get("members") or [])],
             "pov": prior_pov, "step": world_state.get("step"),
-            "emotions": {}, "movement": False, "player_status": "active",
+            "emotions": {},
+            "outfits": _resolved_outfits(
+                appctx, st, key, (world_state.get("scene") or {}).get("members") or []),
+            "movement": False, "player_status": "active",
             "consolidation": None, "state": _SE.summary(world_state),
             "lanes": tc.get("lanes"),
             "live_beat": tc.get("director_live_beat") or {},
@@ -724,6 +761,9 @@ def _apply_turn(d: PlayDeps, s: PlayState) -> dict:
         "pov": (world_state.get("scene") or {}).get("pov", ""),
         "step": world_state.get("step"),
         "emotions": emotions,
+        # The ACTIVE outfit per present character (CastMember selection, else
+        # the wardrobe's everyday default) so the UI picks the right sprite set.
+        "outfits": _resolved_outfits(appctx, st, key, [k for k in present_keys if k]),
         "movement": bool(data.get("movement")),
         "player_status": status,
         "day": world_state.get("day") or None,   # the slot rhythm (None before the day model)

@@ -42,6 +42,24 @@
         "disappointment": "disappointment.png"
       },
       "base": "base.png"
+    },
+    {
+      "id": "ranger",
+      "name": "Ranger",
+      "instruction": "practical forest ranger outfit for patrolling deep woods: olive-green utility jacket with pockets, khaki cargo pants, sturdy brown hiking boots, a leather belt with a small pouch, and a compact backpack",
+      "prompt": "1girl young adult blonde hair medium hair bob cut blue eyes pale skin curvy petite freckles wearing an olive-green utility jacket with multiple chest pockets khaki cargo pants and sturdy brown hiking boots a leather belt with a small pouch at the waist and a compact backpack slung over one shoulder patrolling the dense forest trails",
+      "base": "base.png",
+      "expressions": {
+        "serenity": "serenity.png"
+      }
+    },
+    {
+      "id": "evening-dress",
+      "name": "Evening Dress",
+      "instruction": "elegant evening look for a fancy woodland lodge dinner: deep emerald satin slip dress with thin straps, delicate gold necklace, black heeled ankle boots, hair styled neatly",
+      "prompt": "1girl young adult petite and curvy figure adorned with sunlight-streaked blonde bob cut styled neatly thin gold necklace against pale skin freckled face framed by a deep emerald satin slip dress with delicate thin straps black heeled ankle boots under the soft glow of a fancy woodland lodge chandelier",
+      "base": "base.png",
+      "expressions": {}
     }
   ],
   "expression_prompts": {

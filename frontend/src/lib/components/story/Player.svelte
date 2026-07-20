@@ -117,9 +117,21 @@
   let locs = $state({});       // id -> { name, description, background }
   let names = $state({});      // char key -> name
   let refs = $state({});       // char key -> reference image url
-  let sprites = $state({});    // char key -> { emotion -> url }
+  let portraits = $state({});  // char key -> portrait payload (all outfits)
+  let outfitSel = $state({});  // char key -> ACTIVE outfit id, from the play response's outfits map
   let heights = $state({});    // char key -> height_cm (for sprite scaling)
   let bust = 0;
+  // Sprite set per character: the ACTIVE outfit's expressions (its id resolved server-side
+  // each turn), falling back to the first outfit when the id is absent/unknown locally.
+  let sprites = $derived.by(() => {
+    const out = {};
+    for (const [k, p] of Object.entries(portraits)) {
+      const outs = p?.outfits || [];
+      const o = outs.find((x) => x.id === outfitSel[k]) || outs[0];
+      if (o?.expressions) out[k] = o.expressions;
+    }
+    return out;
+  });
 
   // Stature → sprite scale. Height can't render in a solo full-body sprite (it fills the frame),
   // so it's stored as height_cm metadata and applied HERE: a taller character's sprite is drawn
@@ -215,9 +227,7 @@
     primaryKey = story.cast.find((m) => m.primary)?.character || story.cast[0]?.character || '';
     for (const m of story.cast) {
       try {
-        const p = await get(`/stories/${storyKey}/cast/${m.character}/portraits`);
-        const o = p.outfits?.[0];
-        if (o?.expressions) sprites[m.character] = o.expressions;
+        portraits[m.character] = await get(`/stories/${storyKey}/cast/${m.character}/portraits`);
       } catch { /* no sprites yet */ }
     }
     await loadPrologue();   // the novel opens on a prologue you read through; play continues from it
@@ -257,6 +267,9 @@
     busy = false;
     if (!r.ok) { err = r.data?.error || 'director error'; return; }
     const d = r.data;
+    // The server's resolved ACTIVE outfit per present character (CastMember selection,
+    // else the wardrobe's everyday default) — the sprite sets below follow it.
+    if (d.outfits) outfitSel = { ...outfitSel, ...d.outfits };
     // A real loop reset must cut the client transcript too.  Otherwise the
     // next /play request reintroduces the entire dead loop through `history`.
     history = d.reset_history ? [] : [...history, { role: 'assistant', text: d.reply }];

@@ -3,12 +3,18 @@
   // centered character stands on a studio backdrop and shows the selected emotion sprite. An outfit
   // rail swaps which outfit's sprites show, with quick-add for a standard set (Casual/Swimsuit/Nude…).
   // 3D coverflow is pure CSS so the cards stay live/interactive. See [[character-catalogue]].
-  import { get, post } from '$lib/api.js';
+  import { get, post, patch, del } from '$lib/api.js';
   import { startJob, limitedPost } from '$lib/app.svelte.js';
   import GenStream from '$lib/components/shared/GenStream.svelte';
   import EmblaCarousel from 'embla-carousel';
 
   let { storyKey, cast = [], onChanged = () => {}, onCharacter = () => {} } = $props();
+  const leanStoryMode = import.meta.env.VITE_LEAN_STORY === '1';
+  // Portraits resolve STORY-scoped in the lean app (the global /characters routes
+  // aren't mounted there); the legacy surface keeps its studio routes.
+  const portraitsUrl = (k) => leanStoryMode
+    ? `/stories/${storyKey}/cast/${k}/portraits`
+    : `/characters/${k}/portraits`;
 
   // ── Character rotation ───────────────────────────────────────────────────────
   let center = $state(0);
@@ -48,7 +54,7 @@
     for (const c of members) {
       if (fetched.has(c.character)) continue;
       fetched.add(c.character);
-      try { const d = await get(`/characters/${c.character}/portraits`); portraits = { ...portraits, [c.character]: d }; }
+      try { const d = await get(portraitsUrl(c.character)); portraits = { ...portraits, [c.character]: d }; }
       catch { /* leave unfetched */ }
     }
   }
@@ -72,7 +78,7 @@
   // ── Selected emotion — YOU pick it (click a card in the strip); no auto-rotation.
   // '' = the neutral look. The centered carousel card shows exactly this selection.
   let selEmo = $state('');
-  $effect(() => { charKey; outfit; selEmo = ''; });              // reset on character/outfit switch
+  $effect(() => { charKey; outfit; selEmo = ''; spriteNote = ''; });   // reset on character/outfit switch
   let shownEmo = $derived((outfit?.expression_set || []).find((e) => e.emotion === selEmo && e.url) || null);
   let shownImg = $derived((() => { const u = shownEmo?.url || outfitSprite(outfit); return u ? `${u}?b=${bust}` : null; })());
   let shownLabel = $derived(shownEmo?.label || '');
@@ -103,6 +109,77 @@
   }
   function onWardrobeDone() { planning = false; wardrobeJob = null; }
 
+  // ── ACTIVE outfit (what the character wears IN PLAY) — persisted on the CastMember through
+  // the story-scoped wardrobe API; the narrator's cast lines and the Player's sprite sets both
+  // follow the selection. The cast prop carries it (`outfit` on each member). ──
+  const wornOf = (k) => cast.find((c) => c.character === k)?.outfit || '';
+  let isWorn = $derived(!!outfit && wornOf(charKey) === outfit.id);
+  let wearBusy = $state(false);
+  async function wearOutfit(id) {
+    if (wearBusy || !charKey) return;
+    wearBusy = true; err = '';
+    const r = await post(`/stories/${storyKey}/cast/${charKey}/outfit`, { outfit: id || null });
+    wearBusy = false;
+    if (!r.ok) { err = r.data?.error || 'could not set the active outfit'; return; }
+    onChanged();   // reloads the story → the cast prop carries the fresh selection
+  }
+
+  // ── Outfit authoring (story-scoped wardrobe CRUD) — add from a name + a plain-language
+  // description (the prompt is composed server-side; sprites render later), edit, delete. ──
+  let oForm = $state(null);      // null | { mode:'add' } | { mode:'edit', id }
+  let oName = $state('');
+  let oInstr = $state('');
+  let oBusy = $state(false);
+  function openAdd() { oForm = { mode: 'add' }; oName = ''; oInstr = ''; }
+  function openEdit() {
+    if (!outfit) return;
+    oForm = { mode: 'edit', id: outfit.id };
+    oName = outfit.name || '';
+    oInstr = outfit.instruction || '';
+  }
+  async function saveOutfit() {
+    if (!oName.trim()) { err = 'Name the outfit.'; return; }
+    oBusy = true; err = '';
+    const base = `/stories/${storyKey}/cast/${charKey}/outfits`;
+    const r = oForm?.mode === 'edit'
+      ? await patch(`${base}/${oForm.id}`, { name: oName.trim(), instruction: oInstr.trim() })
+      : await post(base, { name: oName.trim(), instruction: oInstr.trim() });
+    oBusy = false;
+    if (!r.ok) { err = r.data?.error || 'could not save the outfit'; return; }
+    const savedId = r.data?.id || oForm?.id || '';
+    oForm = null;
+    await refresh();                       // pull the fresh manifest so the rail shows it
+    const i = (portraits[charKey]?.outfits || []).findIndex((x) => x.id === savedId);
+    if (i >= 0) outfitIdx = i;             // and put the new/edited outfit on stage
+    onChanged();
+  }
+  async function deleteOutfit() {
+    if (!outfit || !confirm(`Delete the outfit "${outfit.name}"? Its rendered sprites go with it.`)) return;
+    err = '';
+    const r = await del(`/stories/${storyKey}/cast/${charKey}/outfits/${outfit.id}`);
+    if (!r?.ok) { err = r?.error || 'could not delete the outfit'; return; }
+    oForm = null;
+    await refresh(); onChanged();          // a deleted worn outfit is cleared server-side too
+  }
+
+  // ── Sprite rendering (lean): one click renders the outfit's base + full emotion set
+  // through the story-scoped Krea2 capability; a down runner surfaces as a readable error. ──
+  let spriteBusy = $state(false);
+  let spriteNote = $state('');
+  async function renderSprites(force = false) {
+    if (spriteBusy || !outfit) return;
+    spriteBusy = true; err = ''; spriteNote = '';
+    const r = await post(`/stories/${storyKey}/cast/${charKey}/outfits/${outfit.id}/render`, { force });
+    spriteBusy = false;
+    if (!r.ok) { err = r.data?.error || 'sprite render failed'; return; }
+    const d = r.data || {};
+    spriteNote = `✨ ${(d.rendered || []).length} rendered`
+      + (d.skipped?.length ? ` · ${d.skipped.length} kept` : '')
+      + (d.failed?.length ? ` · ${d.failed.length} failed` : '');
+    await refreshChar(charKey);   // the emotion grid fills in from the fresh manifest
+    onChanged();
+  }
+
   // ── The selected outfit's EMOTION SET — unique per outfit (its own expression_set), shown as
   // a strip of sprite cards with per-cell render/re-roll + a render-all job. This replaces the
   // old outfits×emotions table: one outfit at a time, its emotions in full.
@@ -123,7 +200,7 @@
   });
   let cellBusy = $state({});
   async function refreshChar(k) {
-    try { const d = await get(`/characters/${k}/portraits`); portraits = { ...portraits, [k]: d }; bust++; }
+    try { const d = await get(portraitsUrl(k)); portraits = { ...portraits, [k]: d }; bust++; }
     catch { /* keep the stale payload */ }
   }
   async function renderEmo(emo, reroll = false) {
@@ -236,19 +313,36 @@
     <span class="blbl">Outfits</span>
     {#each outfits as o, i (o.id)}
       <button class="chip ochip" class:on={i === outfitIdx} onclick={() => (outfitIdx = i)} title={o.concept || o.name}>
-        {#if outfitSprite(o)}<img class="oimg" src={`${outfitSprite(o)}?b=${bust}`} alt="" />{/if}{o.name}
+        {#if outfitSprite(o)}<img class="oimg" src={`${outfitSprite(o)}?b=${bust}`} alt="" />{/if}{#if wornOf(charKey) === o.id}<span class="worn" title="Worn in play">★</span>{/if}{o.name}
       </button>
     {:else}
       <span class="hint">{charKey && portraits[charKey] ? 'No outfits yet — generate a wardrobe below.' : ' '}</span>
     {/each}
     <span class="sp"></span>
-    {#if outfits.length}
+    {#if leanStoryMode && charKey && portraits[charKey]}
+      <button class="plan" class:on={!!oForm} onclick={() => (oForm ? (oForm = null) : openAdd())}
+              title="Add an outfit from a name + a plain-language description (the prompt is composed server-side; sprites render later)">
+        {oForm ? '✕ Cancel' : '＋ Add outfit'}
+      </button>
+    {:else if !leanStoryMode && outfits.length}
       <button class="plan" onclick={genWardrobe} disabled={planning || !!wardrobeJob}
               title="Plan MORE outfits for this character (additive) — streamed, then render">
         {planning || wardrobeJob ? '🎨 Planning…' : '＋ Plan more outfits'}
       </button>
     {/if}
   </div>
+
+  <!-- Outfit authoring — add/edit in one inline form (story-scoped wardrobe CRUD). -->
+  {#if oForm}
+    <div class="oform">
+      <input bind:value={oName} placeholder="Outfit name — e.g. 'evening dress'" />
+      <input class="oinstr" bind:value={oInstr}
+             placeholder="Describe the outfit in plain language (optional)" />
+      <button class="osave" onclick={saveOutfit} disabled={oBusy || !oName.trim()}>
+        {oBusy ? '…' : oForm.mode === 'edit' ? 'Save' : 'Add outfit'}
+      </button>
+    </div>
+  {/if}
 
   <!-- Stage: 3D character coverflow on a studio backdrop -->
   <div class="stage studio">
@@ -275,10 +369,13 @@
       <button class="nav prev" onclick={() => go(-1)} aria-label="Previous">‹</button>
       <button class="nav next" onclick={() => go(1)} aria-label="Next">›</button>
       <!-- No wardrobe yet → THE trigger, front and center on the stage -->
-      {#if charKey && portraits[charKey] && !outfits.length && !wardrobeJob}
+      {#if !leanStoryMode && charKey && portraits[charKey] && !outfits.length && !wardrobeJob}
         <button class="bigcta" onclick={genWardrobe} disabled={planning}>
           🎨 {planning ? 'Planning…' : `Generate ${charName}'s wardrobe`}
         </button>
+      {/if}
+      {#if leanStoryMode && charKey && portraits[charKey] && !outfits.length && !oForm}
+        <button class="bigcta" onclick={openAdd}>＋ Add {charName}'s first outfit</button>
       {/if}
       {#if wardrobeJob}
         <div class="wjob">
@@ -310,6 +407,22 @@
       <b>🎭 {outfit.name}</b>
       <span class="hint">{shownEmos.filter((e) => e.url).length}/{shownEmos.length} rendered · click a card to put it on stage</span>
       <span class="sp"></span>
+      {#if leanStoryMode}
+        <!-- Sprite rendering + ACTIVE-outfit selection + story-scoped outfit edit/delete. -->
+        <button class="plan" onclick={() => renderSprites(false)} disabled={spriteBusy}
+                title="Render this outfit's base + full emotion set through the Krea2 workflow (existing sprites are kept; needs a running ComfyUI)">
+          {spriteBusy ? '✨ Rendering…' : '✨ Render sprites'}
+        </button>
+        {#if spriteNote}<span class="hint">{spriteNote}</span>{/if}
+        <button class="plan" class:on={isWorn} onclick={() => wearOutfit(isWorn ? null : outfit.id)} disabled={wearBusy}
+                title={isWorn ? 'Worn in play — click to clear (the everyday look takes over)' : 'Wear this outfit in play: the narrator sees it and the Player shows its sprites'}>
+          {isWorn ? '★ Worn in play' : '☆ Wear in play'}
+        </button>
+        <button class="plan" onclick={openEdit}
+                title="Rename this outfit or edit its description">✎ Edit</button>
+        <button class="plan danger" onclick={deleteOutfit}
+                title="Delete this outfit (its rendered sprites go with it; a worn selection is cleared)">🗑</button>
+      {:else}
       <button class="plan" onclick={showLayers}
               title="Inspect the image card: every prompt layer that stacks into the selected sprite (style ← Overview, identity/outfit/emotion ← Cast) plus the final composed prompt">
         ≣ Layers</button>
@@ -327,6 +440,7 @@
         {styleBusy ? '⭐ Distilling…' : styleSet ? '✓ Style set for everyone' : '⭐ Set as cast style'}</button>
       <button class="plan" onclick={renderAllEmos} disabled={!!emoJob}
               title="Render this outfit's whole emotion set (streamed job)">{emoJob ? '✨ Rendering…' : '✨ Render all'}</button>
+      {/if}
     </div>
     {#if editRange}
       <div class="rangeedit">
@@ -351,8 +465,10 @@
           {#if e.url}<img src={`${e.url}?b=${bust}`} alt={e.label || e.emotion} />{:else}<div class="eph">·</div>{/if}
           <div class="efoot">
             <span class="elabel">{e.label || e.emotion}</span>
-            <button class="ebtn" disabled={!!cellBusy[ck]} onclick={(ev) => { ev.stopPropagation(); renderEmo(e.emotion, !!e.url); }}
-                    title={e.url ? 'Re-roll this sprite (new seed)' : 'Render this sprite'}>{cellBusy[ck] ? '…' : (e.url ? '↻' : '🎨')}</button>
+            {#if !leanStoryMode}
+              <button class="ebtn" disabled={!!cellBusy[ck]} onclick={(ev) => { ev.stopPropagation(); renderEmo(e.emotion, !!e.url); }}
+                      title={e.url ? 'Re-roll this sprite (new seed)' : 'Render this sprite'}>{cellBusy[ck] ? '…' : (e.url ? '↻' : '🎨')}</button>
+            {/if}
           </div>
         </div>
       {/each}
@@ -450,6 +566,20 @@
 
   /* Outfit rail (with sprite thumbs). */
   .ochip .oimg { width: 26px; height: 34px; border-radius: 5px; object-fit: cover; object-position: top; flex: none; }
+  .ochip .worn { color: var(--accent); font-size: 11px; }
+  .plan.danger { border-color: color-mix(in srgb, var(--bad, #b54) 65%, transparent); color: var(--bad, #b54); border-style: solid; }
+  .plan.danger:hover { background: color-mix(in srgb, var(--bad, #b54) 14%, transparent); }
+
+  /* Outfit authoring form — one inline row under the rail (add + edit share it). */
+  .oform { display: flex; gap: 8px; align-items: center; padding: 8px 14px; flex-wrap: wrap;
+           border-bottom: 1px solid var(--border-soft); background: var(--elev); }
+  .oform input { padding: 7px 11px; font-size: 12.5px; border-radius: 8px;
+                 background: var(--panel); border: 1px solid var(--border-soft); color: var(--text); }
+  .oform input:focus { border-color: var(--accent); outline: none; }
+  .oform .oinstr { flex: 1; min-width: 220px; }
+  .oform .osave { padding: 7px 14px; border-radius: 8px; background: var(--accent); color: #fff;
+                  border: 0; cursor: pointer; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .oform .osave:disabled { opacity: .45; cursor: default; }
   .hint { font-size: 12px; color: var(--faint); font-style: italic; }
   .plan { font-size: 12.5px; font-weight: 600; padding: 7px 13px; border-radius: 9px; background: none;
           border: 1px dashed var(--accent); color: var(--accent); cursor: pointer; }
